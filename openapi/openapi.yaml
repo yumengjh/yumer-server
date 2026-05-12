@@ -1,0 +1,2432 @@
+openapi: 3.0.0
+paths:
+  /:
+    get:
+      operationId: AppController_getHello
+      parameters: []
+      responses:
+        '200':
+          description: ''
+  /runtime-configs/rate-limit:
+    get:
+      operationId: RuntimeConfigController_getRateLimitConfig
+      summary: 读取限流运行时配置
+      parameters:
+        - &ref_0
+          name: x-system-admin-token
+          in: header
+          description: 系统管理员令牌（用于运行时配置管理）
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 读取成功
+        '403':
+          description: 系统管理员令牌无效
+      tags: &ref_1
+        - runtime-configs
+    patch:
+      operationId: RuntimeConfigController_updateRateLimitConfig
+      summary: 更新限流运行时配置（热更新）
+      parameters:
+        - *ref_0
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRateLimitConfigDto'
+      responses:
+        '200':
+          description: 更新成功
+        '400':
+          description: 参数校验失败
+        '403':
+          description: 系统管理员令牌无效
+      tags: *ref_1
+  /runtime-configs/rate-limit/reset:
+    post:
+      operationId: RuntimeConfigController_resetRateLimitConfig
+      summary: 重置限流运行时配置为默认值
+      parameters:
+        - *ref_0
+      responses:
+        '200':
+          description: 重置成功
+        '403':
+          description: 系统管理员令牌无效
+      tags: *ref_1
+  /security/events:
+    get:
+      operationId: SecurityController_getSecurityLogs
+      summary: 查询安全日志（安全事件）
+      parameters:
+        - name: eventType
+          required: false
+          in: query
+          description: 事件类型
+          schema:
+            example: LOGIN_FAILED
+            type: string
+        - name: userId
+          required: false
+          in: query
+          description: 用户 ID
+          schema:
+            type: string
+        - name: ip
+          required: false
+          in: query
+          description: IP
+          schema:
+            type: string
+        - name: startDate
+          required: false
+          in: query
+          description: 开始时间 ISO
+          schema:
+            type: string
+        - name: endDate
+          required: false
+          in: query
+          description: 结束时间 ISO
+          schema:
+            type: string
+        - name: page
+          required: false
+          in: query
+          description: 页码
+          schema:
+            default: 1
+            type: number
+        - name: pageSize
+          required: false
+          in: query
+          description: 每页数量
+          schema:
+            default: 20
+            type: number
+      responses:
+        '200':
+          description: 查询成功
+      tags: &ref_2
+        - security
+      security: &ref_3
+        - bearer: []
+  /security/audit:
+    get:
+      operationId: SecurityController_getAuditLogs
+      summary: 查询审计日志
+      parameters:
+        - name: userId
+          required: false
+          in: query
+          description: 用户 ID
+          schema:
+            type: string
+        - name: action
+          required: false
+          in: query
+          description: 操作类型
+          schema:
+            example: CREATE
+            type: string
+        - name: resourceType
+          required: false
+          in: query
+          description: 资源类型
+          schema:
+            example: document
+            type: string
+        - name: resourceId
+          required: false
+          in: query
+          description: 资源 ID
+          schema:
+            type: string
+        - name: startDate
+          required: false
+          in: query
+          description: 开始时间 ISO
+          schema:
+            type: string
+        - name: endDate
+          required: false
+          in: query
+          description: 结束时间 ISO
+          schema:
+            type: string
+        - name: page
+          required: false
+          in: query
+          description: 页码
+          schema:
+            default: 1
+            type: number
+        - name: pageSize
+          required: false
+          in: query
+          description: 每页数量
+          schema:
+            default: 20
+            type: number
+      responses:
+        '200':
+          description: 查询成功
+      tags: *ref_2
+      security: *ref_3
+  /auth/register:
+    post:
+      operationId: AuthController_register
+      summary: 用户注册
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterDto'
+      responses:
+        '201':
+          description: 注册成功
+        '409':
+          description: 用户名或邮箱已存在
+      tags: &ref_4
+        - auth
+  /auth/login:
+    post:
+      operationId: AuthController_login
+      summary: 用户登录
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginDto'
+      responses:
+        '200':
+          description: 登录成功
+        '401':
+          description: 用户名或密码错误
+      tags: *ref_4
+  /auth/refresh:
+    post:
+      operationId: AuthController_refresh
+      summary: 刷新令牌
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenDto'
+      responses:
+        '200':
+          description: 刷新成功
+        '401':
+          description: 刷新令牌无效
+      tags: *ref_4
+  /auth/logout:
+    post:
+      operationId: AuthController_logout
+      summary: 用户登出
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags: *ref_4
+      security:
+        - bearer: []
+  /auth/me:
+    get:
+      operationId: AuthController_getCurrentUser
+      summary: 获取当前用户信息
+      parameters: []
+      responses:
+        '200':
+          description: 获取成功
+      tags: *ref_4
+      security:
+        - bearer: []
+    patch:
+      operationId: AuthController_updateCurrentUser
+      summary: 更新当前用户信息
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMeDto'
+      responses:
+        '200':
+          description: 更新成功
+        '400':
+          description: 请求参数错误
+        '401':
+          description: 未认证或令牌无效
+      tags: *ref_4
+      security:
+        - bearer: []
+  /auth/users/{userId}:
+    get:
+      operationId: AuthController_getUserProfileByUserId
+      summary: 根据 userId 获取用户信息
+      parameters:
+        - name: userId
+          required: true
+          in: path
+          description: 用户ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 获取成功
+        '401':
+          description: 未认证
+        '404':
+          description: 用户不存在
+      tags: *ref_4
+      security:
+        - bearer: []
+  /workspaces:
+    post:
+      operationId: WorkspacesController_create
+      summary: 创建工作空间
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkspaceDto'
+      responses:
+        '201':
+          description: 创建成功
+        '400':
+          description: 请求参数错误
+      tags: &ref_5
+        - workspaces
+      security: &ref_6
+        - bearer: []
+    get:
+      operationId: WorkspacesController_findAll
+      summary: 获取工作空间列表
+      parameters:
+        - name: page
+          required: false
+          in: query
+          description: 页码
+          schema:
+            minimum: 1
+            default: 1
+            type: number
+        - name: pageSize
+          required: false
+          in: query
+          description: 每页数量
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 20
+            type: number
+      responses:
+        '200':
+          description: 获取成功
+      tags: *ref_5
+      security: *ref_6
+  /workspaces/{workspaceId}:
+    get:
+      operationId: WorkspacesController_findOne
+      summary: 获取工作空间详情
+      parameters:
+        - name: workspaceId
+          required: true
+          in: path
+          description: 工作空间ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 获取成功
+        '403':
+          description: 没有权限访问
+        '404':
+          description: 工作空间不存在
+      tags: *ref_5
+      security: *ref_6
+    patch:
+      operationId: WorkspacesController_update
+      summary: 更新工作空间
+      parameters:
+        - name: workspaceId
+          required: true
+          in: path
+          description: 工作空间ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateWorkspaceDto'
+      responses:
+        '200':
+          description: 更新成功
+        '403':
+          description: 没有权限
+        '404':
+          description: 工作空间不存在
+      tags: *ref_5
+      security: *ref_6
+    delete:
+      operationId: WorkspacesController_remove
+      summary: 删除工作空间
+      parameters:
+        - name: workspaceId
+          required: true
+          in: path
+          description: 工作空间ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功
+        '403':
+          description: 只有所有者可以删除
+        '404':
+          description: 工作空间不存在
+      tags: *ref_5
+      security: *ref_6
+  /workspaces/{workspaceId}/members:
+    post:
+      operationId: WorkspacesController_inviteMember
+      summary: 邀请成员
+      parameters:
+        - name: workspaceId
+          required: true
+          in: path
+          description: 工作空间ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InviteMemberDto'
+      responses:
+        '201':
+          description: 邀请成功
+        '403':
+          description: 没有权限
+        '404':
+          description: 工作空间或用户不存在
+        '409':
+          description: 用户已经是成员
+      tags: *ref_5
+      security: *ref_6
+    get:
+      operationId: WorkspacesController_getMemberList
+      summary: 获取成员列表
+      parameters:
+        - name: workspaceId
+          required: true
+          in: path
+          description: 工作空间ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 获取成功
+        '403':
+          description: 没有权限访问
+        '404':
+          description: 工作空间不存在
+      tags: *ref_5
+      security: *ref_6
+  /workspaces/{workspaceId}/members/{userId}:
+    patch:
+      operationId: WorkspacesController_updateMemberRole
+      summary: 更新成员角色
+      parameters:
+        - name: workspaceId
+          required: true
+          in: path
+          description: 工作空间ID
+          schema:
+            type: string
+        - name: userId
+          required: true
+          in: path
+          description: 用户ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMemberRoleDto'
+      responses:
+        '200':
+          description: 更新成功
+        '400':
+          description: 不能修改所有者角色
+        '403':
+          description: 没有权限
+        '404':
+          description: 工作空间或成员不存在
+      tags: *ref_5
+      security: *ref_6
+    delete:
+      operationId: WorkspacesController_removeMember
+      summary: 移除成员
+      parameters:
+        - name: workspaceId
+          required: true
+          in: path
+          description: 工作空间ID
+          schema:
+            type: string
+        - name: userId
+          required: true
+          in: path
+          description: 用户ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 移除成功
+        '400':
+          description: 不能移除所有者
+        '403':
+          description: 没有权限
+        '404':
+          description: 工作空间不存在
+      tags: *ref_5
+      security: *ref_6
+  /activities:
+    get:
+      operationId: ActivitiesController_list
+      summary: 获取活动日志
+      parameters:
+        - name: workspaceId
+          required: true
+          in: query
+          description: 工作空间ID
+          schema:
+            example: ws_1234567890_abc123
+            type: string
+        - name: userId
+          required: false
+          in: query
+          description: 用户ID（操作者）
+          schema:
+            type: string
+        - name: action
+          required: false
+          in: query
+          description: 操作类型
+          schema:
+            enum:
+              - doc.create
+              - doc.update
+              - doc.delete
+              - doc.move
+              - doc.publish
+              - block.create
+              - block.update
+              - block.delete
+              - block.move
+              - block.batch
+              - workspace.create
+              - workspace.update
+              - workspace.delete
+              - member.invite
+              - member.role
+              - member.remove
+              - favorite.create
+              - favorite.remove
+              - comment.create
+              - comment.update
+              - comment.delete
+              - tag.create
+              - tag.update
+              - tag.delete
+            type: string
+        - name: entityType
+          required: false
+          in: query
+          description: 实体类型
+          schema:
+            enum:
+              - document
+              - block
+              - workspace
+              - member
+              - favorite
+              - comment
+              - tag
+            type: string
+        - name: startDate
+          required: false
+          in: query
+          description: 开始日期（ISO）
+          schema:
+            example: '2026-01-01'
+            type: string
+        - name: endDate
+          required: false
+          in: query
+          description: 结束日期（ISO）
+          schema:
+            example: '2026-12-31'
+            type: string
+        - name: page
+          required: false
+          in: query
+          description: 页码
+          schema:
+            default: 1
+            type: number
+        - name: pageSize
+          required: false
+          in: query
+          description: 每页数量
+          schema:
+            default: 20
+            type: number
+      responses:
+        '200':
+          description: 工作空间、用户、操作类型、时间范围、分页
+      tags:
+        - 活动日志
+      security:
+        - bearer: []
+  /documents:
+    post:
+      operationId: DocumentsController_create
+      summary: 创建文档
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDocumentDto'
+      responses:
+        '201':
+          description: 创建成功
+        '400':
+          description: 请求参数错误
+        '403':
+          description: 没有权限
+      tags: &ref_7
+        - documents
+      security: &ref_8
+        - bearer: []
+    get:
+      operationId: DocumentsController_findAll
+      summary: 获取文档列表
+      parameters:
+        - name: page
+          required: false
+          in: query
+          description: 页码
+          schema:
+            minimum: 1
+            default: 1
+            type: number
+        - name: pageSize
+          required: false
+          in: query
+          description: 每页数量
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 20
+            type: number
+        - name: workspaceId
+          required: false
+          in: query
+          description: 工作空间ID
+          schema:
+            example: ws_1234567890_abc123
+            type: string
+        - name: status
+          required: false
+          in: query
+          description: 文档状态
+          schema:
+            example: normal
+            enum:
+              - draft
+              - normal
+              - archived
+            type: string
+        - name: visibility
+          required: false
+          in: query
+          description: 文档可见性
+          schema:
+            example: private
+            enum:
+              - private
+              - workspace
+              - public
+            type: string
+        - name: parentId
+          required: false
+          in: query
+          description: 父文档ID（查询子文档）
+          schema:
+            example: doc_1234567890_abc123
+            type: string
+        - name: tags
+          required: false
+          in: query
+          description: 标签列表（查询包含这些标签的文档）
+          schema:
+            type: array
+            items:
+              type: string
+        - name: category
+          required: false
+          in: query
+          description: 分类
+          schema:
+            example: 技术文档
+            type: string
+        - name: sortBy
+          required: false
+          in: query
+          description: 排序字段
+          schema:
+            default: updatedAt
+            example: updatedAt
+            enum:
+              - updatedAt
+              - createdAt
+              - title
+              - viewCount
+            type: string
+        - name: sortOrder
+          required: false
+          in: query
+          description: 排序顺序
+          schema:
+            default: DESC
+            example: DESC
+            enum:
+              - ASC
+              - DESC
+            type: string
+      responses:
+        '200':
+          description: 获取成功
+      tags: *ref_7
+      security: *ref_8
+  /documents/search:
+    get:
+      operationId: DocumentsController_search
+      summary: 搜索文档
+      parameters:
+        - name: query
+          required: true
+          in: query
+          description: 搜索关键词
+          schema:
+            example: 文档标题
+            type: string
+        - name: workspaceId
+          required: false
+          in: query
+          description: 工作空间ID（限制搜索范围）
+          schema:
+            example: ws_1234567890_abc123
+            type: string
+        - name: status
+          required: false
+          in: query
+          description: 文档状态
+          schema:
+            example: normal
+            enum:
+              - draft
+              - normal
+              - archived
+            type: string
+        - name: tags
+          required: false
+          in: query
+          description: 标签列表（筛选）
+          schema:
+            type: array
+            items:
+              type: string
+        - name: page
+          required: false
+          in: query
+          description: 页码
+          schema:
+            minimum: 1
+            default: 1
+            example: 1
+            type: number
+        - name: pageSize
+          required: false
+          in: query
+          description: 每页数量
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 20
+            example: 20
+            type: number
+      responses:
+        '200':
+          description: 搜索成功
+      tags: *ref_7
+      security: *ref_8
+  /documents/{docId}:
+    get:
+      operationId: DocumentsController_findOne
+      summary: 获取文档详情
+      parameters:
+        - name: docId
+          required: true
+          in: path
+          description: 文档ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 获取成功
+        '403':
+          description: 没有权限访问
+        '404':
+          description: 文档不存在
+      tags: *ref_7
+      security: *ref_8
+    patch:
+      operationId: DocumentsController_update
+      summary: 更新文档元数据
+      parameters:
+        - name: docId
+          required: true
+          in: path
+          description: 文档ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDocumentDto'
+      responses:
+        '200':
+          description: 更新成功
+        '403':
+          description: 没有权限
+        '404':
+          description: 文档不存在
+      tags: *ref_7
+      security: *ref_8
+    delete:
+      operationId: DocumentsController_remove
+      summary: 删除文档
+      parameters:
+        - name: docId
+          required: true
+          in: path
+          description: 文档ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功
+        '403':
+          description: 没有权限
+        '404':
+          description: 文档不存在
+      tags: *ref_7
+      security: *ref_8
+  /documents/{docId}/content:
+    get:
+      operationId: DocumentsController_getContent
+      summary: 获取文档内容（渲染树，支持分页）
+      parameters:
+        - name: docId
+          required: true
+          in: path
+          description: 文档ID
+          schema:
+            type: string
+        - name: version
+          required: false
+          in: query
+          description: 文档版本号（不传则使用最新版本）
+          schema:
+            example: 1
+            type: number
+        - name: maxDepth
+          required: false
+          in: query
+          description: 最大层级深度（从根块开始计算，0表示只返回根块，1表示根块+第一层子块，以此类推）
+          schema:
+            example: 2
+            type: number
+        - name: startBlockId
+          required: false
+          in: query
+          description: 起始块ID（用于分页，返回该块及其后续兄弟块）
+          schema:
+            example: b_1705123456790_block001
+            type: string
+        - name: limit
+          required: false
+          in: query
+          description: 每页返回的最大块数量（包括所有层级的块）
+          schema:
+            default: 1000
+            example: 100
+            type: number
+      responses:
+        '200':
+          description: 获取成功
+        '404':
+          description: 文档不存在
+      tags: *ref_7
+      security: *ref_8
+  /documents/{docId}/publish:
+    post:
+      operationId: DocumentsController_publish
+      summary: 发布文档
+      parameters:
+        - name: docId
+          required: true
+          in: path
+          description: 文档ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 发布成功
+        '403':
+          description: 没有权限
+        '404':
+          description: 文档不存在
+      tags: *ref_7
+      security: *ref_8
+  /documents/{docId}/move:
+    post:
+      operationId: DocumentsController_move
+      summary: 移动文档
+      parameters:
+        - name: docId
+          required: true
+          in: path
+          description: 文档ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveDocumentDto'
+      responses:
+        '200':
+          description: 移动成功
+        '400':
+          description: 移动操作无效
+        '403':
+          description: 没有权限
+        '404':
+          description: 文档不存在
+      tags: *ref_7
+      security: *ref_8
+  /documents/{docId}/revisions:
+    get:
+      operationId: DocumentsController_getRevisions
+      summary: 获取文档修订历史
+      parameters:
+        - name: docId
+          required: true
+          in: path
+          description: 文档ID
+          schema:
+            type: string
+        - name: page
+          required: false
+          in: query
+          description: 页码
+          schema:
+            minimum: 1
+            default: 1
+            type: number
+        - name: pageSize
+          required: false
+          in: query
+          description: 每页数量
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 20
+            type: number
+      responses:
+        '200':
+          description: 获取成功
+        '403':
+          description: 没有权限
+        '404':
+          description: 文档不存在
+      tags: *ref_7
+      security: *ref_8
+  /documents/{docId}/diff:
+    get:
+      operationId: DocumentsController_getDiff
+      summary: 版本对比
+      parameters:
+        - name: docId
+          required: true
+          in: path
+          description: 文档ID
+          schema:
+            type: string
+        - name: fromVer
+          required: true
+          in: query
+          description: 起始版本号
+          schema:
+            minimum: 1
+            type: number
+        - name: toVer
+          required: true
+          in: query
+          description: 目标版本号
+          schema:
+            minimum: 1
+            type: number
+      responses:
+        '200':
+          description: 对比结果
+        '400':
+          description: 参数错误
+        '404':
+          description: 文档或版本不存在
+      tags: *ref_7
+      security: *ref_8
+  /documents/{docId}/revert:
+    post:
+      operationId: DocumentsController_revert
+      summary: 回滚到指定版本
+      parameters:
+        - name: docId
+          required: true
+          in: path
+          description: 文档ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevertVersionDto'
+      responses:
+        '200':
+          description: 回滚成功
+        '400':
+          description: 参数错误
+        '403':
+          description: 没有权限
+        '404':
+          description: 文档或版本不存在
+      tags: *ref_7
+      security: *ref_8
+  /documents/{docId}/snapshots:
+    post:
+      operationId: DocumentsController_createSnapshot
+      summary: 创建文档快照
+      parameters:
+        - name: docId
+          required: true
+          in: path
+          description: 文档ID
+          schema:
+            type: string
+      responses:
+        '201':
+          description: 创建成功
+        '403':
+          description: 没有权限
+        '404':
+          description: 文档不存在
+      tags: *ref_7
+      security: *ref_8
+  /documents/{docId}/commit:
+    post:
+      operationId: DocumentsController_commitVersion
+      summary: 手动触发创建文档版本
+      parameters:
+        - name: docId
+          required: true
+          in: path
+          description: 文档ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommitVersionDto'
+      responses:
+        '200':
+          description: 版本创建成功
+        '400':
+          description: 没有待创建的版本
+        '403':
+          description: 没有权限
+        '404':
+          description: 文档不存在
+      tags: *ref_7
+      security: *ref_8
+  /documents/{docId}/pending-versions:
+    get:
+      operationId: DocumentsController_getPendingVersions
+      summary: 获取文档待创建版本的数量
+      parameters:
+        - name: docId
+          required: true
+          in: path
+          description: 文档ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 获取成功
+        '403':
+          description: 没有权限
+        '404':
+          description: 文档不存在
+      tags: *ref_7
+      security: *ref_8
+  /blocks:
+    post:
+      operationId: BlocksController_create
+      summary: 创建块
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBlockDto'
+      responses:
+        '201':
+          description: 创建成功
+        '400':
+          description: 请求参数错误
+        '403':
+          description: 没有权限
+      tags: &ref_9
+        - blocks
+      security: &ref_10
+        - bearer: []
+  /blocks/{blockId}/content:
+    patch:
+      operationId: BlocksController_updateContent
+      summary: 更新块内容
+      parameters:
+        - name: blockId
+          required: true
+          in: path
+          description: 块ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBlockDto'
+      responses:
+        '200':
+          description: 更新成功
+        '403':
+          description: 没有权限
+        '404':
+          description: 块不存在
+      tags: *ref_9
+      security: *ref_10
+  /blocks/{blockId}/move:
+    post:
+      operationId: BlocksController_move
+      summary: 移动块
+      parameters:
+        - name: blockId
+          required: true
+          in: path
+          description: 块ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveBlockDto'
+      responses:
+        '200':
+          description: 移动成功
+        '400':
+          description: 移动操作无效
+        '403':
+          description: 没有权限
+        '404':
+          description: 块不存在
+      tags: *ref_9
+      security: *ref_10
+  /blocks/{blockId}:
+    delete:
+      operationId: BlocksController_remove
+      summary: 删除块
+      parameters:
+        - name: blockId
+          required: true
+          in: path
+          description: 块ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功
+        '403':
+          description: 没有权限
+        '404':
+          description: 块不存在
+      tags: *ref_9
+      security: *ref_10
+  /blocks/{blockId}/versions:
+    get:
+      operationId: BlocksController_getVersions
+      summary: 获取块版本历史
+      parameters:
+        - name: blockId
+          required: true
+          in: path
+          description: 块ID
+          schema:
+            type: string
+        - name: page
+          required: false
+          in: query
+          description: 页码
+          schema:
+            minimum: 1
+            default: 1
+            type: number
+        - name: pageSize
+          required: false
+          in: query
+          description: 每页数量
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 20
+            type: number
+      responses:
+        '200':
+          description: 获取成功
+        '403':
+          description: 没有权限
+        '404':
+          description: 块不存在
+      tags: *ref_9
+      security: *ref_10
+  /blocks/batch:
+    post:
+      operationId: BlocksController_batch
+      summary: 批量操作块
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchBlockDto'
+      responses:
+        '200':
+          description: 批量操作成功
+        '400':
+          description: 请求参数错误
+        '403':
+          description: 没有权限
+      tags: *ref_9
+      security: *ref_10
+  /assets/upload:
+    post:
+      operationId: AssetsController_upload
+      summary: 上传资产
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                workspaceId:
+                  type: string
+                  description: 工作空间 ID
+                file:
+                  type: string
+                  format: binary
+                  description: 文件
+              required:
+                - workspaceId
+                - file
+      responses:
+        '201':
+          description: 上传成功
+        '400':
+          description: 参数错误或文件过大
+        '403':
+          description: 没有权限
+      tags: &ref_11
+        - assets
+      security: &ref_12
+        - bearer: []
+  /assets:
+    get:
+      operationId: AssetsController_findAll
+      summary: 获取资产列表
+      parameters:
+        - name: workspaceId
+          required: false
+          in: query
+          description: 工作空间 ID（必填用于筛选）
+          schema:
+            type: string
+        - name: page
+          required: false
+          in: query
+          description: 页码
+          schema:
+            minimum: 1
+            default: 1
+            type: number
+        - name: pageSize
+          required: false
+          in: query
+          description: 每页数量
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 20
+            type: number
+      responses:
+        '200':
+          description: 获取成功
+        '400':
+          description: 缺少 workspaceId
+        '403':
+          description: 没有权限
+      tags: *ref_11
+      security: *ref_12
+  /assets/{assetId}/file:
+    get:
+      operationId: AssetsController_getFile
+      summary: 获取资产文件（下载/预览）
+      parameters:
+        - name: assetId
+          required: true
+          in: path
+          description: 资产 ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 文件流
+        '403':
+          description: 没有权限
+        '404':
+          description: 资产或文件不存在
+      tags: *ref_11
+      security: *ref_12
+  /assets/{assetId}:
+    delete:
+      operationId: AssetsController_remove
+      summary: 删除资产
+      parameters:
+        - name: assetId
+          required: true
+          in: path
+          description: 资产 ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功
+        '403':
+          description: 没有权限
+        '404':
+          description: 资产不存在
+      tags: *ref_11
+      security: *ref_12
+  /tags:
+    post:
+      operationId: TagsController_create
+      summary: 创建标签
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTagDto'
+      responses:
+        '201':
+          description: 创建成功
+        '409':
+          description: 同名标签已存在
+      tags: &ref_13
+        - tags
+      security: &ref_14
+        - bearer: []
+    get:
+      operationId: TagsController_findAll
+      summary: 获取标签列表
+      parameters:
+        - name: workspaceId
+          required: false
+          in: query
+          description: 工作空间 ID（必填）
+          schema:
+            type: string
+        - name: page
+          required: false
+          in: query
+          description: 页码
+          schema:
+            default: 1
+            type: number
+        - name: pageSize
+          required: false
+          in: query
+          description: 每页数量
+          schema:
+            default: 20
+            type: number
+      responses:
+        '200':
+          description: 获取成功
+      tags: *ref_13
+      security: *ref_14
+  /tags/{tagId}/usage:
+    get:
+      operationId: TagsController_getUsage
+      summary: 获取标签使用统计
+      parameters:
+        - name: tagId
+          required: true
+          in: path
+          description: 标签 ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 返回 usage（使用该标签的文档数）
+      tags: *ref_13
+      security: *ref_14
+  /tags/{tagId}:
+    get:
+      operationId: TagsController_findOne
+      summary: 获取标签详情
+      parameters:
+        - name: tagId
+          required: true
+          in: path
+          description: 标签 ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 获取成功
+        '404':
+          description: 标签不存在
+      tags: *ref_13
+      security: *ref_14
+    patch:
+      operationId: TagsController_update
+      summary: 更新标签
+      parameters:
+        - name: tagId
+          required: true
+          in: path
+          description: 标签 ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTagDto'
+      responses:
+        '200':
+          description: 更新成功
+        '404':
+          description: 标签不存在
+        '409':
+          description: 同名标签已存在
+      tags: *ref_13
+      security: *ref_14
+    delete:
+      operationId: TagsController_remove
+      summary: 删除标签
+      parameters:
+        - name: tagId
+          required: true
+          in: path
+          description: 标签 ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功，并从所有文档的 tags 中移除
+        '404':
+          description: 标签不存在
+      tags: *ref_13
+      security: *ref_14
+  /favorites:
+    post:
+      operationId: FavoritesController_create
+      summary: 收藏文档
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFavoriteDto'
+      responses:
+        '201':
+          description: 收藏成功
+        '404':
+          description: 文档不存在
+        '409':
+          description: 已经收藏过
+      tags: &ref_15
+        - favorites
+      security: &ref_16
+        - bearer: []
+    get:
+      operationId: FavoritesController_findAll
+      summary: 获取收藏列表
+      parameters:
+        - name: page
+          required: false
+          in: query
+          description: 页码
+          schema:
+            default: 1
+            type: number
+        - name: pageSize
+          required: false
+          in: query
+          description: 每页数量
+          schema:
+            default: 20
+            type: number
+      responses:
+        '200':
+          description: 获取成功，含 document 信息
+      tags: *ref_15
+      security: *ref_16
+  /favorites/{docId}:
+    delete:
+      operationId: FavoritesController_remove
+      summary: 取消收藏
+      parameters:
+        - name: docId
+          required: true
+          in: path
+          description: 文档 ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 已取消收藏
+        '404':
+          description: 未收藏该文档
+      tags: *ref_15
+      security: *ref_16
+  /comments:
+    post:
+      operationId: CommentsController_create
+      summary: 创建评论（含回复）
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCommentDto'
+      responses:
+        '201':
+          description: 创建成功
+        '404':
+          description: 文档或父评论不存在
+      tags: &ref_17
+        - comments
+      security: &ref_18
+        - bearer: []
+    get:
+      operationId: CommentsController_findAll
+      summary: 获取评论列表
+      parameters:
+        - name: docId
+          required: false
+          in: query
+          description: 文档 ID
+          schema:
+            type: string
+        - name: blockId
+          required: false
+          in: query
+          description: 块 ID
+          schema:
+            type: string
+        - name: page
+          required: false
+          in: query
+          description: 页码
+          schema:
+            default: 1
+            type: number
+        - name: pageSize
+          required: false
+          in: query
+          description: 每页数量
+          schema:
+            default: 20
+            type: number
+      responses:
+        '200':
+          description: 获取成功
+      tags: *ref_17
+      security: *ref_18
+  /comments/{commentId}:
+    get:
+      operationId: CommentsController_findOne
+      summary: 获取评论详情
+      parameters:
+        - name: commentId
+          required: true
+          in: path
+          description: 评论 ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 获取成功
+        '404':
+          description: 评论不存在
+      tags: *ref_17
+      security: *ref_18
+    patch:
+      operationId: CommentsController_update
+      summary: 更新评论
+      parameters:
+        - name: commentId
+          required: true
+          in: path
+          description: 评论 ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCommentDto'
+      responses:
+        '200':
+          description: 更新成功
+        '403':
+          description: 只能修改自己的评论
+      tags: *ref_17
+      security: *ref_18
+    delete:
+      operationId: CommentsController_remove
+      summary: 删除评论
+      parameters:
+        - name: commentId
+          required: true
+          in: path
+          description: 评论 ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功（软删除）
+        '403':
+          description: 只能删除自己的评论
+      tags: *ref_17
+      security: *ref_18
+  /search:
+    get:
+      operationId: SearchController_globalSearch
+      summary: 全局搜索
+      parameters:
+        - name: query
+          required: true
+          in: query
+          description: 搜索关键词
+          schema:
+            example: 文档标题或块内容
+            type: string
+        - name: workspaceId
+          required: false
+          in: query
+          description: 工作空间ID（限制搜索范围）
+          schema:
+            example: ws_1234567890_abc123
+            type: string
+        - name: type
+          required: false
+          in: query
+          description: 搜索类型：doc=仅文档, block=仅块内容, all=全部
+          schema:
+            default: all
+            enum:
+              - doc
+              - block
+              - all
+            type: string
+        - name: page
+          required: false
+          in: query
+          description: 页码
+          schema:
+            default: 1
+            example: 1
+            type: number
+        - name: pageSize
+          required: false
+          in: query
+          description: 每页数量
+          schema:
+            default: 20
+            example: 20
+            type: number
+      responses:
+        '200':
+          description: 返回文档与块匹配结果
+      tags: &ref_19
+        - 搜索
+      security: &ref_20
+        - bearer: []
+  /search/advanced:
+    post:
+      operationId: SearchController_advancedSearch
+      summary: 高级搜索
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdvancedSearchDto'
+      responses:
+        '200':
+          description: 支持标签、时间范围、创建者、排序
+      tags: *ref_19
+      security: *ref_20
+  /settings/me:
+    get:
+      operationId: SettingsController_getMySettings
+      summary: 获取当前用户设置（含默认值）
+      parameters: []
+      responses:
+        '200':
+          description: 获取成功
+        '401':
+          description: 未认证
+      tags: &ref_21
+        - settings
+      security: &ref_22
+        - bearer: []
+    patch:
+      operationId: SettingsController_updateMySettings
+      summary: 更新当前用户设置（部分更新）
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMySettingsDto'
+      responses:
+        '200':
+          description: 更新成功
+        '400':
+          description: 参数校验失败
+        '401':
+          description: 未认证
+      tags: *ref_21
+      security: *ref_22
+  /settings/effective:
+    get:
+      operationId: SettingsController_getEffectiveSettings
+      summary: 获取生效设置（可选 workspaceId）
+      description: 返回 userSettings / workspaceSettings / effectiveSettings / sources
+      parameters:
+        - name: workspaceId
+          required: false
+          in: query
+          description: 工作空间ID（可选，不传则返回用户维度生效设置）
+          schema:
+            example: ws_1234567890_abc123
+            type: string
+      responses:
+        '200':
+          description: 获取成功
+        '401':
+          description: 未认证
+        '403':
+          description: 无工作空间访问权限（传 workspaceId 时）
+        '404':
+          description: 工作空间不存在（传 workspaceId 时）
+      tags: *ref_21
+      security: *ref_22
+  /workspaces/{workspaceId}/settings:
+    get:
+      operationId: SettingsController_getWorkspaceSettings
+      summary: 获取工作空间覆盖设置（原始覆盖）
+      parameters:
+        - name: workspaceId
+          required: true
+          in: path
+          description: 工作空间ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 获取成功
+        '401':
+          description: 未认证
+        '403':
+          description: 无访问权限
+        '404':
+          description: 工作空间不存在
+      tags: *ref_21
+      security: *ref_22
+    patch:
+      operationId: SettingsController_updateWorkspaceSettings
+      summary: 更新工作空间覆盖设置（owner/admin）
+      parameters:
+        - name: workspaceId
+          required: true
+          in: path
+          description: 工作空间ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateWorkspaceSettingsDto'
+      responses:
+        '200':
+          description: 更新成功
+        '400':
+          description: 参数校验失败
+        '401':
+          description: 未认证
+        '403':
+          description: 无管理权限
+        '404':
+          description: 工作空间不存在
+      tags: *ref_21
+      security: *ref_22
+    delete:
+      operationId: SettingsController_clearWorkspaceSettings
+      summary: 清空工作空间覆盖设置（owner/admin）
+      parameters:
+        - name: workspaceId
+          required: true
+          in: path
+          description: 工作空间ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 清空成功
+        '401':
+          description: 未认证
+        '403':
+          description: 无管理权限
+        '404':
+          description: 工作空间不存在
+      tags: *ref_21
+      security: *ref_22
+info:
+  title: 知识库 API
+  description: 个人知识库系统 API 文档
+  version: '1.0'
+  contact: {}
+tags: []
+servers: []
+components:
+  securitySchemes:
+    bearer:
+      scheme: bearer
+      bearerFormat: JWT
+      type: http
+  schemas:
+    UpdateRateLimitConfigDto:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          description: 是否启用全局限流
+          example: true
+        ttlMs:
+          type: number
+          description: 限流时间窗口（毫秒，1000~86400000）
+          example: 60000
+        limit:
+          type: number
+          description: 时间窗口内允许的最大请求数（1~100000）
+          example: 100
+    RegisterDto:
+      type: object
+      properties:
+        username:
+          type: string
+          description: 用户名
+          example: john_doe
+        email:
+          type: string
+          description: 邮箱
+          example: john@example.com
+        password:
+          type: string
+          description: 密码
+          example: SecurePass123!
+        displayName:
+          type: string
+          description: 显示名称
+          example: John Doe
+      required:
+        - username
+        - email
+        - password
+    LoginDto:
+      type: object
+      properties:
+        emailOrUsername:
+          type: string
+          description: 邮箱或用户名
+          example: john@example.com
+        password:
+          type: string
+          description: 密码
+          example: SecurePass123!
+      required:
+        - emailOrUsername
+        - password
+    RefreshTokenDto:
+      type: object
+      properties:
+        refreshToken:
+          type: string
+          description: 刷新令牌
+      required:
+        - refreshToken
+    UpdateMeDto:
+      type: object
+      properties:
+        displayName:
+          type: object
+          description: 显示名称
+          example: John Doe
+        avatar:
+          type: object
+          description: 头像地址
+          example: https://example.com/avatar.jpg
+        bio:
+          type: object
+          description: 个人简介
+          example: 这是我的简介
+    CreateWorkspaceDto:
+      type: object
+      properties:
+        name:
+          type: string
+          description: 工作空间名称
+          example: 我的工作空间
+        description:
+          type: string
+          description: 工作空间描述
+          example: 这是一个工作空间描述
+        icon:
+          type: string
+          description: 工作空间图标（emoji）
+          example: 📚
+      required:
+        - name
+    UpdateWorkspaceDto:
+      type: object
+      properties:
+        name:
+          type: string
+          description: 工作空间名称
+          example: 更新的工作空间名称
+        description:
+          type: string
+          description: 工作空间描述
+          example: 更新的工作空间描述
+        icon:
+          type: string
+          description: 工作空间图标（emoji）
+          example: 🚀
+        status:
+          type: string
+          description: 工作空间状态
+          example: active
+          enum:
+            - active
+            - archived
+    InviteMemberDto:
+      type: object
+      properties:
+        email:
+          type: string
+          description: 用户邮箱
+          example: user@example.com
+        role:
+          type: string
+          description: 成员角色
+          example: editor
+          enum:
+            - owner
+            - admin
+            - editor
+            - viewer
+      required:
+        - email
+        - role
+    UpdateMemberRoleDto:
+      type: object
+      properties:
+        role:
+          type: string
+          description: 成员角色
+          example: admin
+          enum:
+            - owner
+            - admin
+            - editor
+            - viewer
+      required:
+        - role
+    CreateDocumentDto:
+      type: object
+      properties:
+        workspaceId:
+          type: string
+          description: 工作空间ID
+          example: ws_1234567890_abc123
+        title:
+          type: string
+          description: 文档标题
+          example: 我的文档
+        icon:
+          type: string
+          description: 文档图标（emoji）
+          example: 📄
+        cover:
+          type: string
+          description: 文档封面URL
+          example: https://example.com/cover.jpg
+        visibility:
+          type: string
+          description: 文档可见性
+          example: private
+          enum:
+            - private
+            - workspace
+            - public
+          default: private
+        parentId:
+          type: string
+          description: 父文档ID
+          example: doc_1234567890_abc123
+        tags:
+          description: 标签ID列表（tagId数组），系统会自动校验标签是否存在
+          example:
+            - tag_1234567890_abc123
+            - tag_1234567890_def456
+          type: array
+          items:
+            type: string
+        category:
+          type: string
+          description: 分类
+          example: 技术文档
+      required:
+        - workspaceId
+        - title
+    UpdateDocumentDto:
+      type: object
+      properties:
+        title:
+          type: string
+          description: 文档标题
+          example: 更新的文档标题
+        icon:
+          type: string
+          description: 文档图标（emoji）
+          example: 📝
+        cover:
+          type: string
+          description: 文档封面URL
+          example: https://example.com/new-cover.jpg
+        visibility:
+          type: string
+          description: 文档可见性
+          example: workspace
+          enum:
+            - private
+            - workspace
+            - public
+        tags:
+          description: 标签ID列表（tagId数组），系统会自动校验标签是否存在并更新使用统计
+          example:
+            - tag_1234567890_abc123
+            - tag_1234567890_def456
+          type: array
+          items:
+            type: string
+        category:
+          type: string
+          description: 分类
+          example: 更新后的分类
+        status:
+          type: string
+          description: 文档状态
+          example: normal
+          enum:
+            - draft
+            - normal
+            - archived
+    MoveDocumentDto:
+      type: object
+      properties:
+        parentId:
+          type: object
+          description: 目标父文档ID（null 表示移动到根目录）
+          example: doc_1234567890_abc123
+        sortOrder:
+          type: number
+          description: 排序顺序
+          example: 0
+          default: 0
+    RevertVersionDto:
+      type: object
+      properties:
+        version:
+          type: number
+          description: 要回滚到的文档版本号
+          minimum: 1
+      required:
+        - version
+    CommitVersionDto:
+      type: object
+      properties:
+        message:
+          type: string
+          description: 版本提交消息
+          example: 完成文档编辑
+          maxLength: 500
+    CreateBlockDto:
+      type: object
+      properties:
+        docId:
+          type: string
+          description: 文档ID
+          example: doc_1234567890_abc123
+        type:
+          type: string
+          description: 块类型
+          example: paragraph
+        payload:
+          type: object
+          description: 块内容（JSON格式）
+          example:
+            text: 块内容
+        parentId:
+          type: string
+          description: 父块ID（根块为空）
+          example: b_1234567890_abc123
+        sortKey:
+          type: string
+          description: 排序键
+          example: '0'
+        indent:
+          type: number
+          description: 缩进级别
+          example: 0
+          default: 0
+        collapsed:
+          type: boolean
+          description: 是否折叠
+          example: false
+          default: false
+        createVersion:
+          type: boolean
+          description: 是否立即创建文档版本
+          example: true
+          default: true
+      required:
+        - docId
+        - type
+        - payload
+    UpdateBlockDto:
+      type: object
+      properties:
+        payload:
+          type: object
+          description: 块内容（JSON格式）
+          example:
+            text: 更新的块内容
+        plainText:
+          type: string
+          description: 纯文本内容（用于搜索）
+          example: 更新的块内容
+        createVersion:
+          type: boolean
+          description: 是否立即创建文档版本
+          example: true
+          default: true
+      required:
+        - payload
+    MoveBlockDto:
+      type: object
+      properties:
+        parentId:
+          type: string
+          description: 目标父块ID
+          example: b_1234567890_abc123
+        sortKey:
+          type: string
+          description: 排序键
+          example: '0.5'
+        indent:
+          type: number
+          description: 缩进级别
+          example: 0
+          default: 0
+        createVersion:
+          type: boolean
+          description: 是否立即创建文档版本
+          example: true
+          default: true
+      required:
+        - parentId
+        - sortKey
+    BatchBlockDto:
+      type: object
+      properties:
+        docId:
+          type: string
+          description: 文档ID
+          example: doc_1234567890_abc123
+        operations:
+          type: array
+          description: 批量操作列表
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/BatchCreateOperation'
+              - $ref: '#/components/schemas/BatchUpdateOperation'
+              - $ref: '#/components/schemas/BatchDeleteOperation'
+              - $ref: '#/components/schemas/BatchMoveOperation'
+        createVersion:
+          type: boolean
+          description: 是否立即创建文档版本
+          example: true
+          default: true
+      required:
+        - docId
+        - operations
+    CreateTagDto:
+      type: object
+      properties:
+        workspaceId:
+          type: string
+          description: 工作空间ID
+          example: ws_1234567890_abc123
+        name:
+          type: string
+          description: 标签名称
+          example: 重要
+          maxLength: 50
+        color:
+          type: string
+          description: 标签颜色（十六进制）
+          example: '#ff4d4f'
+          maxLength: 20
+      required:
+        - workspaceId
+        - name
+    UpdateTagDto:
+      type: object
+      properties:
+        name:
+          type: string
+          description: 标签名称
+          maxLength: 50
+        color:
+          type: string
+          description: 标签颜色
+          maxLength: 20
+    CreateFavoriteDto:
+      type: object
+      properties:
+        docId:
+          type: string
+          description: 文档 ID
+      required:
+        - docId
+    CreateCommentDto:
+      type: object
+      properties:
+        docId:
+          type: string
+          description: 文档 ID
+        blockId:
+          type: string
+          description: 块 ID（评论挂在块上时）
+        content:
+          type: string
+          description: 评论内容
+        mentions:
+          description: '@ 提及的用户 ID 列表'
+          type: array
+          items:
+            type: string
+        parentCommentId:
+          type: string
+          description: 父评论 ID（回复时）
+      required:
+        - docId
+        - content
+    UpdateCommentDto:
+      type: object
+      properties:
+        content:
+          type: string
+          description: 评论内容
+      required:
+        - content
+    AdvancedSearchDto:
+      type: object
+      properties:
+        query:
+          type: string
+          description: 搜索关键词
+          example: 关键词
+        workspaceId:
+          type: string
+          description: 工作空间ID
+        type:
+          type: string
+          description: 搜索类型
+          enum:
+            - doc
+            - block
+            - all
+        tags:
+          description: 标签筛选
+          example:
+            - 标签1
+          type: array
+          items:
+            type: string
+        startDate:
+          type: string
+          description: 开始日期（ISO）
+          example: '2026-01-01'
+        endDate:
+          type: string
+          description: 结束日期（ISO）
+          example: '2026-12-31'
+        createdBy:
+          type: string
+          description: 创建者 userId
+        sortBy:
+          type: string
+          description: 排序字段
+          enum:
+            - rank
+            - updatedAt
+            - createdAt
+          default: rank
+        sortOrder:
+          type: string
+          description: 排序方向
+          enum:
+            - asc
+            - desc
+          default: desc
+        page:
+          type: number
+          description: 页码
+          default: 1
+        pageSize:
+          type: number
+          description: 每页数量
+          default: 20
+      required:
+        - query
+    SettingsPatchDto:
+      type: object
+      properties:
+        reader:
+          type: object
+          description: 阅读设置
+        editor:
+          type: object
+          description: 编辑设置
+        advanced:
+          type: object
+          description: 高级设置
+    UpdateMySettingsDto:
+      type: object
+      properties:
+        settings:
+          description: 设置补丁（部分更新）
+          allOf:
+            - $ref: '#/components/schemas/SettingsPatchDto'
+      required:
+        - settings
+    UpdateWorkspaceSettingsDto:
+      type: object
+      properties:
+        settings:
+          description: 工作空间设置补丁（部分更新）
+          allOf:
+            - $ref: '#/components/schemas/SettingsPatchDto'
+      required:
+        - settings

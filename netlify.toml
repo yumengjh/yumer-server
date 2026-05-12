@@ -1,0 +1,8 @@
+[build]
+  command = "pnpm docs:build"
+  publish = "docs/website/.vitepress/dist"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

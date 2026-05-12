@@ -1,0 +1,33 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+.env
+
+# 上传文件目录
+uploads/
+
+# SQLite 数据库文件
+data/
+
+cache/
+
+dist-bundle/
+
+# AI 对话
+
+FIX_ERROR.md
+
+# OpenAPI 导出产物
+openapi/
+docs/website/public/openapi/
