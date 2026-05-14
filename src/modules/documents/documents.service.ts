@@ -641,14 +641,16 @@ export class DocumentsService {
 
   async getContentSitePublic(
     docId: string,
+    version?: number,
     maxDepth?: number,
     startBlockId?: string,
     limit?: number,
   ) {
     const publicDocument = await this.getPublicDocumentEntity(docId);
+    const docVer = version || publicDocument.publishedHead;
     return this.getContentByDocument(
       publicDocument,
-      publicDocument.publishedHead,
+      docVer,
       maxDepth,
       startBlockId,
       limit,
@@ -726,7 +728,7 @@ export class DocumentsService {
       where: { docId },
     });
 
-    if (!document || document.status === 'deleted' || document.publishedHead <= 0) {
+    if (!document || document.status === 'deleted' || document.publishedHead <= 0 || document.visibility !== 'public') {
       throw new NotFoundException('Public document not found or not published');
     }
 

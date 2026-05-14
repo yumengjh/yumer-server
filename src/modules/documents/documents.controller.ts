@@ -92,6 +92,7 @@ export class DocumentsController {
     if (isSitePublicAnonymousUserId(user?.userId)) {
       return this.documentsService.getContentSitePublic(
         docId,
+        queryDto.version,
         queryDto.maxDepth,
         queryDto.startBlockId,
         queryDto.limit,
