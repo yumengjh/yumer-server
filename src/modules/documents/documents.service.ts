@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource, In } from 'typeorm';
+import { Repository, DataSource, In, Or, MoreThan, IsNull } from 'typeorm';
 import { Document } from '../../entities/document.entity';
 import { Block } from '../../entities/block.entity';
 import { BlockVersion } from '../../entities/block-version.entity';
@@ -806,7 +806,7 @@ export class DocumentsService {
       };
     }
 
-    const blockVersionMap = await this.getBlockVersionMapForVersion(document.docId, docVer);
+    const { map: blockVersionMap } = await this.getBlockVersionMapForVersion(document.docId, docVer);
     const result = await this.buildContentTreeFromVersionMap(
       document.docId,
       document.rootBlockId,
@@ -814,6 +814,7 @@ export class DocumentsService {
       maxDepth,
       startBlockId,
       limit || 1000,
+      revision.createdAt,
     );
 
     if (!result || !result.tree) {
@@ -962,14 +963,14 @@ export class DocumentsService {
       throw new BadRequestException('版本号不能超过当前文档 head');
     }
 
-    const [fromMap, toMap] = await Promise.all([
+    const [fromResult, toResult] = await Promise.all([
       this.getBlockVersionMapForVersion(docId, fromVer),
       this.getBlockVersionMapForVersion(docId, toVer),
     ]);
 
     const [fromTree, toTree] = await Promise.all([
-      this.buildContentTreeFromVersionMap(docId, document.rootBlockId, fromMap),
-      this.buildContentTreeFromVersionMap(docId, document.rootBlockId, toMap),
+      this.buildContentTreeFromVersionMap(docId, document.rootBlockId, fromResult.map, undefined, undefined, 1000, fromResult.createdAt),
+      this.buildContentTreeFromVersionMap(docId, document.rootBlockId, toResult.map, undefined, undefined, 1000, toResult.createdAt),
     ]);
 
     return {
@@ -995,7 +996,7 @@ export class DocumentsService {
       throw new BadRequestException('当前已是该版本，无需回滚');
     }
 
-    const blockVersionMap = await this.getBlockVersionMapForVersion(docId, version);
+    const { map: blockVersionMap } = await this.getBlockVersionMapForVersion(docId, version);
     const revision = await this.docRevisionRepository.findOne({
       where: { docId, docVer: version },
     });
@@ -1130,7 +1131,7 @@ export class DocumentsService {
   private async getBlockVersionMapForVersion(
     docId: string,
     docVer: number,
-  ): Promise<Record<string, number>> {
+  ): Promise<{ map: Record<string, number>; createdAt: number }> {
     const revision = await this.docRevisionRepository.findOne({
       where: { docId, docVer },
     });
@@ -1147,10 +1148,10 @@ export class DocumentsService {
       throw new NotFoundException(`文档 ${docId} 不存在`);
     }
 
-    // 查询块版本映射，排除已删除的块
+    // 查询块版本映射，使用时间感知过滤（只排除在目标版本之前就已删除的块）
     const rows = await this.blockVersionRepository
       .createQueryBuilder('bv')
-      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND b.isDeleted = false')
+      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)', { delCutoff: revision.createdAt })
       .select('bv.blockId', 'blockId')
       .addSelect('MAX(bv.ver)', 'maxVer')
       .where('bv.docId = :docId', { docId })
@@ -1183,7 +1184,7 @@ export class DocumentsService {
           : 'null',
       );
 
-      if (rootBlock && !rootBlock.isDeleted) {
+      if (rootBlock && (!rootBlock.isDeleted || (rootBlock.deletedAt != null && rootBlock.deletedAt > revision.createdAt))) {
         // 查找根块在该时间点之前的版本
         const rootVersion = await this.blockVersionRepository
           .createQueryBuilder('bv')
@@ -1221,7 +1222,7 @@ export class DocumentsService {
       console.log('根块已在版本映射中:', document.rootBlockId in map);
     }
 
-    return map;
+    return { map, createdAt: revision.createdAt };
   }
 
   /**
@@ -1244,7 +1245,7 @@ export class DocumentsService {
     // 先找到起始块及其版本
     const startBlockVersion = await this.blockVersionRepository
       .createQueryBuilder('bv')
-      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND b.isDeleted = false')
+      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)', { delCutoff: revisionCreatedAt })
       .where('bv.docId = :docId', { docId })
       .andWhere('bv.blockId = :blockId', { blockId: startBlockId })
       .andWhere('bv.createdAt <= :createdAt', { createdAt: revisionCreatedAt })
@@ -1305,7 +1306,7 @@ export class DocumentsService {
     // 但可以通过限制查询数量来减少数据库压力
     const siblingsQuery = await this.blockVersionRepository
       .createQueryBuilder('bv')
-      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND b.isDeleted = false')
+      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)', { delCutoff: revisionCreatedAt })
       .where('bv.docId = :docId', { docId })
       .andWhere('bv.parentId = :parentId', { parentId: startBlockParentId })
       .andWhere('bv.createdAt <= :createdAt', { createdAt: revisionCreatedAt })
@@ -1473,7 +1474,7 @@ export class DocumentsService {
   ): Promise<BlockVersion | null> {
     return await this.blockVersionRepository
       .createQueryBuilder('bv')
-      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND b.isDeleted = false')
+      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)', { delCutoff: createdAt })
       .where('bv.docId = :docId', { docId })
       .andWhere('bv.blockId = :blockId', { blockId })
       .andWhere('bv.createdAt <= :createdAt', { createdAt })
@@ -1504,7 +1505,7 @@ export class DocumentsService {
     // 优化：一次性查询该父块的所有子块及其在该时间点的最大版本号，按 sortKey 排序
     const childRows = await this.blockVersionRepository
       .createQueryBuilder('bv')
-      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND b.isDeleted = false')
+      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)', { delCutoff: revisionCreatedAt })
       .where('bv.docId = :docId', { docId })
       .andWhere('bv.parentId = :parentId', { parentId })
       .andWhere('bv.createdAt <= :createdAt', { createdAt: revisionCreatedAt })
@@ -1577,6 +1578,7 @@ export class DocumentsService {
     maxDepth?: number,
     startBlockId?: string,
     limit: number = 1000,
+    revisionCreatedAt?: number,
   ): Promise<{
     tree: any;
     totalBlocks: number;
@@ -1597,7 +1599,7 @@ export class DocumentsService {
           hasMore: false,
         };
       }
-      if (rootBlock.isDeleted) {
+      if (rootBlock.isDeleted && (!revisionCreatedAt || (rootBlock.deletedAt != null && rootBlock.deletedAt <= revisionCreatedAt))) {
         return {
           tree: { __rootBlockDeleted: true },
           totalBlocks: 0,
@@ -1633,8 +1635,8 @@ export class DocumentsService {
       };
     }
 
-    if (rootBlock.isDeleted) {
-      console.error('根块已被删除，rootBlockId:', rootBlockId);
+    if (rootBlock.isDeleted && (!revisionCreatedAt || (rootBlock.deletedAt != null && rootBlock.deletedAt <= revisionCreatedAt))) {
+      console.error('根块在目标版本前已被删除，rootBlockId:', rootBlockId);
       return {
         tree: { __rootBlockDeleted: true },
         totalBlocks: 0,
@@ -1653,8 +1655,10 @@ export class DocumentsService {
       const validBlocks = await this.blockRepository.find({
         where: {
           docId,
-          isDeleted: false,
           blockId: In(nonRootBlockIds) as any,
+          deletedAt: revisionCreatedAt
+            ? Or(IsNull(), MoreThan(revisionCreatedAt))
+            : IsNull(),
         },
         select: ['blockId'],
       });
