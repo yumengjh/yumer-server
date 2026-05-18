@@ -167,13 +167,15 @@ Authorization: Bearer <your-access-token>
 
 ### 认证 (auth)
 
-| 方法 | 路径             | 说明         | 认证 |
-| ---- | ---------------- | ------------ | ---- |
-| POST | `/auth/register` | 用户注册     | 否   |
-| POST | `/auth/login`    | 用户登录     | 否   |
-| POST | `/auth/refresh`  | 刷新令牌     | 否   |
-| POST | `/auth/logout`   | 用户登出     | 是   |
-| GET  | `/auth/me`       | 获取当前用户 | 是   |
+| 方法  | 路径                  | 说明                     | 认证           |
+| ----- | --------------------- | ------------------------ | -------------- |
+| POST  | `/auth/register`      | 用户注册                 | 否             |
+| POST  | `/auth/login`         | 用户登录                 | 否             |
+| POST  | `/auth/refresh`       | 刷新令牌                 | 否             |
+| POST  | `/auth/logout`        | 用户登出                 | 是             |
+| GET   | `/auth/me`            | 获取当前用户             | 是             |
+| PATCH | `/auth/me`            | 更新当前用户信息         | 是             |
+| GET   | `/auth/users/:userId` | 根据 userId 获取用户信息 | JWT / 站点公开 |
 
 ### 工作空间 (workspaces)
 
@@ -278,6 +280,27 @@ Authorization: Bearer <your-access-token>
 | GET  | `/security/events` | 安全日志（eventType/userId/ip/时间/分页）                   | 是   |
 | GET  | `/security/audit`  | 审计日志（userId/action/resourceType/resourceId/时间/分页） | 是   |
 
+### 设置 (settings)
+
+| 方法   | 路径                                | 说明                             | 认证           |
+| ------ | ----------------------------------- | -------------------------------- | -------------- |
+| GET    | `/settings/me`                      | 获取当前用户设置（含默认值）     | 是             |
+| PATCH  | `/settings/me`                      | 更新当前用户设置                 | 是             |
+| GET    | `/settings/effective`               | 获取生效设置（可带 workspaceId） | 是             |
+| GET    | `/workspaces/:workspaceId/settings` | 获取工作空间覆盖设置             | JWT / 站点公开 |
+| PATCH  | `/workspaces/:workspaceId/settings` | 更新工作空间覆盖设置             | 是             |
+| DELETE | `/workspaces/:workspaceId/settings` | 清空工作空间覆盖设置             | 是             |
+
+### 运行时配置 (runtime-configs)
+
+> 该模块不使用 JWT，而是使用 `x-system-admin-token` 请求头鉴权，用于运维/平台层控制。
+
+| 方法  | 路径                                | 说明         | 认证               |
+| ----- | ----------------------------------- | ------------ | ------------------ |
+| GET   | `/runtime-configs/rate-limit`       | 读取限流配置 | 系统管理员令牌     |
+| PATCH | `/runtime-configs/rate-limit`       | 更新限流配置 | 系统管理员令牌     |
+| POST  | `/runtime-configs/rate-limit/reset` | 重置限流配置 | 系统管理员令牌     |
+
 ---
 
 ## 业务接口说明
@@ -300,7 +323,7 @@ Authorization: Bearer <your-access-token>
 - **搜索** `GET /documents/search`  
   Query: `query`、`workspaceId?`、`status?`(draft|normal|archived)、`tags?`、`page`、`pageSize`。基于 tsvector 的全文检索。
 - **内容** `GET /documents/:docId/content`  
-  Query: `version?`（默认最新 `head`）、`maxDepth?`（0=仅根，1=根+一层，默认全量）、`startBlockId?`、`limit?`（默认 1000，最大 5000）。返回 `tree` 及分页信息 `{ totalBlocks, returnedBlocks, hasMore, nextStartBlockId }`，适合大文档分段加载。
+  Query: `version?`（默认最新 `head`）、`maxDepth?`（0=仅根，1=根+一层，默认全量）、`startBlockId?`、`limit?`（默认 1000，最大 10000）。返回 `tree` 及分页信息 `{ totalBlocks, returnedBlocks, hasMore, nextStartBlockId }`，适合大文档分段加载。
 - **发布** `POST /documents/:docId/publish`  
   将 `publishedHead` 置为当前 `head`。权限：owner/admin/editor。
 - **移动** `POST /documents/:docId/move`  
@@ -309,7 +332,7 @@ Authorization: Bearer <your-access-token>
   软删，级联删除子文档。仅 owner/admin。
 - **版本相关**：
   - 修订历史 `GET /documents/:docId/revisions`（分页）
-  - 版本对比 `GET /documents/:docId/diff`（fromVer、toVer）
+  - 版本对比 `GET /documents/:docId/diff`（fromVer、toVer）→ 返回 `summary`（added/deleted/modified/moved/reordered/indentChanged/unchanged）+ `changes` 列表 + 双版本内容树
   - 回滚版本 `POST /documents/:docId/revert` Body: `{ version }`
   - 创建快照 `POST /documents/:docId/snapshots`（幂等，按 docVer）
   - **手动创建版本** `POST /documents/:docId/commit` Body: `{ message? }`，将待创建操作合并为单一版本
@@ -367,6 +390,20 @@ Authorization: Bearer <your-access-token>
 
 - **安全日志** `GET /security/events` Query: `eventType`、`userId`、`ip`、`startDate`、`endDate`、`page`、`pageSize`。通常需管理员权限。
 - **审计日志** `GET /security/audit` Query: `userId`、`action`、`resourceType`、`resourceId`、`startDate`、`endDate`、`page`、`pageSize`。
+
+### 设置
+
+- **用户设置** `GET /settings/me` 返回当前用户的完整设置（含默认值）。`PATCH /settings/me` 深合并更新，传 `null` 删除字段。
+- **生效设置** `GET /settings/effective` 按 user > workspace > default 优先级返回生效值，可带 `?workspaceId=`。
+- **工作空间覆盖** `GET/PATCH/DELETE /workspaces/:workspaceId/settings` 管理工作空间级别的设置覆盖（仅 owner/admin），支持站点公开读取。
+- 设置范围：`reader.contentWidth`(680-1200)、`reader.fontSize`(13-22)、`editor.*`（同 reader）、`advanced.compactList`、`advanced.codeFontFamily`。
+
+### 运行时配置
+
+- 使用 `x-system-admin-token` 请求头鉴权，不使用 JWT。
+- `GET /runtime-configs/rate-limit` 读取当前限流配置（ttlMs、limit）。
+- `PATCH /runtime-configs/rate-limit` 部分更新限流参数。
+- `POST /runtime-configs/rate-limit/reset` 重置为环境变量默认值。
 
 ### Token 说明
 
@@ -766,6 +803,7 @@ http://localhost:5200/api/docs
 
 - 系统全局限流：默认 60 秒内最多 100 次请求，超过返回 429
 - 客户端应对 429 做延迟重试或提示用户
+- 运行时可通过 `/runtime-configs/rate-limit` 接口动态调优（需系统管理员令牌）
 
 ### 6. 安全性
 
@@ -812,6 +850,14 @@ http://localhost:5200/api/docs
 - 块：新增 `createVersion` 控制；加强 `sortKey` 自动生成与排序说明
 - 版本相关：修订历史、差异、回滚、快照说明补充
 - 全局：错误码对齐网站文档，增加限流说明与最新最佳实践
+
+### 2026-05
+
+- 版本对比：重写 diff API，返回块级变更列表（added/deleted/modified/moved/reordered/indent-changed）和统计摘要
+- 时间旅行修复：修复历史版本重建受全局 `isDeleted` 标志影响导致发布内容丢失的问题
+- 新增模块：设置（settings）、运行时配置（runtime-configs）
+- 新增接口：`PATCH /auth/me`（更新用户信息）、`GET /auth/users/:userId`（获取用户公开资料）
+- 文档内容：`limit` 最大值从 5000 更新为 10000
 
 ---
 

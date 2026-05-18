@@ -23,6 +23,12 @@ import {
 import { compareSortKey } from '../../common/utils/sort-key.util';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
+import type {
+  DiffResponse,
+  DiffChangeItem,
+  DiffSummary,
+  BlockSnapshot,
+} from './dto/diff-response.dto';
 import { MoveDocumentDto } from './dto/move-document.dto';
 import { QueryDocumentsDto } from './dto/query-documents.dto';
 import { QueryRevisionsDto } from './dto/query-revisions.dto';
@@ -952,7 +958,7 @@ export class DocumentsService {
   /**
    * 版本对比：返回两个版本之间的内容差异
    */
-  async getDiff(docId: string, fromVer: number, toVer: number, userId: string) {
+  async getDiff(docId: string, fromVer: number, toVer: number, userId: string): Promise<DiffResponse> {
     const document = await this.findOne(docId, userId);
     await this.checkDocumentEditPermission(document, userId);
 
@@ -973,10 +979,14 @@ export class DocumentsService {
       this.buildContentTreeFromVersionMap(docId, document.rootBlockId, toResult.map, undefined, undefined, 1000, toResult.createdAt),
     ]);
 
+    const { changes, summary } = await this.buildDiff(docId, fromResult.map, toResult.map);
+
     return {
       docId,
       fromVer,
       toVer,
+      summary,
+      changes,
       fromContent: fromTree,
       toContent: toTree,
     };
@@ -1122,6 +1132,123 @@ export class DocumentsService {
       docId,
       pendingCount,
       hasPending: pendingCount > 0,
+    };
+  }
+
+  /**
+   * 根据两个版本的块映射计算差异
+   */
+  private async buildDiff(
+    docId: string,
+    fromMap: Record<string, number>,
+    toMap: Record<string, number>,
+  ): Promise<{ changes: DiffChangeItem[]; summary: DiffSummary }> {
+    // 收集所有 (blockId, ver) 对，去重
+    const conditionMap = new Map<string, { blockId: string; ver: number }>();
+    for (const [blockId, ver] of Object.entries(fromMap)) {
+      conditionMap.set(`${blockId}:${ver}`, { blockId, ver });
+    }
+    for (const [blockId, ver] of Object.entries(toMap)) {
+      conditionMap.set(`${blockId}:${ver}`, { blockId, ver });
+    }
+    const conditions = [...conditionMap.values()];
+
+    if (conditions.length === 0) {
+      return {
+        changes: [],
+        summary: { added: 0, deleted: 0, modified: 0, moved: 0, reordered: 0, indentChanged: 0, unchanged: 0 },
+      };
+    }
+
+    // 一次查询获取所有需要的 BlockVersion 记录
+    const versions = await this.blockVersionRepository.find({
+      where: conditions.map((c) => ({ docId, blockId: c.blockId, ver: c.ver })),
+      select: ['blockId', 'ver', 'parentId', 'sortKey', 'indent', 'payload', 'hash'],
+    });
+
+    // 按 blockId:ver 建索引
+    const bvIndex = new Map<string, (typeof versions)[0]>();
+    for (const v of versions) {
+      bvIndex.set(`${v.blockId}:${v.ver}`, v);
+    }
+
+    // 遍历两个 map 的 blockId 并集，分类变更
+    const allBlockIds = new Set([...Object.keys(fromMap), ...Object.keys(toMap)]);
+    const changes: DiffChangeItem[] = [];
+    const summary: DiffSummary = {
+      added: 0, deleted: 0, modified: 0, moved: 0,
+      reordered: 0, indentChanged: 0, unchanged: 0,
+    };
+
+    for (const blockId of allBlockIds) {
+      const fromVer = fromMap[blockId];
+      const toVer = toMap[blockId];
+
+      if (fromVer === undefined) {
+        // 新增块
+        const bv = bvIndex.get(`${blockId}:${toVer}`);
+        if (!bv) continue;
+        summary.added++;
+        changes.push({ type: 'added', blockId, to: this.extractSnapshot(bv) });
+      } else if (toVer === undefined) {
+        // 删除块
+        const bv = bvIndex.get(`${blockId}:${fromVer}`);
+        if (!bv) continue;
+        summary.deleted++;
+        changes.push({ type: 'deleted', blockId, from: this.extractSnapshot(bv) });
+      } else {
+        // 两边都存在，比较差异
+        const fromBv = bvIndex.get(`${blockId}:${fromVer}`);
+        const toBv = bvIndex.get(`${blockId}:${toVer}`);
+        if (!fromBv || !toBv) continue;
+
+        const hashChanged = fromBv.hash !== toBv.hash;
+        const parentChanged = fromBv.parentId !== toBv.parentId;
+        const sortKeyChanged = fromBv.sortKey !== toBv.sortKey;
+        const indentChanged = fromBv.indent !== toBv.indent;
+
+        if (!hashChanged && !parentChanged && !sortKeyChanged && !indentChanged) {
+          summary.unchanged++;
+          continue;
+        }
+
+        // 优先级：moved > modified > reordered > indent-changed
+        let changeType: DiffChangeItem['type'];
+        if (parentChanged) {
+          changeType = 'moved';
+          summary.moved++;
+        } else if (hashChanged) {
+          changeType = 'modified';
+          summary.modified++;
+        } else if (sortKeyChanged) {
+          changeType = 'reordered';
+          summary.reordered++;
+        } else {
+          changeType = 'indent-changed';
+          summary.indentChanged++;
+        }
+
+        changes.push({
+          type: changeType,
+          blockId,
+          from: this.extractSnapshot(fromBv),
+          to: this.extractSnapshot(toBv),
+        });
+      }
+    }
+
+    return { changes, summary };
+  }
+
+  private extractSnapshot(bv: BlockVersion): BlockSnapshot {
+    return {
+      ver: bv.ver,
+      type: (bv.payload as any)?.type || 'paragraph',
+      payload: bv.payload,
+      parentId: bv.parentId,
+      sortKey: bv.sortKey,
+      indent: bv.indent,
+      hash: bv.hash,
     };
   }
 

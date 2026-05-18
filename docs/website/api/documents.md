@@ -659,11 +659,11 @@ Authorization: Bearer <your-access-token>
 }
 ```
 
-### 版本对比 <Badge type="danger" text="BUG" />
+### 版本对比
 
 **接口：** `GET /api/v1/documents/:docId/diff`
 
-**说明：** 对比两个版本之间的差异
+**说明：** 对比两个版本之间的块级差异，返回变更列表和统计摘要，同时附带两个版本的完整内容树
 
 **请求头：**
 
@@ -687,13 +687,138 @@ Authorization: Bearer <your-access-token>
     "docId": "doc_1705123456789_xyz456",
     "fromVer": 3,
     "toVer": 5,
-    "fromContent": { ... },
-    "toContent": { ... }
+    "summary": {
+      "added": 2,
+      "deleted": 1,
+      "modified": 3,
+      "moved": 1,
+      "reordered": 0,
+      "indentChanged": 0,
+      "unchanged": 15
+    },
+    "changes": [
+      {
+        "type": "deleted",
+        "blockId": "b_001",
+        "from": {
+          "ver": 1,
+          "type": "paragraph",
+          "payload": { "text": "被删除的内容" },
+          "parentId": "b_root",
+          "sortKey": "100000",
+          "indent": 0,
+          "hash": "abc123"
+        }
+      },
+      {
+        "type": "modified",
+        "blockId": "b_002",
+        "from": {
+          "ver": 1,
+          "type": "paragraph",
+          "payload": { "text": "旧内容" },
+          "parentId": "b_root",
+          "sortKey": "300000",
+          "indent": 0,
+          "hash": "def456"
+        },
+        "to": {
+          "ver": 2,
+          "type": "paragraph",
+          "payload": { "text": "新内容" },
+          "parentId": "b_root",
+          "sortKey": "300000",
+          "indent": 0,
+          "hash": "ghi789"
+        }
+      },
+      {
+        "type": "moved",
+        "blockId": "b_003",
+        "from": {
+          "ver": 1,
+          "type": "paragraph",
+          "payload": { "text": "被移动的块" },
+          "parentId": "b_root",
+          "sortKey": "500000",
+          "indent": 0,
+          "hash": "jkl012"
+        },
+        "to": {
+          "ver": 2,
+          "type": "paragraph",
+          "payload": { "text": "被移动的块" },
+          "parentId": "b_parent_new",
+          "sortKey": "100000",
+          "indent": 1,
+          "hash": "jkl012"
+        }
+      },
+      {
+        "type": "added",
+        "blockId": "b_004",
+        "to": {
+          "ver": 1,
+          "type": "paragraph",
+          "payload": { "text": "新增的块" },
+          "parentId": "b_root",
+          "sortKey": "700000",
+          "indent": 0,
+          "hash": "mno345"
+        }
+      }
+    ],
+    "fromContent": { "tree": { "...": "..." }, "totalBlocks": 16, "returnedBlocks": 16, "hasMore": false },
+    "toContent": { "tree": { "...": "..." }, "totalBlocks": 20, "returnedBlocks": 20, "hasMore": false }
   }
 }
 ```
 
-### 回滚到指定版本 <Badge type="danger" text="BUG" />
+**变更类型说明：**
+
+| 类型             | 说明                     | `from` | `to` |
+| ---------------- | ------------------------ | ------ | ---- |
+| `added`          | 新增的块                 |        | ✅   |
+| `deleted`        | 删除的块                 | ✅     |      |
+| `modified`       | 内容（payload）发生变化   | ✅     | ✅   |
+| `moved`          | 父块（parentId）发生变化 | ✅     | ✅   |
+| `reordered`      | 同级排序（sortKey）变化   | ✅     | ✅   |
+| `indent-changed` | 缩进层级变化             | ✅     | ✅   |
+
+**变更类型优先级：** 当一个块同时发生多种变化时，按 `moved > modified > reordered > indent-changed` 的优先级归类。
+
+**summary 字段说明：**
+
+| 字段            | 类型   | 说明                             |
+| --------------- | ------ | -------------------------------- |
+| `added`         | number | 新增块数量                       |
+| `deleted`       | number | 删除块数量                       |
+| `modified`      | number | 内容变更块数量                   |
+| `moved`         | number | 移动块数量                       |
+| `reordered`     | number | 重排块数量                       |
+| `indentChanged` | number | 缩进变更块数量                   |
+| `unchanged`     | number | 未变更块数量（不包含在 changes） |
+
+**BlockSnapshot 字段说明：**
+
+| 字段      | 类型   | 说明                        |
+| --------- | ------ | --------------------------- |
+| `ver`     | number | 块在该版本中的版本号        |
+| `type`    | string | 块类型（从 payload.type 提取） |
+| `payload` | object | 块的完整内容（JSON）        |
+| `parentId`| string | 父块 ID                     |
+| `sortKey` | string | 排序键                      |
+| `indent`  | number | 缩进层级                    |
+| `hash`    | string | 内容哈希（用于快速比较）    |
+
+**状态码：**
+
+- `200 OK` - 获取成功
+- `400 Bad Request` - 参数错误（fromVer > toVer 或版本号超出范围）
+- `404 Not Found` - 文档或版本不存在
+- `403 Forbidden` - 没有权限
+
+### 回滚到指定版本
 
 **接口：** `POST /api/v1/documents/:docId/revert`
 
@@ -740,7 +865,7 @@ Content-Type: application/json
 }
 ```
 
-### 创建快照 <Badge type="danger" text="BUG" />
+### 创建快照
 
 **接口：** `POST /api/v1/documents/:docId/snapshots`
 
