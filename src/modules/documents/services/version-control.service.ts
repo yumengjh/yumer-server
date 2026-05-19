@@ -59,6 +59,17 @@ export class VersionControlService implements OnModuleDestroy {
   }
 
   /**
+   * 获取文档当前待同步草稿状态
+   */
+  getPendingDraftState(docId: string): { pendingCount: number; hasPendingDraft: boolean } {
+    const pendingCount = this.getPendingVersionCount(docId);
+    return {
+      pendingCount,
+      hasPendingDraft: pendingCount > 0,
+    };
+  }
+
+  /**
    * 创建文档版本（立即创建）
    * @param docId 文档ID
    * @param userId 用户ID

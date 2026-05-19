@@ -1,4 +1,4 @@
-import {
+﻿import {
   IsArray,
   IsEnum,
   ValidateNested,
@@ -19,6 +19,11 @@ export enum BatchOperationType {
   MOVE = 'move',
 }
 
+export enum BatchSourceType {
+  AUTOSYNC = 'autosync',
+  MANUAL_SAVE = 'manual-save',
+}
+
 export class BatchCreateOperation {
   @ApiProperty({ description: '操作类型', example: 'create', enum: BatchOperationType })
   @IsEnum(BatchOperationType)
@@ -28,6 +33,14 @@ export class BatchCreateOperation {
   @ValidateNested()
   @Type(() => CreateBlockDto)
   data: CreateBlockDto;
+
+  @ApiPropertyOptional({
+    description: '客户端生成的 clientId（用于 create ack 回填）',
+    example: 'cid_01HZXFXXR93Z2',
+  })
+  @IsOptional()
+  @IsString()
+  clientId?: string;
 }
 
 export class BatchUpdateOperation {
@@ -125,4 +138,30 @@ export class BatchBlockDto {
   @IsOptional()
   @IsBoolean()
   createVersion?: boolean;
+
+  @ApiPropertyOptional({
+    description: '客户端所基于的文档版本号',
+    example: 3,
+  })
+  @IsOptional()
+  @IsNumber()
+  baseVersion?: number;
+
+  @ApiPropertyOptional({
+    description: '客户端批次ID（用于幂等和 ack 对应）',
+    example: 'batch_20260519_001',
+  })
+  @IsOptional()
+  @IsString()
+  clientBatchId?: string;
+
+  @ApiPropertyOptional({
+    description: '请求来源',
+    enum: BatchSourceType,
+    example: BatchSourceType.AUTOSYNC,
+  })
+  @IsOptional()
+  @IsEnum(BatchSourceType)
+  source?: BatchSourceType;
 }
+

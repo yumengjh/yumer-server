@@ -33,6 +33,7 @@ import { MoveDocumentDto } from './dto/move-document.dto';
 import { QueryDocumentsDto } from './dto/query-documents.dto';
 import { QueryRevisionsDto } from './dto/query-revisions.dto';
 import { SearchQueryDto } from './dto/search-query.dto';
+import { SyncStateResponseDto } from './dto/sync-state-response.dto';
 import { ActivitiesService } from '../activities/activities.service';
 import { DOC_ACTIONS } from '../activities/constants/activity-actions';
 import { SITE_PUBLIC_ANONYMOUS_USER_ID } from '../../common/decorators/public.decorator';
@@ -317,6 +318,26 @@ export class DocumentsService {
     document.viewCount += 1;
     await this.documentRepository.save(document);
 
+    return document;
+  }
+
+  /**
+   * 无副作用的文档访问校验（不递增 viewCount）
+   */
+  async assertAccessWithoutViewIncrement(docId: string, userId: string): Promise<Document> {
+    const document = await this.documentRepository.findOne({
+      where: { docId },
+    });
+
+    if (!document) {
+      throw new NotFoundException('文档不存在');
+    }
+
+    if (document.status === 'deleted') {
+      throw new NotFoundException('文档不存在');
+    }
+
+    await this.checkDocumentAccess(document, userId);
     return document;
   }
 
@@ -1132,6 +1153,33 @@ export class DocumentsService {
       docId,
       pendingCount,
       hasPending: pendingCount > 0,
+    };
+  }
+
+  /**
+   * 获取文档同步状态（head + pending draft）
+   */
+  async getSyncState(docId: string, userId: string): Promise<SyncStateResponseDto> {
+    const document = await this.documentRepository.findOne({
+      where: { docId },
+      select: ['docId', 'workspaceId', 'head', 'publishedHead', 'updatedAt', 'status', 'createdBy', 'visibility'],
+    });
+
+    if (!document || document.status === 'deleted') {
+      throw new NotFoundException('文档不存在');
+    }
+
+    await this.checkDocumentAccess(document as Document, userId);
+
+    const { pendingCount, hasPendingDraft } = this.versionControlService.getPendingDraftState(docId);
+
+    return {
+      docId: document.docId,
+      head: document.head,
+      publishedHead: document.publishedHead,
+      pendingCount,
+      hasPendingDraft,
+      updatedAt: document.updatedAt,
     };
   }
 

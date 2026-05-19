@@ -1,4 +1,4 @@
-import {
+﻿import {
   Controller,
   Get,
   Post,
@@ -17,6 +17,7 @@ import { CreateBlockDto } from './dto/create-block.dto';
 import { UpdateBlockDto } from './dto/update-block.dto';
 import { MoveBlockDto } from './dto/move-block.dto';
 import { BatchBlockDto } from './dto/batch-block.dto';
+import { SyncBatchResponseDto } from './dto/sync-batch-response.dto';
 import { PaginationDto } from '../../common/dto/pagination.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -94,11 +95,12 @@ export class BlocksController {
 
   @Post('batch')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: '批量操作块' })
-  @ApiResponse({ status: 200, description: '批量操作成功' })
+  @ApiOperation({ summary: '批量操作块（sync transport）' })
+  @ApiResponse({ status: 200, description: '批量操作成功', type: SyncBatchResponseDto })
   @ApiResponse({ status: 400, description: '请求参数错误' })
   @ApiResponse({ status: 403, description: '没有权限' })
   async batch(@Body() batchBlockDto: BatchBlockDto, @CurrentUser() user: any) {
     return this.blocksService.batch(batchBlockDto, user.userId);
   }
 }
+

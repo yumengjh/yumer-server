@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, EntityManager } from 'typeorm';
 import { Block } from '../../entities/block.entity';
 import { BlockVersion } from '../../entities/block-version.entity';
 import { Document } from '../../entities/document.entity';
@@ -20,7 +20,15 @@ import { generateSortKey as generateSortKeyUtil } from '../../common/utils/sort-
 import { CreateBlockDto } from './dto/create-block.dto';
 import { UpdateBlockDto } from './dto/update-block.dto';
 import { MoveBlockDto } from './dto/move-block.dto';
-import { BatchBlockDto } from './dto/batch-block.dto';
+import {
+  BatchBlockDto,
+  BatchCreateOperation,
+  BatchDeleteOperation,
+  BatchMoveOperation,
+  BatchOperationType,
+  BatchUpdateOperation,
+} from './dto/batch-block.dto';
+import { SyncBatchResponseDto, SyncOperationResultDto } from './dto/sync-batch-response.dto';
 import { PaginationDto } from '../../common/dto/pagination.dto';
 import { ActivitiesService } from '../activities/activities.service';
 import { BLOCK_ACTIONS } from '../activities/constants/activity-actions';
@@ -49,7 +57,7 @@ export class BlocksService {
    */
   async create(createBlockDto: CreateBlockDto, userId: string) {
     // 检查文档权限并获取文档信息（包含根块ID）
-    await this.documentsService.findOne(createBlockDto.docId, userId);
+    await this.documentsService.assertAccessWithoutViewIncrement(createBlockDto.docId, userId);
 
     // 确定父块ID：如果未提供 parentId，则使用文档的根块ID
     let parentId = createBlockDto.parentId;
@@ -178,7 +186,7 @@ export class BlocksService {
     }
 
     // 检查文档权限
-    await this.documentsService.findOne(block.docId, userId);
+    await this.documentsService.assertAccessWithoutViewIncrement(block.docId, userId);
     const docId = block.docId;
 
     // 使用「行级锁 + 重试」保证同一 block 高频并发更新的稳定性
@@ -438,7 +446,7 @@ export class BlocksService {
     }
 
     // 检查文档权限
-    await this.documentsService.findOne(block.docId, userId);
+    await this.documentsService.assertAccessWithoutViewIncrement(block.docId, userId);
 
     // 验证父块
     if (moveBlockDto.parentId) {
@@ -543,7 +551,7 @@ export class BlocksService {
     }
 
     // 检查文档权限
-    await this.documentsService.findOne(block.docId, userId);
+    await this.documentsService.assertAccessWithoutViewIncrement(block.docId, userId);
 
     // 使用事务软删除块
     const result = await this.dataSource.transaction(async (manager) => {
@@ -594,7 +602,7 @@ export class BlocksService {
     }
 
     // 检查文档权限
-    await this.documentsService.findOne(block.docId, userId);
+    await this.documentsService.assertAccessWithoutViewIncrement(block.docId, userId);
 
     const { page = 1, pageSize = 20 } = paginationDto;
     const skip = (page - 1) * pageSize;
@@ -649,73 +657,212 @@ export class BlocksService {
     return false;
   }
 
+  private async wouldCreateCycleInManager(
+    docId: string,
+    blockId: string,
+    newParentId: string,
+    manager: EntityManager,
+  ): Promise<boolean> {
+    let currentParentId = newParentId;
+    const visited = new Set<string>([blockId]);
+
+    while (currentParentId) {
+      if (visited.has(currentParentId)) {
+        return true;
+      }
+      visited.add(currentParentId);
+
+      const parent = await manager.findOne(Block, {
+        where: { blockId: currentParentId, docId, isDeleted: false },
+      });
+      if (!parent) {
+        break;
+      }
+
+      const parentVersion = await manager.findOne(BlockVersion, {
+        where: { docId, blockId: currentParentId, ver: parent.latestVer },
+      });
+      if (!parentVersion || !parentVersion.parentId) {
+        break;
+      }
+      currentParentId = parentVersion.parentId;
+    }
+
+    return false;
+  }
+
   /**
    * 批量操作块
    */
-  async batch(batchBlockDto: BatchBlockDto, userId: string) {
-    // 检查文档权限
-    await this.documentsService.findOne(batchBlockDto.docId, userId);
+  async batch(batchBlockDto: BatchBlockDto, userId: string): Promise<SyncBatchResponseDto> {
+    await this.documentsService.assertAccessWithoutViewIncrement(batchBlockDto.docId, userId);
 
-    // 使用事务执行批量操作
-    const result = await this.dataSource.transaction(async (manager) => {
-      const results: Array<{
-        success: boolean;
-        operation: string;
-        blockId?: string;
-        version?: number;
-        error?: string;
-      }> = [];
-      const now = Date.now();
+    const acceptedBatchId =
+      batchBlockDto.clientBatchId?.trim() ||
+      `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-      for (const operation of batchBlockDto.operations) {
-        try {
-          if (operation.type === 'create') {
-            const result = await this.handleBatchCreate(
-              operation,
-              batchBlockDto.docId,
-              userId,
-              now,
-              manager,
-            );
-            results.push({ success: true, operation: 'create', ...result });
-          } else if (operation.type === 'update') {
-            const result = await this.handleBatchUpdate(operation, userId, now, manager);
-            results.push({ success: true, operation: 'update', ...result });
-          } else if (operation.type === 'delete') {
-            const result = await this.handleBatchDelete(operation, userId, now, manager);
-            results.push({ success: true, operation: 'delete', ...result });
-          } else if (operation.type === 'move') {
-            const result = await this.handleBatchMove(operation, userId, now, manager);
-            results.push({ success: true, operation: 'move', ...result });
-          }
-        } catch (error) {
-          results.push({
-            success: false,
-            operation: operation.type,
-            error: (error as Error).message,
-          });
+    const txResult = await this.dataSource.transaction(
+      async (
+        manager,
+      ): Promise<{
+        results: SyncOperationResultDto[];
+        serverHead: number;
+        successCount: number;
+        needsReload: boolean;
+        conflicts: Array<{
+          code: string;
+          message: string;
+          serverHead: number;
+          clientBaseVersion?: number;
+        }>;
+      }> => {
+        const docQuery = manager
+          .getRepository(Document)
+          .createQueryBuilder('doc')
+          .where('doc.docId = :docId', { docId: batchBlockDto.docId });
+        const dbType = this.dataSource.options.type;
+        if (dbType !== 'sqlite' && dbType !== 'better-sqlite3') {
+          docQuery.setLock('pessimistic_write');
         }
-      }
+        const docInTx = await docQuery.getOne();
+        if (!docInTx) {
+          throw new NotFoundException('Document not found');
+        }
 
-      // 根据 createVersion 参数决定是否立即创建文档版本
-      const shouldCreateVersion = batchBlockDto.createVersion !== false; // 默认为 true
-      if (shouldCreateVersion) {
-        await this.incrementDocumentHead(batchBlockDto.docId, userId, manager);
-      }
-      // 如果 shouldCreateVersion 为 false，在事务外记录待创建版本
+        if (
+          typeof batchBlockDto.baseVersion === 'number' &&
+          batchBlockDto.baseVersion !== docInTx.head
+        ) {
+          return {
+            results: [],
+            serverHead: docInTx.head,
+            successCount: 0,
+            needsReload: true,
+            conflicts: [
+              {
+                code: 'BASE_VERSION_MISMATCH',
+                message: `baseVersion(${batchBlockDto.baseVersion}) does not match serverHead(${docInTx.head})`,
+                serverHead: docInTx.head,
+                clientBaseVersion: batchBlockDto.baseVersion,
+              },
+            ],
+          };
+        }
 
+        const results: SyncOperationResultDto[] = [];
+        const now = Date.now();
+
+        for (const operation of batchBlockDto.operations) {
+          try {
+            if (operation.type === BatchOperationType.CREATE) {
+              const created = await this.handleBatchCreate(
+                operation,
+                batchBlockDto.docId,
+                userId,
+                now,
+                manager,
+              );
+              results.push({
+                operation: BatchOperationType.CREATE,
+                success: true,
+                clientId: operation.clientId,
+                ...created,
+              });
+            } else if (operation.type === BatchOperationType.UPDATE) {
+              const updated = await this.handleBatchUpdate(
+                operation,
+                batchBlockDto.docId,
+                userId,
+                now,
+                manager,
+              );
+              results.push({
+                operation: BatchOperationType.UPDATE,
+                success: true,
+                ...updated,
+              });
+            } else if (operation.type === BatchOperationType.DELETE) {
+              const removed = await this.handleBatchDelete(
+                operation,
+                batchBlockDto.docId,
+                userId,
+                now,
+                manager,
+              );
+              results.push({
+                operation: BatchOperationType.DELETE,
+                success: true,
+                ...removed,
+              });
+            } else if (operation.type === BatchOperationType.MOVE) {
+              const moved = await this.handleBatchMove(
+                operation,
+                batchBlockDto.docId,
+                userId,
+                now,
+                manager,
+              );
+              results.push({
+                operation: BatchOperationType.MOVE,
+                success: true,
+                ...moved,
+              });
+            }
+          } catch (error) {
+            results.push({
+              operation: operation.type,
+              success: false,
+              ...(operation.type === BatchOperationType.CREATE
+                ? { clientId: operation.clientId }
+                : {}),
+              ...(operation.type !== BatchOperationType.CREATE
+                ? {
+                    blockId: (
+                      operation as BatchUpdateOperation | BatchDeleteOperation | BatchMoveOperation
+                    ).blockId,
+                  }
+                : {}),
+              error: (error as Error).message,
+            });
+          }
+        }
+
+        const successCount = results.filter((item) => item.success).length;
+        const shouldCreateVersion = batchBlockDto.createVersion !== false;
+        if (shouldCreateVersion && successCount > 0) {
+          await this.incrementDocumentHead(batchBlockDto.docId, userId, manager);
+        }
+
+        const docAfterBatch = await manager.findOne(Document, {
+          where: { docId: batchBlockDto.docId },
+          select: ['head'],
+        });
+
+        return {
+          results,
+          serverHead: docAfterBatch?.head ?? docInTx.head,
+          successCount,
+          needsReload: false,
+          conflicts: [],
+        };
+      },
+    );
+
+    if (txResult.needsReload) {
       return {
-        total: batchBlockDto.operations.length,
-        success: results.filter((r) => r.success).length,
-        failed: results.filter((r) => !r.success).length,
-        results,
+        acceptedBatchId,
+        appliedAt: Date.now(),
+        serverHead: txResult.serverHead,
+        needsReload: true,
+        conflicts: txResult.conflicts,
+        results: [],
       };
-    });
+    }
 
-    // 事务成功后，如果 createVersion 为 false，记录待创建版本
-    if (batchBlockDto.createVersion === false) {
+    if (batchBlockDto.createVersion === false && txResult.successCount > 0) {
       this.versionControlService.recordPendingVersion(batchBlockDto.docId);
     }
+
     const doc = await this.documentRepository.findOne({
       where: { docId: batchBlockDto.docId },
       select: ['workspaceId'],
@@ -729,36 +876,51 @@ export class BlocksService {
         userId,
         { count: batchBlockDto.operations.length },
       );
-    return result;
+
+    return {
+      acceptedBatchId,
+      appliedAt: Date.now(),
+      serverHead: txResult.serverHead,
+      needsReload: false,
+      conflicts: [],
+      results: txResult.results,
+    };
   }
 
-  /**
-   * 处理批量创建操作
-   */
   private async handleBatchCreate(
-    operation: any,
+    operation: BatchCreateOperation,
     docId: string,
     userId: string,
     now: number,
-    manager: any,
-  ) {
-    // 确定父块ID：如果未提供 parentId，则使用文档的根块ID
+    manager: EntityManager,
+  ): Promise<{ blockId: string }> {
+    if (operation.data.docId && operation.data.docId !== docId) {
+      throw new BadRequestException(
+        `Create operation docId mismatch: ${operation.data.docId} !== ${docId}`,
+      );
+    }
+
     let parentId = operation.data.parentId;
     if (!parentId || typeof parentId !== 'string' || parentId.trim() === '') {
-      // 获取文档的根块ID
       const docEntity = await manager.findOne(Document, {
         where: { docId },
         select: ['rootBlockId'],
       });
       if (!docEntity || !docEntity.rootBlockId) {
-        throw new NotFoundException('文档根块不存在');
+        throw new NotFoundException('Document root block not found');
       }
       parentId = docEntity.rootBlockId;
+    } else {
+      const parentBlock = await manager.findOne(Block, {
+        where: { blockId: parentId, docId, isDeleted: false },
+      });
+      if (!parentBlock) {
+        throw new NotFoundException(`Parent block ${parentId} not found in document ${docId}`);
+      }
     }
 
     const blockId = generateBlockId();
-    const sortKey =
-      operation.data.sortKey || (await this.generateSortKey(docId, parentId, manager));
+    const sortKey = operation.data.sortKey || (await this.generateSortKey(docId, parentId, manager));
 
     const block = manager.create(Block, {
       blockId,
@@ -782,7 +944,7 @@ export class BlocksService {
       ver: 1,
       createdAt: now,
       createdBy: userId,
-      parentId: parentId, // 使用确定的父块ID（根块ID或指定的parentId）
+      parentId,
       sortKey,
       indent: operation.data.indent || 0,
       collapsed: operation.data.collapsed || false,
@@ -797,23 +959,26 @@ export class BlocksService {
     return { blockId };
   }
 
-  /**
-   * 处理批量更新操作
-   */
-  private async handleBatchUpdate(operation: any, userId: string, now: number, manager: any) {
+  private async handleBatchUpdate(
+    operation: BatchUpdateOperation,
+    docId: string,
+    userId: string,
+    now: number,
+    manager: EntityManager,
+  ): Promise<{ blockId: string; version: number }> {
     const block = await manager.findOne(Block, {
-      where: { blockId: operation.blockId, isDeleted: false },
+      where: { blockId: operation.blockId, docId, isDeleted: false },
     });
 
     if (!block) {
-      throw new NotFoundException(`块 ${operation.blockId} 不存在`);
+      throw new NotFoundException(`Block ${operation.blockId} not found`);
     }
 
     const newVer = block.latestVer + 1;
     const hash = this.calculateHash(operation.data.payload);
 
     const latestVersion = await manager.findOne(BlockVersion, {
-      where: { blockId: operation.blockId, ver: block.latestVer },
+      where: { docId, blockId: operation.blockId, ver: block.latestVer },
     });
 
     const blockVersion = manager.create(BlockVersion, {
@@ -843,16 +1008,19 @@ export class BlocksService {
     return { blockId: operation.blockId, version: newVer };
   }
 
-  /**
-   * 处理批量删除操作
-   */
-  private async handleBatchDelete(operation: any, userId: string, now: number, manager: any) {
+  private async handleBatchDelete(
+    operation: BatchDeleteOperation,
+    docId: string,
+    userId: string,
+    now: number,
+    manager: EntityManager,
+  ): Promise<{ blockId: string }> {
     const block = await manager.findOne(Block, {
-      where: { blockId: operation.blockId, isDeleted: false },
+      where: { blockId: operation.blockId, docId, isDeleted: false },
     });
 
     if (!block) {
-      throw new NotFoundException(`块 ${operation.blockId} 不存在`);
+      throw new NotFoundException(`Block ${operation.blockId} not found`);
     }
 
     block.isDeleted = true;
@@ -863,24 +1031,44 @@ export class BlocksService {
     return { blockId: operation.blockId };
   }
 
-  /**
-   * 处理批量移动操作
-   */
-  private async handleBatchMove(operation: any, userId: string, now: number, manager: any) {
+  private async handleBatchMove(
+    operation: BatchMoveOperation,
+    docId: string,
+    userId: string,
+    now: number,
+    manager: EntityManager,
+  ): Promise<{ blockId: string; version: number }> {
     const block = await manager.findOne(Block, {
-      where: { blockId: operation.blockId, isDeleted: false },
+      where: { blockId: operation.blockId, docId, isDeleted: false },
     });
 
     if (!block) {
-      throw new NotFoundException(`块 ${operation.blockId} 不存在`);
+      throw new NotFoundException(`Block ${operation.blockId} not found`);
+    }
+
+    if (operation.parentId) {
+      if (operation.parentId === operation.blockId) {
+        throw new BadRequestException('Cannot move block under itself');
+      }
+      const parentBlock = await manager.findOne(Block, {
+        where: { blockId: operation.parentId, docId, isDeleted: false },
+      });
+      if (!parentBlock) {
+        throw new NotFoundException(
+          `Parent block ${operation.parentId} not found in document ${docId}`,
+        );
+      }
+      if (await this.wouldCreateCycleInManager(docId, operation.blockId, operation.parentId, manager)) {
+        throw new BadRequestException('Move operation would create a cycle');
+      }
     }
 
     const latestVersion = await manager.findOne(BlockVersion, {
-      where: { blockId: operation.blockId, ver: block.latestVer },
+      where: { docId, blockId: operation.blockId, ver: block.latestVer },
     });
 
     if (!latestVersion) {
-      throw new NotFoundException(`块版本不存在`);
+      throw new NotFoundException('Block version not found');
     }
 
     const newVer = block.latestVer + 1;
@@ -910,4 +1098,5 @@ export class BlocksService {
 
     return { blockId: operation.blockId, version: newVer };
   }
+
 }
