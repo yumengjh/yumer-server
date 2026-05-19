@@ -9,3 +9,4 @@
 - [文档块工作机制](./block-mechanism)
 - [块移动操作指南](./block-movement-guide)
 - [块树构建算法](./document-content-pagination)
+- [同步机制升级（53b8830）](./sync-protocol-upgrade-53b8830)

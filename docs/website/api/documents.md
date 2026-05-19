@@ -37,6 +37,7 @@
 | POST   | `/documents/:docId/snapshots`        | 创建快照           | 是             |
 | POST   | `/documents/:docId/commit`           | 手动触发创建版本   | 是             |
 | GET    | `/documents/:docId/pending-versions` | 获取待创建版本数量 | 是             |
+| GET    | `/documents/:docId/sync-state`       | 获取同步状态快照   | 是             |
 
 ## 创建文档
 
@@ -990,6 +991,40 @@ Authorization: Bearer <your-access-token>
 | -------------- | ------- | ------------------ |
 | `pendingCount` | number  | 待创建版本的数量   |
 | `hasPending`   | boolean | 是否有待创建的版本 |
+
+**状态码：**
+
+- `200 OK` - 获取成功
+- `404 Not Found` - 文档不存在
+- `403 Forbidden` - 没有权限访问
+
+### 获取同步状态快照
+
+**接口：** `GET /api/v1/documents/:docId/sync-state`
+
+**说明：** 返回同步引擎所需的轻量状态，不重建文档树，适合自动保存链路快速探测。
+
+**请求头：**
+
+```
+Authorization: Bearer <your-access-token>
+```
+
+**响应示例：**
+
+```json
+{
+  "success": true,
+  "data": {
+    "docId": "doc_1705123456789_xyz456",
+    "head": 22,
+    "publishedHead": 20,
+    "hasPendingDraft": true,
+    "pendingCount": 3,
+    "updatedAt": "2026-05-19T08:00:00.000Z"
+  }
+}
+```
 
 **状态码：**
 

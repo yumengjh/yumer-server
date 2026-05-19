@@ -186,6 +186,47 @@ const commitRes = await fetch(
 );
 ```
 
+## 增量同步接口用法（推荐）
+
+后端已将 `POST /api/v1/blocks/batch` 升级为同步协议通道，推荐前端自动保存使用该接口而不是整文档保存。
+
+### 批次请求示例
+
+```json
+{
+  "docId": "doc_xxx",
+  "baseVersion": 12,
+  "clientBatchId": "batch_20260519_001",
+  "source": "autosync",
+  "createVersion": false,
+  "operations": [
+    {
+      "type": "create",
+      "clientId": "cid_abc",
+      "data": {
+        "docId": "doc_xxx",
+        "type": "paragraph",
+        "payload": { "type": "paragraph", "content": [{ "type": "text", "text": "hi" }] }
+      }
+    }
+  ]
+}
+```
+
+### Ack 响应关键字段
+
+- `acceptedBatchId`：服务端接受的批次号
+- `serverHead`：服务端当前文档版本
+- `needsReload`：是否需要客户端重载
+- `conflicts`：冲突详情
+- `results`：逐操作执行结果（create 场景可回填 `clientId -> blockId`）
+
+### 同步状态查询
+
+可通过 `GET /api/v1/documents/:docId/sync-state` 查询轻量同步状态：
+
+- `docId/head/publishedHead/pendingCount/hasPendingDraft/updatedAt`
+
 ## 错误处理
 
 ### 常见错误码

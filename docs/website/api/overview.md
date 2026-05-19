@@ -140,6 +140,7 @@ PUBLIC_SITE_ALLOW_NO_ORIGIN=false
 | POST   | `/documents/:docId/snapshots`        | 创建快照           | 是             |
 | POST   | `/documents/:docId/commit`           | 手动触发创建版本   | 是             |
 | GET    | `/documents/:docId/pending-versions` | 获取待创建版本数量 | 是             |
+| GET    | `/documents/:docId/sync-state`       | 获取同步状态快照   | 是             |
 
 **详细文档：** [文档 API](./documents.md)
 
@@ -155,6 +156,8 @@ PUBLIC_SITE_ALLOW_NO_ORIGIN=false
 | DELETE | `/blocks/:blockId`          | 删除块     | 是   |
 | GET    | `/blocks/:blockId/versions` | 块版本历史 | 是   |
 | POST   | `/blocks/batch`             | 批量操作   | 是   |
+
+> `POST /blocks/batch` 在 2026-05 升级为同步协议主通道，支持 `baseVersion`、`clientBatchId`、`source`，并返回可消费的 batch ack（`acceptedBatchId/serverHead/needsReload/conflicts/results`）。
 
 **详细文档：** [块 API](./blocks.md)
 

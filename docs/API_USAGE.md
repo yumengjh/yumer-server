@@ -210,6 +210,7 @@ Authorization: Bearer <your-access-token>
 | POST   | `/documents/:docId/snapshots`        | 创建快照           | 是   |
 | POST   | `/documents/:docId/commit`           | 手动触发创建版本   | 是   |
 | GET    | `/documents/:docId/pending-versions` | 获取待创建版本数量 | 是   |
+| GET    | `/documents/:docId/sync-state`       | 获取同步状态快照   | 是   |
 
 ### 块 (blocks)
 
@@ -221,6 +222,28 @@ Authorization: Bearer <your-access-token>
 | DELETE | `/blocks/:blockId`          | 删除块（软删）                        | 是   |
 | GET    | `/blocks/:blockId/versions` | 块版本历史                            | 是   |
 | POST   | `/blocks/batch`             | 批量操作（create/update/delete/move） | 是   |
+
+### 同步协议增强（2026-05）
+
+`/blocks/batch` 已可作为前端同步主通道使用，支持以下扩展字段：
+
+- `baseVersion`：客户端本地基线版本
+- `clientBatchId`：客户端批次 ID（用于 ack 对账）
+- `source`：`autosync | manual-save`
+- create 操作可带 `clientId`，用于服务端 create ack 回填
+
+返回结构包含：
+
+- `acceptedBatchId`
+- `appliedAt`
+- `serverHead`
+- `needsReload`
+- `conflicts[]`
+- `results[]`（逐操作结果，含 `clientId/blockId/version/error`）
+
+并新增 `GET /documents/:docId/sync-state`，用于低成本查询：
+
+- `docId/head/publishedHead/pendingCount/hasPendingDraft/updatedAt`
 
 ### 标签 (tags)
 

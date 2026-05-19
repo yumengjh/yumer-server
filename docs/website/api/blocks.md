@@ -421,7 +421,8 @@ Authorization: Bearer <your-access-token>
 
 **接口：** `POST /api/v1/blocks/batch`
 
-**说明：** 在一个事务中执行多个块操作（创建、更新、删除、移动），只创建一次文档版本
+**说明：** 在一个事务中执行多个块操作（创建、更新、删除、移动）。  
+自 2026-05 起，该接口同时承担“前端同步协议通道”职责。
 
 **请求头：**
 
@@ -435,6 +436,9 @@ Content-Type: application/json
 ```json
 {
   "docId": "doc_1705123456789_xyz456",
+  "baseVersion": 12,
+  "clientBatchId": "batch_20260519_001",
+  "source": "autosync",
   "createVersion": true,
   "operations": [
     {
@@ -473,6 +477,9 @@ Content-Type: application/json
 | 字段            | 类型    | 必填 | 说明                              |
 | --------------- | ------- | ---- | --------------------------------- |
 | `docId`         | string  | ✅   | 文档ID                            |
+| `baseVersion`   | number  | ❌   | 客户端本地基线版本号（冲突检测）  |
+| `clientBatchId` | string  | ❌   | 客户端批次 ID（用于 ack 对账）    |
+| `source`        | string  | ❌   | 请求来源：`autosync/manual-save`  |
 | `createVersion` | boolean | ❌   | 是否立即创建文档版本，默认 `true` |
 | `operations`    | Array   | ✅   | 操作列表，至少包含一个操作        |
 
@@ -483,6 +490,7 @@ Content-Type: application/json
    ```json
    {
      "type": "create",
+     "clientId": "cid_xxx",
      "data": {
        "docId": "...",
        "type": "paragraph",
@@ -530,13 +538,16 @@ Content-Type: application/json
 {
   "success": true,
   "data": {
-    "total": 4,
-    "success": 4,
-    "failed": 0,
+    "acceptedBatchId": "batch_20260519_001",
+    "appliedAt": 1747632000000,
+    "serverHead": 13,
+    "needsReload": false,
+    "conflicts": [],
     "results": [
       {
         "success": true,
         "operation": "create",
+        "clientId": "cid_xxx",
         "blockId": "b_new_001",
         "version": 1
       },
@@ -560,6 +571,11 @@ Content-Type: application/json
   }
 }
 ```
+
+当 `baseVersion` 与服务端版本不一致时，可能返回：
+
+- `needsReload: true`
+- `conflicts` 包含冲突原因（如 `BASE_VERSION_MISMATCH`）
 
 **核心特性：**
 
