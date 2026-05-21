@@ -327,6 +327,8 @@ Authorization: Bearer <your-access-token>
 ---
 
 ## 业务接口说明
+- **详情** `GET /documents/:docId`  
+  返回文档元数据，并额外补充 `creator` / `updater`：`{ userId, displayName, avatar }`，适合公开页 SSR 直接展示作者与最后更新者。
 
 ### 工作空间
 

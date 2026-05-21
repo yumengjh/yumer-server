@@ -231,18 +231,15 @@ Content-Type: application/json
 **状态码：**
 
 - `200 OK` - 搜索成功
-
 ## 获取文档详情
 
 **接口：** `GET /api/v1/documents/:docId`
 
 **说明：** 获取文档的详细信息
-
 **请求头：**
 
-```
-Authorization: Bearer <your-access-token>
-```
+- 登录态：`Authorization: Bearer <your-access-token>`
+- 站点公开：可不带 token，但请求来源必须命中 `PUBLIC_SITE_ORIGINS`
 
 **路径参数：**
 
@@ -259,15 +256,27 @@ Authorization: Bearer <your-access-token>
     "docId": "doc_1705123456789_xyz456",
     "workspaceId": "ws_1705123456789_abc123",
     "title": "我的第一篇文档",
-    "icon": "📄",
+    "icon": "memo",
     "cover": "https://example.com/cover.jpg",
     "rootBlockId": "b_1705123456789_root789",
     "head": 5,
     "publishedHead": 3,
     "status": "normal",
     "visibility": "workspace",
+    "createdBy": "u_1705123456789_creator",
+    "updatedBy": "u_1705123456789_updater",
     "tags": ["tag_1234567890_abc123", "tag_1234567890_def456"],
     "category": "技术文档",
+    "creator": {
+      "userId": "u_1705123456789_creator",
+      "displayName": "Alice",
+      "avatar": "https://cdn.example.com/alice.png"
+    },
+    "updater": {
+      "userId": "u_1705123456789_updater",
+      "displayName": "Bob",
+      "avatar": "https://cdn.example.com/bob.png"
+    },
     "viewCount": 10,
     "favoriteCount": 2,
     "createdAt": "2024-01-15T10:30:00.000Z",
@@ -281,6 +290,8 @@ Authorization: Bearer <your-access-token>
 - 仅当文档已发布时可访问；未发布文档会返回 `404 Not Found`
 - 公开响应不返回 `head`、`rootBlockId` 等编辑态字段
 - 公开响应会返回 `publishedHead`，用于标识当前公开版本
+- 登录态和站点公开态的详情响应都会补充 `creator` / `updater` 对象
+- `creator` / `updater` 仅包含 `userId`、`displayName`、`avatar`，可直接用于公开页 SSR 展示作者与最后更新者
 
 **状态码：**
 

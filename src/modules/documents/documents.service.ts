@@ -13,6 +13,7 @@ import { BlockVersion } from '../../entities/block-version.entity';
 import { DocRevision } from '../../entities/doc-revision.entity';
 import { DocSnapshot } from '../../entities/doc-snapshot.entity';
 import { Tag } from '../../entities/tag.entity';
+import { User } from '../../entities/user.entity';
 import { WorkspacesService } from '../workspaces/workspaces.service';
 import { VersionControlService } from './services/version-control.service';
 import {
@@ -38,6 +39,12 @@ import { ActivitiesService } from '../activities/activities.service';
 import { DOC_ACTIONS } from '../activities/constants/activity-actions';
 import { SITE_PUBLIC_ANONYMOUS_USER_ID } from '../../common/decorators/public.decorator';
 
+type DocumentActorSummary = {
+  userId: string;
+  displayName: string | null;
+  avatar: string | null;
+};
+
 @Injectable()
 export class DocumentsService {
   constructor(
@@ -54,6 +61,8 @@ export class DocumentsService {
     private docSnapshotRepository: Repository<DocSnapshot>,
     @InjectRepository(Tag)
     private tagRepository: Repository<Tag>,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
     @InjectDataSource()
     private dataSource: DataSource,
     private workspacesService: WorkspacesService,
@@ -318,7 +327,12 @@ export class DocumentsService {
     document.viewCount += 1;
     await this.documentRepository.save(document);
 
-    return document;
+    const { creator, updater } = await this.resolveDocumentActorProfiles(document);
+    return {
+      ...document,
+      creator,
+      updater,
+    };
   }
 
   /**
@@ -747,7 +761,12 @@ export class DocumentsService {
     const document = await this.getPublicDocumentEntity(docId);
     document.viewCount += 1;
     await this.documentRepository.save(document);
-    return this.toPublicDocumentMeta(document);
+    const { creator, updater } = await this.resolveDocumentActorProfiles(document);
+    return {
+      ...this.toPublicDocumentMeta(document),
+      creator,
+      updater,
+    };
   }
 
   private async getPublicDocumentEntity(docId: string): Promise<Document> {
@@ -779,6 +798,42 @@ export class DocumentsService {
       favoriteCount: document.favoriteCount,
       createdAt: document.createdAt,
       updatedAt: document.updatedAt,
+    };
+  }
+
+  private async resolveDocumentActorProfiles(document: Pick<Document, 'createdBy' | 'updatedBy'>) {
+    const actorIds = Array.from(
+      new Set([document.createdBy, document.updatedBy].filter((value): value is string => !!value)),
+    );
+
+    if (actorIds.length === 0) {
+      return {
+        creator: null,
+        updater: null,
+      };
+    }
+
+    const users = await this.userRepository.find({
+      where: {
+        userId: In(actorIds),
+      },
+      select: ['userId', 'displayName', 'avatar'],
+    });
+
+    const userMap = new Map<string, DocumentActorSummary>(
+      users.map((user) => [
+        user.userId,
+        {
+          userId: user.userId,
+          displayName: user.displayName ?? null,
+          avatar: user.avatar ?? null,
+        },
+      ]),
+    );
+
+    return {
+      creator: userMap.get(document.createdBy) ?? null,
+      updater: userMap.get(document.updatedBy) ?? null,
     };
   }
 
