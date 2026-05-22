@@ -5,21 +5,22 @@ import {
   Inject,
   forwardRef,
   Logger,
-} from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource, EntityManager } from 'typeorm';
-import { Block } from '../../entities/block.entity';
-import { BlockVersion } from '../../entities/block-version.entity';
-import { Document } from '../../entities/document.entity';
-import { DocRevision } from '../../entities/doc-revision.entity';
-import { DocumentsService } from '../documents/documents.service';
-import { VersionControlService } from '../documents/services/version-control.service';
-import { generateBlockId, generateVersionId } from '../../common/utils/id-generator.util';
-import { generateSortKey as generateSortKeyUtil } from '../../common/utils/sort-key.util';
-import { CreateBlockDto } from './dto/create-block.dto';
-import { UpdateBlockDto } from './dto/update-block.dto';
-import { MoveBlockDto } from './dto/move-block.dto';
+} from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { InjectDataSource } from "@nestjs/typeorm";
+import { Repository, DataSource, EntityManager } from "typeorm";
+import { Block } from "../../entities/block.entity";
+import { BlockVersion } from "../../entities/block-version.entity";
+import { Document } from "../../entities/document.entity";
+import { DocRevision } from "../../entities/doc-revision.entity";
+import { DocumentsService } from "../documents/documents.service";
+import { DocumentSnapshotService } from "../documents/services/document-snapshot.service";
+import { VersionControlService } from "../documents/services/version-control.service";
+import { generateBlockId, generateVersionId } from "../../common/utils/id-generator.util";
+import { generateSortKey as generateSortKeyUtil } from "../../common/utils/sort-key.util";
+import { CreateBlockDto } from "./dto/create-block.dto";
+import { UpdateBlockDto } from "./dto/update-block.dto";
+import { MoveBlockDto } from "./dto/move-block.dto";
 import {
   BatchBlockDto,
   BatchCreateOperation,
@@ -27,11 +28,11 @@ import {
   BatchMoveOperation,
   BatchOperationType,
   BatchUpdateOperation,
-} from './dto/batch-block.dto';
-import { SyncBatchResponseDto, SyncOperationResultDto } from './dto/sync-batch-response.dto';
-import { PaginationDto } from '../../common/dto/pagination.dto';
-import { ActivitiesService } from '../activities/activities.service';
-import { BLOCK_ACTIONS } from '../activities/constants/activity-actions';
+} from "./dto/batch-block.dto";
+import { SyncBatchResponseDto, SyncOperationResultDto } from "./dto/sync-batch-response.dto";
+import { PaginationDto } from "../../common/dto/pagination.dto";
+import { ActivitiesService } from "../activities/activities.service";
+import { BLOCK_ACTIONS } from "../activities/constants/activity-actions";
 
 @Injectable()
 export class BlocksService {
@@ -44,6 +45,7 @@ export class BlocksService {
     private blockVersionRepository: Repository<BlockVersion>,
     @Inject(forwardRef(() => VersionControlService))
     private versionControlService: VersionControlService,
+    private documentSnapshotService: DocumentSnapshotService,
     @InjectRepository(Document)
     private documentRepository: Repository<Document>,
     @InjectDataSource()
@@ -61,14 +63,14 @@ export class BlocksService {
 
     // 确定父块ID：如果未提供 parentId，则使用文档的根块ID
     let parentId = createBlockDto.parentId;
-    if (!parentId || typeof parentId !== 'string' || parentId.trim() === '') {
+    if (!parentId || typeof parentId !== "string" || parentId.trim() === "") {
       // 获取文档的根块ID
       const docEntity = await this.documentRepository.findOne({
         where: { docId: createBlockDto.docId },
-        select: ['rootBlockId'],
+        select: ["rootBlockId"],
       });
       if (!docEntity || !docEntity.rootBlockId) {
-        throw new NotFoundException('文档根块不存在');
+        throw new NotFoundException("文档根块不存在");
       }
       parentId = docEntity.rootBlockId;
     } else {
@@ -77,10 +79,10 @@ export class BlocksService {
         where: { blockId: parentId, isDeleted: false },
       });
       if (!parentBlock) {
-        throw new NotFoundException('父块不存在');
+        throw new NotFoundException("父块不存在");
       }
       if (parentBlock.docId !== createBlockDto.docId) {
-        throw new BadRequestException('父块必须属于同一文档');
+        throw new BadRequestException("父块必须属于同一文档");
       }
     }
 
@@ -150,13 +152,13 @@ export class BlocksService {
     }
     const doc = await this.documentRepository.findOne({
       where: { docId: createBlockDto.docId },
-      select: ['workspaceId'],
+      select: ["workspaceId"],
     });
     if (doc)
       await this.activitiesService.record(
         doc.workspaceId,
         BLOCK_ACTIONS.CREATE,
-        'block',
+        "block",
         result.blockId,
         userId,
         { docId: createBlockDto.docId, type: createBlockDto.type },
@@ -199,10 +201,10 @@ export class BlocksService {
           // 锁定当前 block 行，串行化同一 block 的并发写入
           const lockedBlock = await manager
             .getRepository(Block)
-            .createQueryBuilder('b')
-            .setLock('pessimistic_write')
-            .where('b.blockId = :blockId', { blockId })
-            .andWhere('b.isDeleted = :isDeleted', { isDeleted: false })
+            .createQueryBuilder("b")
+            .setLock("pessimistic_write")
+            .where("b.blockId = :blockId", { blockId })
+            .andWhere("b.isDeleted = :isDeleted", { isDeleted: false })
             .getOne();
 
           if (!lockedBlock) {
@@ -221,7 +223,7 @@ export class BlocksService {
           });
 
           if (!latestVersionInfo) {
-            throw new NotFoundException('块的最新版本不存在');
+            throw new NotFoundException("块的最新版本不存在");
           }
 
           // 内容无变化：直接返回当前版本
@@ -235,9 +237,9 @@ export class BlocksService {
 
           const newVer = lockedBlock.latestVer + 1;
           const preservedSortKey =
-            latestVersionInfo.sortKey && latestVersionInfo.sortKey.trim() !== ''
+            latestVersionInfo.sortKey && latestVersionInfo.sortKey.trim() !== ""
               ? latestVersionInfo.sortKey
-              : '500000';
+              : "500000";
 
           const blockVersion = manager.create(BlockVersion, {
             versionId: generateVersionId(blockId, newVer),
@@ -283,13 +285,13 @@ export class BlocksService {
     }
     const doc = await this.documentRepository.findOne({
       where: { docId },
-      select: ['workspaceId'],
+      select: ["workspaceId"],
     });
     if (doc)
       await this.activitiesService.record(
         doc.workspaceId,
         BLOCK_ACTIONS.UPDATE,
-        'block',
+        "block",
         blockId,
         userId,
         { docId },
@@ -300,7 +302,7 @@ export class BlocksService {
   private isRetryableConflict(error: unknown): boolean {
     const dbCode = (error as any)?.driverError?.code as string | undefined;
     // 23505: unique_violation, 40001: serialization_failure, 40P01: deadlock_detected
-    return dbCode === '23505' || dbCode === '40001' || dbCode === '40P01';
+    return dbCode === "23505" || dbCode === "40001" || dbCode === "40P01";
   }
 
   private async delay(ms: number): Promise<void> {
@@ -326,7 +328,7 @@ export class BlocksService {
         const constraint = (error as any)?.driverError?.constraint;
         const backoff = attempt === 1 ? 20 : 60;
         this.logger.warn(
-          `updateContent 并发冲突重试: blockId=${context.blockId}, userId=${context.userId}, attempt=${attempt}/${maxAttempts}, dbCode=${dbCode ?? 'unknown'}, constraint=${constraint ?? 'unknown'}, backoffMs=${backoff}`,
+          `updateContent 并发冲突重试: blockId=${context.blockId}, userId=${context.userId}, attempt=${attempt}/${maxAttempts}, dbCode=${dbCode ?? "unknown"}, constraint=${constraint ?? "unknown"}, backoffMs=${backoff}`,
         );
         await this.delay(backoff);
       }
@@ -352,7 +354,7 @@ export class BlocksService {
    * 从 payload 中提取纯文本
    */
   private extractPlainText(payload: any): string {
-    if (typeof payload === 'string') {
+    if (typeof payload === "string") {
       return payload;
     }
     if (payload?.text) {
@@ -360,7 +362,7 @@ export class BlocksService {
     }
     if (payload?.content) {
       return Array.isArray(payload.content)
-        ? payload.content.map((c: any) => this.extractPlainText(c)).join(' ')
+        ? payload.content.map((c: any) => this.extractPlainText(c)).join(" ")
         : String(payload.content);
     }
     return JSON.stringify(payload);
@@ -372,11 +374,11 @@ export class BlocksService {
   private async generateSortKey(docId: string, parentId: string, manager: any): Promise<string> {
     // 查询同级块的最新版本
     const siblings = await manager
-      .createQueryBuilder(BlockVersion, 'bv')
-      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND b.isDeleted = false')
-      .where('bv.docId = :docId', { docId })
-      .andWhere('bv.parentId = :parentId', { parentId })
-      .andWhere('bv.ver = b.latestVer') // 只获取最新版本
+      .createQueryBuilder(BlockVersion, "bv")
+      .innerJoin(Block, "b", "bv.blockId = b.blockId AND b.isDeleted = false")
+      .where("bv.docId = :docId", { docId })
+      .andWhere("bv.parentId = :parentId", { parentId })
+      .andWhere("bv.ver = b.latestVer") // 只获取最新版本
       .getMany();
 
     if (siblings.length === 0) {
@@ -386,8 +388,8 @@ export class BlocksService {
 
     // 在 JavaScript 中按 sortKey 排序（数字比较）
     siblings.sort((a, b) => {
-      const sortKeyA = a.sortKey && a.sortKey.trim() !== '' ? parseInt(a.sortKey, 10) || 0 : 0;
-      const sortKeyB = b.sortKey && b.sortKey.trim() !== '' ? parseInt(b.sortKey, 10) || 0 : 0;
+      const sortKeyA = a.sortKey && a.sortKey.trim() !== "" ? parseInt(a.sortKey, 10) || 0 : 0;
+      const sortKeyB = b.sortKey && b.sortKey.trim() !== "" ? parseInt(b.sortKey, 10) || 0 : 0;
       if (sortKeyA !== sortKeyB) {
         return sortKeyA - sortKeyB;
       }
@@ -398,7 +400,7 @@ export class BlocksService {
     // 获取最后一个同级块的 sortKey
     const lastSibling = siblings[siblings.length - 1];
     const lastSortKey =
-      lastSibling.sortKey && lastSibling.sortKey.trim() !== '' ? lastSibling.sortKey : '500000';
+      lastSibling.sortKey && lastSibling.sortKey.trim() !== "" ? lastSibling.sortKey : "500000";
 
     // 生成比最后一个更大的 sortKey
     return generateSortKeyUtil(lastSortKey);
@@ -422,14 +424,19 @@ export class BlocksService {
         docVer: document.head,
         createdAt: Date.now(),
         createdBy: userId,
-        message: 'Document updated',
-        branch: 'draft',
+        message: "Document updated",
+        branch: "draft",
         patches: [],
         rootBlockId: document.rootBlockId,
-        source: 'editor',
+        source: "editor",
         opSummary: {},
       });
       await docRevisionRepo.save(revision);
+      await this.documentSnapshotService.createSnapshotForRevision(docId, document.head, manager, {
+        kind: "revision",
+        pinned: false,
+        metadata: { source: "immediate-block-operation" },
+      });
     }
   }
 
@@ -442,7 +449,7 @@ export class BlocksService {
     });
 
     if (!block) {
-      throw new NotFoundException('块不存在');
+      throw new NotFoundException("块不存在");
     }
 
     // 检查文档权限
@@ -454,14 +461,14 @@ export class BlocksService {
         where: { blockId: moveBlockDto.parentId, isDeleted: false },
       });
       if (!parentBlock) {
-        throw new NotFoundException('父块不存在');
+        throw new NotFoundException("父块不存在");
       }
       if (parentBlock.docId !== block.docId) {
-        throw new BadRequestException('父块必须属于同一文档');
+        throw new BadRequestException("父块必须属于同一文档");
       }
       // 防止循环引用
       if (await this.wouldCreateCycle(blockId, moveBlockDto.parentId)) {
-        throw new BadRequestException('移动操作会导致循环引用');
+        throw new BadRequestException("移动操作会导致循环引用");
       }
     }
 
@@ -473,7 +480,7 @@ export class BlocksService {
       });
 
       if (!latestVersion) {
-        throw new NotFoundException('块版本不存在');
+        throw new NotFoundException("块版本不存在");
       }
 
       // 创建新版本（移动操作会创建新版本）
@@ -485,7 +492,7 @@ export class BlocksService {
         ver: newVer,
         createdAt: now,
         createdBy: userId,
-        parentId: moveBlockDto.parentId || '',
+        parentId: moveBlockDto.parentId || "",
         sortKey: moveBlockDto.sortKey,
         indent: moveBlockDto.indent || 0,
         collapsed: latestVersion.collapsed,
@@ -524,13 +531,13 @@ export class BlocksService {
     }
     const doc = await this.documentRepository.findOne({
       where: { docId: block.docId },
-      select: ['workspaceId'],
+      select: ["workspaceId"],
     });
     if (doc)
       await this.activitiesService.record(
         doc.workspaceId,
         BLOCK_ACTIONS.MOVE,
-        'block',
+        "block",
         blockId,
         userId,
         { docId: block.docId, parentId: moveBlockDto.parentId },
@@ -547,7 +554,7 @@ export class BlocksService {
     });
 
     if (!block) {
-      throw new NotFoundException('块不存在');
+      throw new NotFoundException("块不存在");
     }
 
     // 检查文档权限
@@ -566,17 +573,17 @@ export class BlocksService {
       // 删除操作默认立即创建版本（重要操作）
       await this.incrementDocumentHead(block.docId, userId, manager);
 
-      return { message: '块已删除' };
+      return { message: "块已删除" };
     });
     const doc = await this.documentRepository.findOne({
       where: { docId: block.docId },
-      select: ['workspaceId'],
+      select: ["workspaceId"],
     });
     if (doc)
       await this.activitiesService.record(
         doc.workspaceId,
         BLOCK_ACTIONS.DELETE,
-        'block',
+        "block",
         blockId,
         userId,
         { docId: block.docId },
@@ -593,12 +600,12 @@ export class BlocksService {
     });
 
     if (!block) {
-      throw new NotFoundException('块不存在');
+      throw new NotFoundException("块不存在");
     }
 
     // 检查块是否已被删除
     if (block.isDeleted) {
-      throw new NotFoundException('块已被删除，无法查看历史记录');
+      throw new NotFoundException("块已被删除，无法查看历史记录");
     }
 
     // 检查文档权限
@@ -609,7 +616,7 @@ export class BlocksService {
 
     const [versions, total] = await this.blockVersionRepository.findAndCount({
       where: { blockId },
-      order: { ver: 'DESC' },
+      order: { ver: "DESC" },
       skip,
       take: pageSize,
     });
@@ -718,19 +725,19 @@ export class BlocksService {
       }> => {
         const docQuery = manager
           .getRepository(Document)
-          .createQueryBuilder('doc')
-          .where('doc.docId = :docId', { docId: batchBlockDto.docId });
+          .createQueryBuilder("doc")
+          .where("doc.docId = :docId", { docId: batchBlockDto.docId });
         const dbType = this.dataSource.options.type;
-        if (dbType !== 'sqlite' && dbType !== 'better-sqlite3') {
-          docQuery.setLock('pessimistic_write');
+        if (dbType !== "sqlite" && dbType !== "better-sqlite3") {
+          docQuery.setLock("pessimistic_write");
         }
         const docInTx = await docQuery.getOne();
         if (!docInTx) {
-          throw new NotFoundException('Document not found');
+          throw new NotFoundException("Document not found");
         }
 
         if (
-          typeof batchBlockDto.baseVersion === 'number' &&
+          typeof batchBlockDto.baseVersion === "number" &&
           batchBlockDto.baseVersion !== docInTx.head
         ) {
           return {
@@ -740,7 +747,7 @@ export class BlocksService {
             needsReload: true,
             conflicts: [
               {
-                code: 'BASE_VERSION_MISMATCH',
+                code: "BASE_VERSION_MISMATCH",
                 message: `baseVersion(${batchBlockDto.baseVersion}) does not match serverHead(${docInTx.head})`,
                 serverHead: docInTx.head,
                 clientBaseVersion: batchBlockDto.baseVersion,
@@ -835,7 +842,7 @@ export class BlocksService {
 
         const docAfterBatch = await manager.findOne(Document, {
           where: { docId: batchBlockDto.docId },
-          select: ['head'],
+          select: ["head"],
         });
 
         return {
@@ -865,13 +872,13 @@ export class BlocksService {
 
     const doc = await this.documentRepository.findOne({
       where: { docId: batchBlockDto.docId },
-      select: ['workspaceId'],
+      select: ["workspaceId"],
     });
     if (doc)
       await this.activitiesService.record(
         doc.workspaceId,
         BLOCK_ACTIONS.BATCH,
-        'block',
+        "block",
         batchBlockDto.docId,
         userId,
         { count: batchBlockDto.operations.length },
@@ -901,13 +908,13 @@ export class BlocksService {
     }
 
     let parentId = operation.data.parentId;
-    if (!parentId || typeof parentId !== 'string' || parentId.trim() === '') {
+    if (!parentId || typeof parentId !== "string" || parentId.trim() === "") {
       const docEntity = await manager.findOne(Document, {
         where: { docId },
-        select: ['rootBlockId'],
+        select: ["rootBlockId"],
       });
       if (!docEntity || !docEntity.rootBlockId) {
-        throw new NotFoundException('Document root block not found');
+        throw new NotFoundException("Document root block not found");
       }
       parentId = docEntity.rootBlockId;
     } else {
@@ -920,7 +927,8 @@ export class BlocksService {
     }
 
     const blockId = generateBlockId();
-    const sortKey = operation.data.sortKey || (await this.generateSortKey(docId, parentId, manager));
+    const sortKey =
+      operation.data.sortKey || (await this.generateSortKey(docId, parentId, manager));
 
     const block = manager.create(Block, {
       blockId,
@@ -988,8 +996,8 @@ export class BlocksService {
       ver: newVer,
       createdAt: now,
       createdBy: userId,
-      parentId: latestVersion?.parentId || '',
-      sortKey: latestVersion?.sortKey || '0',
+      parentId: latestVersion?.parentId || "",
+      sortKey: latestVersion?.sortKey || "0",
       indent: latestVersion?.indent || 0,
       collapsed: latestVersion?.collapsed || false,
       payload: operation.data.payload,
@@ -1048,7 +1056,7 @@ export class BlocksService {
 
     if (operation.parentId) {
       if (operation.parentId === operation.blockId) {
-        throw new BadRequestException('Cannot move block under itself');
+        throw new BadRequestException("Cannot move block under itself");
       }
       const parentBlock = await manager.findOne(Block, {
         where: { blockId: operation.parentId, docId, isDeleted: false },
@@ -1058,8 +1066,10 @@ export class BlocksService {
           `Parent block ${operation.parentId} not found in document ${docId}`,
         );
       }
-      if (await this.wouldCreateCycleInManager(docId, operation.blockId, operation.parentId, manager)) {
-        throw new BadRequestException('Move operation would create a cycle');
+      if (
+        await this.wouldCreateCycleInManager(docId, operation.blockId, operation.parentId, manager)
+      ) {
+        throw new BadRequestException("Move operation would create a cycle");
       }
     }
 
@@ -1068,7 +1078,7 @@ export class BlocksService {
     });
 
     if (!latestVersion) {
-      throw new NotFoundException('Block version not found');
+      throw new NotFoundException("Block version not found");
     }
 
     const newVer = block.latestVer + 1;
@@ -1079,7 +1089,7 @@ export class BlocksService {
       ver: newVer,
       createdAt: now,
       createdBy: userId,
-      parentId: operation.parentId || '',
+      parentId: operation.parentId || "",
       sortKey: operation.sortKey,
       indent: operation.indent || 0,
       collapsed: latestVersion.collapsed,
@@ -1098,5 +1108,4 @@ export class BlocksService {
 
     return { blockId: operation.blockId, version: newVer };
   }
-
 }

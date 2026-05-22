@@ -3,41 +3,42 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
-} from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource, In, Or, MoreThan, IsNull } from 'typeorm';
-import { Document } from '../../entities/document.entity';
-import { Block } from '../../entities/block.entity';
-import { BlockVersion } from '../../entities/block-version.entity';
-import { DocRevision } from '../../entities/doc-revision.entity';
-import { DocSnapshot } from '../../entities/doc-snapshot.entity';
-import { Tag } from '../../entities/tag.entity';
-import { User } from '../../entities/user.entity';
-import { WorkspacesService } from '../workspaces/workspaces.service';
-import { VersionControlService } from './services/version-control.service';
+} from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { InjectDataSource } from "@nestjs/typeorm";
+import { Repository, DataSource, In, Or, MoreThan, IsNull } from "typeorm";
+import { Document } from "../../entities/document.entity";
+import { Block } from "../../entities/block.entity";
+import { BlockVersion } from "../../entities/block-version.entity";
+import { DocRevision } from "../../entities/doc-revision.entity";
+import { DocSnapshot } from "../../entities/doc-snapshot.entity";
+import { Tag } from "../../entities/tag.entity";
+import { User } from "../../entities/user.entity";
+import { WorkspacesService } from "../workspaces/workspaces.service";
+import { DocumentSnapshotService } from "./services/document-snapshot.service";
+import { VersionControlService } from "./services/version-control.service";
 import {
   generateDocId,
   generateBlockId,
   generateVersionId,
-} from '../../common/utils/id-generator.util';
-import { compareSortKey } from '../../common/utils/sort-key.util';
-import { CreateDocumentDto } from './dto/create-document.dto';
-import { UpdateDocumentDto } from './dto/update-document.dto';
+} from "../../common/utils/id-generator.util";
+import { compareSortKey } from "../../common/utils/sort-key.util";
+import { CreateDocumentDto } from "./dto/create-document.dto";
+import { UpdateDocumentDto } from "./dto/update-document.dto";
 import type {
   DiffResponse,
   DiffChangeItem,
   DiffSummary,
   BlockSnapshot,
-} from './dto/diff-response.dto';
-import { MoveDocumentDto } from './dto/move-document.dto';
-import { QueryDocumentsDto } from './dto/query-documents.dto';
-import { QueryRevisionsDto } from './dto/query-revisions.dto';
-import { SearchQueryDto } from './dto/search-query.dto';
-import { SyncStateResponseDto } from './dto/sync-state-response.dto';
-import { ActivitiesService } from '../activities/activities.service';
-import { DOC_ACTIONS } from '../activities/constants/activity-actions';
-import { SITE_PUBLIC_ANONYMOUS_USER_ID } from '../../common/decorators/public.decorator';
+} from "./dto/diff-response.dto";
+import { MoveDocumentDto } from "./dto/move-document.dto";
+import { QueryDocumentsDto } from "./dto/query-documents.dto";
+import { QueryRevisionsDto } from "./dto/query-revisions.dto";
+import { SearchQueryDto } from "./dto/search-query.dto";
+import { SyncStateResponseDto } from "./dto/sync-state-response.dto";
+import { ActivitiesService } from "../activities/activities.service";
+import { DOC_ACTIONS } from "../activities/constants/activity-actions";
+import { SITE_PUBLIC_ANONYMOUS_USER_ID } from "../../common/decorators/public.decorator";
 
 type DocumentActorSummary = {
   userId: string;
@@ -51,6 +52,7 @@ export class DocumentsService {
     @InjectRepository(Document)
     private documentRepository: Repository<Document>,
     private versionControlService: VersionControlService,
+    private documentSnapshotService: DocumentSnapshotService,
     @InjectRepository(Block)
     private blockRepository: Repository<Block>,
     @InjectRepository(BlockVersion)
@@ -80,21 +82,21 @@ export class DocumentsService {
     // 只有当 parentId 是有效的非空字符串时才检查
     if (
       createDocumentDto.parentId &&
-      typeof createDocumentDto.parentId === 'string' &&
-      createDocumentDto.parentId.trim() !== ''
+      typeof createDocumentDto.parentId === "string" &&
+      createDocumentDto.parentId.trim() !== ""
     ) {
       const parentDoc = await this.documentRepository.findOne({
         where: { docId: createDocumentDto.parentId },
       });
       if (!parentDoc) {
-        throw new NotFoundException('父文档不存在');
+        throw new NotFoundException("父文档不存在");
       }
       // 不能使用已删除的文档作为父文档
-      if (parentDoc.status === 'deleted') {
-        throw new NotFoundException('父文档不存在');
+      if (parentDoc.status === "deleted") {
+        throw new NotFoundException("父文档不存在");
       }
       if (parentDoc.workspaceId !== createDocumentDto.workspaceId) {
-        throw new BadRequestException('父文档必须属于同一工作空间');
+        throw new BadRequestException("父文档必须属于同一工作空间");
       }
     }
 
@@ -111,14 +113,14 @@ export class DocumentsService {
         title: createDocumentDto.title,
         icon: createDocumentDto.icon,
         cover: createDocumentDto.cover,
-        visibility: createDocumentDto.visibility || 'private',
+        visibility: createDocumentDto.visibility || "private",
         parentId: createDocumentDto.parentId,
         tags: createDocumentDto.tags || [],
         category: createDocumentDto.category,
         rootBlockId,
         head: 1,
         publishedHead: 0,
-        status: 'draft',
+        status: "draft",
         createdBy: userId,
         updatedBy: userId,
         viewCount: 0,
@@ -134,7 +136,7 @@ export class DocumentsService {
           createDocumentDto.workspaceId,
           createDocumentDto.tags,
           manager,
-          'add',
+          "add",
           savedDocument.docId,
         );
       }
@@ -143,7 +145,7 @@ export class DocumentsService {
       const rootBlock = manager.create(Block, {
         blockId: rootBlockId,
         docId,
-        type: 'root',
+        type: "root",
         createdAt: now,
         createdBy: userId,
         latestVer: 1,
@@ -162,13 +164,13 @@ export class DocumentsService {
         ver: 1,
         createdAt: now,
         createdBy: userId,
-        parentId: '',
-        sortKey: '0',
+        parentId: "",
+        sortKey: "0",
         indent: 0,
         collapsed: false,
-        payload: { type: 'root', children: [] },
-        hash: this.calculateHash({ type: 'root', children: [] }),
-        plainText: '',
+        payload: { type: "root", children: [] },
+        hash: this.calculateHash({ type: "root", children: [] }),
+        plainText: "",
         refs: [],
       });
 
@@ -182,14 +184,19 @@ export class DocumentsService {
         docVer: 1,
         createdAt: now,
         createdBy: userId,
-        message: 'Initial version',
-        branch: 'draft',
+        message: "Initial version",
+        branch: "draft",
         patches: [],
         rootBlockId,
-        source: 'api',
+        source: "api",
         opSummary: {},
       });
       await docRevisionRepo.save(initialRevision);
+      await this.documentSnapshotService.createSnapshotForRevision(docId, 1, manager, {
+        kind: "revision",
+        pinned: false,
+        metadata: { source: "initial" },
+      });
 
       // 在事务内查询完整文档信息
       const savedDocumentWithDetails = await manager.findOne(Document, {
@@ -197,7 +204,7 @@ export class DocumentsService {
       });
 
       if (!savedDocumentWithDetails) {
-        throw new NotFoundException('文档不存在');
+        throw new NotFoundException("文档不存在");
       }
 
       // 注意：在事务内不增加浏览次数，避免副作用
@@ -207,7 +214,7 @@ export class DocumentsService {
     await this.activitiesService.record(
       result.workspaceId,
       DOC_ACTIONS.CREATE,
-      'document',
+      "document",
       result.docId,
       userId,
       { title: result.title },
@@ -228,8 +235,8 @@ export class DocumentsService {
       parentId,
       tags,
       category,
-      sortBy = 'updatedAt',
-      sortOrder = 'DESC',
+      sortBy = "updatedAt",
+      sortOrder = "DESC",
     } = queryDto;
     const skip = (page - 1) * pageSize;
 
@@ -239,56 +246,56 @@ export class DocumentsService {
     }
 
     // 构建查询
-    const queryBuilder = this.documentRepository.createQueryBuilder('document');
+    const queryBuilder = this.documentRepository.createQueryBuilder("document");
 
     // 工作空间过滤
     if (workspaceId) {
-      queryBuilder.andWhere('document.workspaceId = :workspaceId', { workspaceId });
+      queryBuilder.andWhere("document.workspaceId = :workspaceId", { workspaceId });
     } else {
       // 如果没有指定工作空间，查询用户有权限的所有工作空间的文档
       const userWorkspaces = await this.getUserWorkspaceIds(userId);
       if (userWorkspaces.length === 0) {
         return { items: [], total: 0, page, pageSize };
       }
-      queryBuilder.andWhere('document.workspaceId IN (:...workspaceIds)', {
+      queryBuilder.andWhere("document.workspaceId IN (:...workspaceIds)", {
         workspaceIds: userWorkspaces,
       });
     }
 
     // 状态过滤
     if (status) {
-      queryBuilder.andWhere('document.status = :status', { status });
+      queryBuilder.andWhere("document.status = :status", { status });
     } else {
       // 默认不显示已删除的文档
-      queryBuilder.andWhere('document.status != :deleted', { deleted: 'deleted' });
+      queryBuilder.andWhere("document.status != :deleted", { deleted: "deleted" });
     }
 
     // 可见性过滤
     if (visibility) {
-      queryBuilder.andWhere('document.visibility = :visibility', { visibility });
+      queryBuilder.andWhere("document.visibility = :visibility", { visibility });
     }
 
     // 父文档过滤
     if (parentId !== undefined) {
       if (parentId === null) {
-        queryBuilder.andWhere('document.parentId IS NULL');
+        queryBuilder.andWhere("document.parentId IS NULL");
       } else {
-        queryBuilder.andWhere('document.parentId = :parentId', { parentId });
+        queryBuilder.andWhere("document.parentId = :parentId", { parentId });
       }
     }
 
     // 标签过滤
     if (tags && tags.length > 0) {
-      queryBuilder.andWhere('document.tags && :tags', { tags });
+      queryBuilder.andWhere("document.tags && :tags", { tags });
     }
 
     // 分类过滤
     if (category) {
-      queryBuilder.andWhere('document.category = :category', { category });
+      queryBuilder.andWhere("document.category = :category", { category });
     }
 
     // 排序
-    queryBuilder.orderBy(`document.${sortBy}`, sortOrder as 'ASC' | 'DESC');
+    queryBuilder.orderBy(`document.${sortBy}`, sortOrder as "ASC" | "DESC");
 
     // 分页
     queryBuilder.skip(skip).take(pageSize);
@@ -312,12 +319,12 @@ export class DocumentsService {
     });
 
     if (!document) {
-      throw new NotFoundException('文档不存在');
+      throw new NotFoundException("文档不存在");
     }
 
     // 已删除的文档不应该返回
-    if (document.status === 'deleted') {
-      throw new NotFoundException('文档不存在');
+    if (document.status === "deleted") {
+      throw new NotFoundException("文档不存在");
     }
 
     // 检查权限
@@ -344,11 +351,11 @@ export class DocumentsService {
     });
 
     if (!document) {
-      throw new NotFoundException('文档不存在');
+      throw new NotFoundException("文档不存在");
     }
 
-    if (document.status === 'deleted') {
-      throw new NotFoundException('文档不存在');
+    if (document.status === "deleted") {
+      throw new NotFoundException("文档不存在");
     }
 
     await this.checkDocumentAccess(document, userId);
@@ -372,12 +379,12 @@ export class DocumentsService {
     await this.workspacesService.checkAccess(document.workspaceId, userId);
 
     // 检查文档可见性
-    if (document.visibility === 'private') {
+    if (document.visibility === "private") {
       // 私有文档：只有创建者可以访问
       if (document.createdBy !== userId) {
-        throw new ForbiddenException('您没有权限访问此文档');
+        throw new ForbiddenException("您没有权限访问此文档");
       }
-    } else if (document.visibility === 'workspace') {
+    } else if (document.visibility === "workspace") {
       // 工作空间可见：工作空间成员可以访问（已在上面检查）
       // 无需额外检查
     }
@@ -393,12 +400,12 @@ export class DocumentsService {
     });
 
     if (!document) {
-      throw new NotFoundException('文档不存在');
+      throw new NotFoundException("文档不存在");
     }
 
     // 已删除的文档不能更新
-    if (document.status === 'deleted') {
-      throw new NotFoundException('文档不存在');
+    if (document.status === "deleted") {
+      throw new NotFoundException("文档不存在");
     }
 
     // 检查编辑权限
@@ -432,7 +439,7 @@ export class DocumentsService {
           document.workspaceId,
           addedTags,
           null,
-          'add',
+          "add",
           document.docId,
         );
       }
@@ -441,7 +448,7 @@ export class DocumentsService {
           document.workspaceId,
           removedTags,
           null,
-          'remove',
+          "remove",
           document.docId,
         );
       }
@@ -460,7 +467,7 @@ export class DocumentsService {
     await this.activitiesService.record(
       document.workspaceId,
       DOC_ACTIONS.UPDATE,
-      'document',
+      "document",
       docId,
       userId,
       updateDocumentDto as object,
@@ -477,25 +484,45 @@ export class DocumentsService {
     });
 
     if (!document) {
-      throw new NotFoundException('文档不存在');
+      throw new NotFoundException("文档不存在");
     }
 
     // 已删除的文档不能发布
-    if (document.status === 'deleted') {
-      throw new NotFoundException('文档不存在');
+    if (document.status === "deleted") {
+      throw new NotFoundException("文档不存在");
     }
 
     // 检查编辑权限
     await this.checkDocumentEditPermission(document, userId);
 
     // 更新已发布版本号
-    document.publishedHead = document.head;
-    document.updatedBy = userId;
-    await this.documentRepository.save(document);
+    await this.dataSource.transaction(async (manager) => {
+      const docRepo = manager.getRepository(Document);
+      const lockedDocument = await docRepo.findOne({ where: { docId } });
+      if (!lockedDocument) {
+        throw new NotFoundException("文档不存在");
+      }
+
+      const ensuredSnapshot = await this.documentSnapshotService.createSnapshotForRevision(
+        docId,
+        lockedDocument.head,
+        manager,
+        {
+          kind: "publish",
+          pinned: true,
+          metadata: { source: "publish" },
+        },
+      );
+
+      lockedDocument.publishedHead = lockedDocument.head;
+      lockedDocument.publishedSnapshotId = ensuredSnapshot.snapshotId;
+      lockedDocument.updatedBy = userId;
+      await docRepo.save(lockedDocument);
+    });
     await this.activitiesService.record(
       document.workspaceId,
       DOC_ACTIONS.PUBLISH,
-      'document',
+      "document",
       docId,
       userId,
     );
@@ -511,12 +538,12 @@ export class DocumentsService {
     });
 
     if (!document) {
-      throw new NotFoundException('文档不存在');
+      throw new NotFoundException("文档不存在");
     }
 
     // 已删除的文档不能移动
-    if (document.status === 'deleted') {
-      throw new NotFoundException('文档不存在');
+    if (document.status === "deleted") {
+      throw new NotFoundException("文档不存在");
     }
 
     // 检查编辑权限
@@ -533,22 +560,22 @@ export class DocumentsService {
           where: { docId: moveDocumentDto.parentId },
         });
         if (!parentDoc) {
-          throw new NotFoundException('父文档不存在');
+          throw new NotFoundException("父文档不存在");
         }
         // 不能使用已删除的文档作为父文档
-        if (parentDoc.status === 'deleted') {
-          throw new NotFoundException('父文档不存在');
+        if (parentDoc.status === "deleted") {
+          throw new NotFoundException("父文档不存在");
         }
         if (parentDoc.workspaceId !== document.workspaceId) {
-          throw new BadRequestException('父文档必须属于同一工作空间');
+          throw new BadRequestException("父文档必须属于同一工作空间");
         }
         // 防止循环引用
         if (parentDoc.docId === docId) {
-          throw new BadRequestException('不能将文档移动到自身');
+          throw new BadRequestException("不能将文档移动到自身");
         }
         // 检查是否会导致循环引用（简化检查）
         if (await this.wouldCreateCycle(docId, moveDocumentDto.parentId)) {
-          throw new BadRequestException('移动操作会导致循环引用');
+          throw new BadRequestException("移动操作会导致循环引用");
         }
         document.parentId = moveDocumentDto.parentId;
       }
@@ -564,7 +591,7 @@ export class DocumentsService {
     await this.activitiesService.record(
       document.workspaceId,
       DOC_ACTIONS.MOVE,
-      'document',
+      "document",
       docId,
       userId,
       moveDocumentDto as object,
@@ -581,7 +608,7 @@ export class DocumentsService {
     });
 
     if (!document) {
-      throw new NotFoundException('文档不存在');
+      throw new NotFoundException("文档不存在");
     }
 
     // 检查删除权限
@@ -593,23 +620,23 @@ export class DocumentsService {
         document.workspaceId,
         document.tags,
         null,
-        'remove',
+        "remove",
         document.docId,
       );
     }
 
     // 软删除：更新状态
-    document.status = 'deleted';
+    document.status = "deleted";
     document.updatedBy = userId;
     await this.documentRepository.save(document);
     await this.activitiesService.record(
       document.workspaceId,
       DOC_ACTIONS.DELETE,
-      'document',
+      "document",
       docId,
       userId,
     );
-    return { message: '文档已删除' };
+    return { message: "文档已删除" };
   }
 
   /**
@@ -643,11 +670,11 @@ export class DocumentsService {
 
       const parent = await this.documentRepository.findOne({
         where: { docId: currentParentId },
-        select: ['parentId', 'status'],
+        select: ["parentId", "status"],
       });
 
       // 如果父文档不存在或已删除，停止检查
-      if (!parent || parent.status === 'deleted' || !parent.parentId) {
+      if (!parent || parent.status === "deleted" || !parent.parentId) {
         break;
       }
       currentParentId = parent.parentId;
@@ -688,14 +715,8 @@ export class DocumentsService {
     limit?: number,
   ) {
     const publicDocument = await this.getPublicDocumentEntity(docId);
-    const docVer = version || publicDocument.publishedHead;
-    return this.getContentByDocument(
-      publicDocument,
-      docVer,
-      maxDepth,
-      startBlockId,
-      limit,
-    );
+    const docVer = publicDocument.publishedHead;
+    return this.getContentByDocument(publicDocument, docVer, maxDepth, startBlockId, limit);
   }
 
   private async findAllForSitePublic(queryDto: QueryDocumentsDto) {
@@ -707,44 +728,44 @@ export class DocumentsService {
       parentId,
       tags,
       category,
-      sortBy = 'updatedAt',
-      sortOrder = 'DESC',
+      sortBy = "updatedAt",
+      sortOrder = "DESC",
     } = queryDto;
 
     if (!workspaceId) {
-      throw new BadRequestException('workspaceId is required for site public document queries');
+      throw new BadRequestException("workspaceId is required for site public document queries");
     }
 
     await this.workspacesService.findOne(workspaceId, SITE_PUBLIC_ANONYMOUS_USER_ID);
 
     const skip = (page - 1) * pageSize;
     const queryBuilder = this.documentRepository
-      .createQueryBuilder('document')
-      .where('document.workspaceId = :workspaceId', { workspaceId })
-      .andWhere('document.status != :deleted', { deleted: 'deleted' })
-      .andWhere('document.publishedHead > 0');
+      .createQueryBuilder("document")
+      .where("document.workspaceId = :workspaceId", { workspaceId })
+      .andWhere("document.status != :deleted", { deleted: "deleted" })
+      .andWhere("document.publishedHead > 0");
 
     if (visibility) {
-      queryBuilder.andWhere('document.visibility = :visibility', { visibility });
+      queryBuilder.andWhere("document.visibility = :visibility", { visibility });
     }
 
     if (parentId !== undefined) {
       if (parentId === null) {
-        queryBuilder.andWhere('document.parentId IS NULL');
+        queryBuilder.andWhere("document.parentId IS NULL");
       } else {
-        queryBuilder.andWhere('document.parentId = :parentId', { parentId });
+        queryBuilder.andWhere("document.parentId = :parentId", { parentId });
       }
     }
 
     if (tags && tags.length > 0) {
-      queryBuilder.andWhere('document.tags && :tags', { tags });
+      queryBuilder.andWhere("document.tags && :tags", { tags });
     }
 
     if (category) {
-      queryBuilder.andWhere('document.category = :category', { category });
+      queryBuilder.andWhere("document.category = :category", { category });
     }
 
-    queryBuilder.orderBy(`document.${sortBy}`, sortOrder as 'ASC' | 'DESC');
+    queryBuilder.orderBy(`document.${sortBy}`, sortOrder as "ASC" | "DESC");
     queryBuilder.skip(skip).take(pageSize);
 
     const [items, total] = await queryBuilder.getManyAndCount();
@@ -774,8 +795,13 @@ export class DocumentsService {
       where: { docId },
     });
 
-    if (!document || document.status === 'deleted' || document.publishedHead <= 0 || document.visibility !== 'public') {
-      throw new NotFoundException('Public document not found or not published');
+    if (
+      !document ||
+      document.status === "deleted" ||
+      document.publishedHead <= 0 ||
+      document.visibility !== "public"
+    ) {
+      throw new NotFoundException("Public document not found or not published");
     }
 
     return document;
@@ -801,7 +827,7 @@ export class DocumentsService {
     };
   }
 
-  private async resolveDocumentActorProfiles(document: Pick<Document, 'createdBy' | 'updatedBy'>) {
+  private async resolveDocumentActorProfiles(document: Pick<Document, "createdBy" | "updatedBy">) {
     const actorIds = Array.from(
       new Set([document.createdBy, document.updatedBy].filter((value): value is string => !!value)),
     );
@@ -817,7 +843,7 @@ export class DocumentsService {
       where: {
         userId: In(actorIds),
       },
-      select: ['userId', 'displayName', 'avatar'],
+      select: ["userId", "displayName", "avatar"],
     });
 
     const userMap = new Map<string, DocumentActorSummary>(
@@ -849,7 +875,7 @@ export class DocumentsService {
     });
 
     if (!revision) {
-      throw new NotFoundException('文档版本不存在');
+      throw new NotFoundException("文档版本不存在");
     }
 
     if (startBlockId) {
@@ -863,15 +889,15 @@ export class DocumentsService {
       );
 
       if (!result || !result.tree) {
-        throw new NotFoundException('文档版本不存在');
+        throw new NotFoundException("文档版本不存在");
       }
 
-      if (result.tree && typeof result.tree === 'object' && '__rootBlockDeleted' in result.tree) {
-        throw new BadRequestException('根块已被删除，无法获取文档内容。请恢复根块或重新创建文档。');
+      if (result.tree && typeof result.tree === "object" && "__rootBlockDeleted" in result.tree) {
+        throw new BadRequestException("根块已被删除，无法获取文档内容。请恢复根块或重新创建文档。");
       }
 
-      if (result.tree && typeof result.tree === 'object' && '__rootBlockMissing' in result.tree) {
-        throw new NotFoundException('根块不存在，无法获取文档内容。');
+      if (result.tree && typeof result.tree === "object" && "__rootBlockMissing" in result.tree) {
+        throw new NotFoundException("根块不存在，无法获取文档内容。");
       }
 
       return {
@@ -888,7 +914,10 @@ export class DocumentsService {
       };
     }
 
-    const { map: blockVersionMap } = await this.getBlockVersionMapForVersion(document.docId, docVer);
+    const { map: blockVersionMap } = await this.getBlockVersionMapForVersion(
+      document.docId,
+      docVer,
+    );
     const result = await this.buildContentTreeFromVersionMap(
       document.docId,
       document.rootBlockId,
@@ -900,17 +929,17 @@ export class DocumentsService {
     );
 
     if (!result || !result.tree) {
-      console.error('buildContentTreeFromVersionMap returned null');
-      console.error('blockVersionMap:', blockVersionMap);
-      throw new NotFoundException('文档版本不存在');
+      console.error("buildContentTreeFromVersionMap returned null");
+      console.error("blockVersionMap:", blockVersionMap);
+      throw new NotFoundException("文档版本不存在");
     }
 
-    if (result.tree && typeof result.tree === 'object' && '__rootBlockDeleted' in result.tree) {
-      throw new BadRequestException('根块已被删除，无法获取文档内容。请恢复根块或重新创建文档。');
+    if (result.tree && typeof result.tree === "object" && "__rootBlockDeleted" in result.tree) {
+      throw new BadRequestException("根块已被删除，无法获取文档内容。请恢复根块或重新创建文档。");
     }
 
-    if (result.tree && typeof result.tree === 'object' && '__rootBlockMissing' in result.tree) {
-      throw new NotFoundException('根块不存在，无法获取文档内容。');
+    if (result.tree && typeof result.tree === "object" && "__rootBlockMissing" in result.tree) {
+      throw new NotFoundException("根块不存在，无法获取文档内容。");
     }
 
     return {
@@ -943,7 +972,7 @@ export class DocumentsService {
     // 简化实现：只返回根块，实际应该递归加载子块
     return {
       blockId: rootBlockId,
-      type: rootVersion.payload['type'] || 'root',
+      type: rootVersion.payload["type"] || "root",
       payload: rootVersion.payload,
       children: [], // 实际应该递归加载
     };
@@ -963,40 +992,40 @@ export class DocumentsService {
 
     // 构建查询
     const queryBuilder = this.documentRepository
-      .createQueryBuilder('document')
-      .where('document.searchVector @@ plainto_tsquery(:query)', { query })
-      .orWhere('document.title ILIKE :titleQuery', { titleQuery: `%${query}%` });
+      .createQueryBuilder("document")
+      .where("document.searchVector @@ plainto_tsquery(:query)", { query })
+      .orWhere("document.title ILIKE :titleQuery", { titleQuery: `%${query}%` });
 
     // 工作空间过滤
     if (workspaceId) {
-      queryBuilder.andWhere('document.workspaceId = :workspaceId', { workspaceId });
+      queryBuilder.andWhere("document.workspaceId = :workspaceId", { workspaceId });
     } else {
       // 查询用户有权限的所有工作空间的文档
       const userWorkspaces = await this.getUserWorkspaceIds(userId);
       if (userWorkspaces.length === 0) {
         return { items: [], total: 0, page, pageSize };
       }
-      queryBuilder.andWhere('document.workspaceId IN (:...workspaceIds)', {
+      queryBuilder.andWhere("document.workspaceId IN (:...workspaceIds)", {
         workspaceIds: userWorkspaces,
       });
     }
 
     // 状态过滤
     if (status) {
-      queryBuilder.andWhere('document.status = :status', { status });
+      queryBuilder.andWhere("document.status = :status", { status });
     } else {
-      queryBuilder.andWhere('document.status != :deleted', { deleted: 'deleted' });
+      queryBuilder.andWhere("document.status != :deleted", { deleted: "deleted" });
     }
 
     // 标签过滤
     if (tags && tags.length > 0) {
-      queryBuilder.andWhere('document.tags && :tags', { tags });
+      queryBuilder.andWhere("document.tags && :tags", { tags });
     }
 
     // 排序（按相关性）
     queryBuilder
-      .orderBy('ts_rank(document.searchVector, plainto_tsquery(:query))', 'DESC')
-      .addOrderBy('document.updatedAt', 'DESC');
+      .orderBy("ts_rank(document.searchVector, plainto_tsquery(:query))", "DESC")
+      .addOrderBy("document.updatedAt", "DESC");
 
     // 分页
     queryBuilder.skip(skip).take(pageSize);
@@ -1023,7 +1052,7 @@ export class DocumentsService {
 
     const [items, total] = await this.docRevisionRepository.findAndCount({
       where: { docId },
-      order: { docVer: 'DESC' },
+      order: { docVer: "DESC" },
       skip,
       take: pageSize,
     });
@@ -1034,15 +1063,20 @@ export class DocumentsService {
   /**
    * 版本对比：返回两个版本之间的内容差异
    */
-  async getDiff(docId: string, fromVer: number, toVer: number, userId: string): Promise<DiffResponse> {
+  async getDiff(
+    docId: string,
+    fromVer: number,
+    toVer: number,
+    userId: string,
+  ): Promise<DiffResponse> {
     const document = await this.findOne(docId, userId);
     await this.checkDocumentEditPermission(document, userId);
 
     if (fromVer > toVer) {
-      throw new BadRequestException('fromVer 不能大于 toVer');
+      throw new BadRequestException("fromVer 不能大于 toVer");
     }
     if (fromVer > document.head || toVer > document.head) {
-      throw new BadRequestException('版本号不能超过当前文档 head');
+      throw new BadRequestException("版本号不能超过当前文档 head");
     }
 
     const [fromResult, toResult] = await Promise.all([
@@ -1051,8 +1085,24 @@ export class DocumentsService {
     ]);
 
     const [fromTree, toTree] = await Promise.all([
-      this.buildContentTreeFromVersionMap(docId, document.rootBlockId, fromResult.map, undefined, undefined, 1000, fromResult.createdAt),
-      this.buildContentTreeFromVersionMap(docId, document.rootBlockId, toResult.map, undefined, undefined, 1000, toResult.createdAt),
+      this.buildContentTreeFromVersionMap(
+        docId,
+        document.rootBlockId,
+        fromResult.map,
+        undefined,
+        undefined,
+        1000,
+        fromResult.createdAt,
+      ),
+      this.buildContentTreeFromVersionMap(
+        docId,
+        document.rootBlockId,
+        toResult.map,
+        undefined,
+        undefined,
+        1000,
+        toResult.createdAt,
+      ),
     ]);
 
     const { changes, summary } = await this.buildDiff(docId, fromResult.map, toResult.map);
@@ -1076,10 +1126,10 @@ export class DocumentsService {
     await this.checkDocumentEditPermission(document, userId);
 
     if (version > document.head) {
-      throw new BadRequestException('版本号不能超过当前文档 head');
+      throw new BadRequestException("版本号不能超过当前文档 head");
     }
     if (version === document.head) {
-      throw new BadRequestException('当前已是该版本，无需回滚');
+      throw new BadRequestException("当前已是该版本，无需回滚");
     }
 
     const { map: blockVersionMap } = await this.getBlockVersionMapForVersion(docId, version);
@@ -1087,7 +1137,7 @@ export class DocumentsService {
       where: { docId, docVer: version },
     });
     if (!revision) {
-      throw new NotFoundException('修订版本不存在');
+      throw new NotFoundException("修订版本不存在");
     }
 
     return await this.dataSource.transaction(async (manager) => {
@@ -1096,7 +1146,7 @@ export class DocumentsService {
       const revRepo = manager.getRepository(DocRevision);
 
       const doc = await docRepo.findOne({ where: { docId } });
-      if (!doc) throw new NotFoundException('文档不存在');
+      if (!doc) throw new NotFoundException("文档不存在");
 
       const allBlocks = await blockRepo.find({ where: { docId } });
       const targetBlockIds = new Set(Object.keys(blockVersionMap));
@@ -1126,13 +1176,18 @@ export class DocumentsService {
         createdAt: Date.now(),
         createdBy: userId,
         message: `Revert to version ${version}`,
-        branch: 'draft',
+        branch: "draft",
         patches: [],
         rootBlockId: doc.rootBlockId,
-        source: 'api',
+        source: "api",
         opSummary: { revertedFrom: version },
       });
       await revRepo.save(newRevision);
+      await this.documentSnapshotService.createSnapshotForRevision(docId, doc.head, manager, {
+        kind: "revision",
+        pinned: false,
+        metadata: { source: "revert", revertedFrom: version },
+      });
 
       return this.findOne(docId, userId);
     });
@@ -1145,31 +1200,13 @@ export class DocumentsService {
     const document = await this.findOne(docId, userId);
     await this.checkDocumentEditPermission(document, userId);
 
-    const existing = await this.docSnapshotRepository.findOne({
-      where: { docId, docVer: document.head },
-    });
-    if (existing) {
-      return existing;
-    }
-
-    const blocks = await this.blockRepository.find({
-      where: { docId, isDeleted: false },
-      select: ['blockId', 'latestVer'],
-    });
-    const blockVersionMap: Record<string, number> = {};
-    for (const b of blocks) {
-      blockVersionMap[b.blockId] = b.latestVer;
-    }
-
-    const snapshot = this.docSnapshotRepository.create({
-      snapshotId: `${docId}@snap@${document.head}`,
-      docId,
-      docVer: document.head,
-      createdAt: Date.now(),
-      rootBlockId: document.rootBlockId,
-      blockVersionMap,
-    });
-    return await this.docSnapshotRepository.save(snapshot);
+    return this.dataSource.transaction((manager) =>
+      this.documentSnapshotService.createSnapshotForRevision(docId, document.head, manager, {
+        kind: "manual",
+        pinned: true,
+        metadata: { source: "manual-api" },
+      }),
+    );
   }
 
   /**
@@ -1183,7 +1220,7 @@ export class DocumentsService {
     const pendingCount = this.versionControlService.getPendingVersionCount(docId);
 
     if (pendingCount === 0) {
-      throw new BadRequestException('没有待创建的版本，无需提交');
+      throw new BadRequestException("没有待创建的版本，无需提交");
     }
 
     // 创建版本
@@ -1217,16 +1254,26 @@ export class DocumentsService {
   async getSyncState(docId: string, userId: string): Promise<SyncStateResponseDto> {
     const document = await this.documentRepository.findOne({
       where: { docId },
-      select: ['docId', 'workspaceId', 'head', 'publishedHead', 'updatedAt', 'status', 'createdBy', 'visibility'],
+      select: [
+        "docId",
+        "workspaceId",
+        "head",
+        "publishedHead",
+        "updatedAt",
+        "status",
+        "createdBy",
+        "visibility",
+      ],
     });
 
-    if (!document || document.status === 'deleted') {
-      throw new NotFoundException('文档不存在');
+    if (!document || document.status === "deleted") {
+      throw new NotFoundException("文档不存在");
     }
 
     await this.checkDocumentAccess(document as Document, userId);
 
-    const { pendingCount, hasPendingDraft } = this.versionControlService.getPendingDraftState(docId);
+    const { pendingCount, hasPendingDraft } =
+      this.versionControlService.getPendingDraftState(docId);
 
     return {
       docId: document.docId,
@@ -1259,14 +1306,22 @@ export class DocumentsService {
     if (conditions.length === 0) {
       return {
         changes: [],
-        summary: { added: 0, deleted: 0, modified: 0, moved: 0, reordered: 0, indentChanged: 0, unchanged: 0 },
+        summary: {
+          added: 0,
+          deleted: 0,
+          modified: 0,
+          moved: 0,
+          reordered: 0,
+          indentChanged: 0,
+          unchanged: 0,
+        },
       };
     }
 
     // 一次查询获取所有需要的 BlockVersion 记录
     const versions = await this.blockVersionRepository.find({
       where: conditions.map((c) => ({ docId, blockId: c.blockId, ver: c.ver })),
-      select: ['blockId', 'ver', 'parentId', 'sortKey', 'indent', 'payload', 'hash'],
+      select: ["blockId", "ver", "parentId", "sortKey", "indent", "payload", "hash"],
     });
 
     // 按 blockId:ver 建索引
@@ -1279,8 +1334,13 @@ export class DocumentsService {
     const allBlockIds = new Set([...Object.keys(fromMap), ...Object.keys(toMap)]);
     const changes: DiffChangeItem[] = [];
     const summary: DiffSummary = {
-      added: 0, deleted: 0, modified: 0, moved: 0,
-      reordered: 0, indentChanged: 0, unchanged: 0,
+      added: 0,
+      deleted: 0,
+      modified: 0,
+      moved: 0,
+      reordered: 0,
+      indentChanged: 0,
+      unchanged: 0,
     };
 
     for (const blockId of allBlockIds) {
@@ -1292,13 +1352,13 @@ export class DocumentsService {
         const bv = bvIndex.get(`${blockId}:${toVer}`);
         if (!bv) continue;
         summary.added++;
-        changes.push({ type: 'added', blockId, to: this.extractSnapshot(bv) });
+        changes.push({ type: "added", blockId, to: this.extractSnapshot(bv) });
       } else if (toVer === undefined) {
         // 删除块
         const bv = bvIndex.get(`${blockId}:${fromVer}`);
         if (!bv) continue;
         summary.deleted++;
-        changes.push({ type: 'deleted', blockId, from: this.extractSnapshot(bv) });
+        changes.push({ type: "deleted", blockId, from: this.extractSnapshot(bv) });
       } else {
         // 两边都存在，比较差异
         const fromBv = bvIndex.get(`${blockId}:${fromVer}`);
@@ -1316,18 +1376,18 @@ export class DocumentsService {
         }
 
         // 优先级：moved > modified > reordered > indent-changed
-        let changeType: DiffChangeItem['type'];
+        let changeType: DiffChangeItem["type"];
         if (parentChanged) {
-          changeType = 'moved';
+          changeType = "moved";
           summary.moved++;
         } else if (hashChanged) {
-          changeType = 'modified';
+          changeType = "modified";
           summary.modified++;
         } else if (sortKeyChanged) {
-          changeType = 'reordered';
+          changeType = "reordered";
           summary.reordered++;
         } else {
-          changeType = 'indent-changed';
+          changeType = "indent-changed";
           summary.indentChanged++;
         }
 
@@ -1346,7 +1406,7 @@ export class DocumentsService {
   private extractSnapshot(bv: BlockVersion): BlockSnapshot {
     return {
       ver: bv.ver,
-      type: (bv.payload as any)?.type || 'paragraph',
+      type: (bv.payload as any)?.type || "paragraph",
       payload: bv.payload,
       parentId: bv.parentId,
       sortKey: bv.sortKey,
@@ -1362,6 +1422,20 @@ export class DocumentsService {
     docId: string,
     docVer: number,
   ): Promise<{ map: Record<string, number>; createdAt: number }> {
+    const snapshotResult = await this.documentSnapshotService.getSnapshotMapForVersion(
+      docId,
+      docVer,
+    );
+    if (snapshotResult.snapshot) {
+      const revision = await this.docRevisionRepository.findOne({
+        where: { docId, docVer },
+      });
+      return {
+        map: snapshotResult.map,
+        createdAt: revision?.createdAt ?? snapshotResult.snapshot.createdAt,
+      };
+    }
+
     const revision = await this.docRevisionRepository.findOne({
       where: { docId, docVer },
     });
@@ -1372,7 +1446,7 @@ export class DocumentsService {
     // 获取文档信息，包含根块ID
     const document = await this.documentRepository.findOne({
       where: { docId },
-      select: ['rootBlockId'],
+      select: ["rootBlockId"],
     });
     if (!document) {
       throw new NotFoundException(`文档 ${docId} 不存在`);
@@ -1380,23 +1454,28 @@ export class DocumentsService {
 
     // 查询块版本映射，使用时间感知过滤（只排除在目标版本之前就已删除的块）
     const rows = await this.blockVersionRepository
-      .createQueryBuilder('bv')
-      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)', { delCutoff: revision.createdAt })
-      .select('bv.blockId', 'blockId')
-      .addSelect('MAX(bv.ver)', 'maxVer')
-      .where('bv.docId = :docId', { docId })
-      .andWhere('bv.createdAt <= :createdAt', { createdAt: revision.createdAt })
-      .groupBy('bv.blockId')
+      .createQueryBuilder("bv")
+      .innerJoin(
+        Block,
+        "b",
+        'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)',
+        { delCutoff: revision.createdAt },
+      )
+      .select("bv.blockId", "blockId")
+      .addSelect("MAX(bv.ver)", "maxVer")
+      .where("bv.docId = :docId", { docId })
+      .andWhere("bv.createdAt <= :createdAt", { createdAt: revision.createdAt })
+      .groupBy("bv.blockId")
       .getRawMany();
 
     const map: Record<string, number> = {};
     for (const r of rows) {
-      map[r.blockId] = typeof r.maxVer === 'string' ? parseInt(r.maxVer, 10) : r.maxVer;
+      map[r.blockId] = typeof r.maxVer === "string" ? parseInt(r.maxVer, 10) : r.maxVer;
     }
 
     // 确保根块在版本映射中（根块不应该被删除）
     if (document.rootBlockId && !(document.rootBlockId in map)) {
-      console.log('根块不在版本映射中，尝试添加，rootBlockId:', document.rootBlockId);
+      console.log("根块不在版本映射中，尝试添加，rootBlockId:", document.rootBlockId);
 
       // 查询根块的最新版本
       const rootBlock = await this.blockRepository.findOne({
@@ -1404,52 +1483,56 @@ export class DocumentsService {
       });
 
       console.log(
-        '根块查询结果:',
+        "根块查询结果:",
         rootBlock
           ? {
               blockId: rootBlock.blockId,
               isDeleted: rootBlock.isDeleted,
               latestVer: rootBlock.latestVer,
             }
-          : 'null',
+          : "null",
       );
 
-      if (rootBlock && (!rootBlock.isDeleted || (rootBlock.deletedAt != null && rootBlock.deletedAt > revision.createdAt))) {
+      if (
+        rootBlock &&
+        (!rootBlock.isDeleted ||
+          (rootBlock.deletedAt != null && rootBlock.deletedAt > revision.createdAt))
+      ) {
         // 查找根块在该时间点之前的版本
         const rootVersion = await this.blockVersionRepository
-          .createQueryBuilder('bv')
-          .where('bv.docId = :docId', { docId })
-          .andWhere('bv.blockId = :blockId', { blockId: document.rootBlockId })
-          .andWhere('bv.createdAt <= :createdAt', { createdAt: revision.createdAt })
-          .orderBy('bv.ver', 'DESC')
+          .createQueryBuilder("bv")
+          .where("bv.docId = :docId", { docId })
+          .andWhere("bv.blockId = :blockId", { blockId: document.rootBlockId })
+          .andWhere("bv.createdAt <= :createdAt", { createdAt: revision.createdAt })
+          .orderBy("bv.ver", "DESC")
           .limit(1)
           .getOne();
 
         console.log(
-          '根块版本查询结果:',
+          "根块版本查询结果:",
           rootVersion
             ? {
                 blockId: rootVersion.blockId,
                 ver: rootVersion.ver,
                 createdAt: rootVersion.createdAt,
               }
-            : 'null',
+            : "null",
         );
-        console.log('revision.createdAt:', revision.createdAt);
+        console.log("revision.createdAt:", revision.createdAt);
 
         if (rootVersion) {
           map[document.rootBlockId] = rootVersion.ver;
-          console.log('已添加根块到版本映射:', document.rootBlockId, 'ver:', rootVersion.ver);
+          console.log("已添加根块到版本映射:", document.rootBlockId, "ver:", rootVersion.ver);
         } else {
           // 如果根块没有版本记录，使用 latestVer（这种情况不应该发生，但作为后备）
           map[document.rootBlockId] = rootBlock.latestVer;
-          console.log('根块没有版本记录，使用 latestVer:', rootBlock.latestVer);
+          console.log("根块没有版本记录，使用 latestVer:", rootBlock.latestVer);
         }
       } else {
-        console.error('根块不存在或已被删除');
+        console.error("根块不存在或已被删除");
       }
     } else {
-      console.log('根块已在版本映射中:', document.rootBlockId in map);
+      console.log("根块已在版本映射中:", document.rootBlockId in map);
     }
 
     return { map, createdAt: revision.createdAt };
@@ -1474,12 +1557,17 @@ export class DocumentsService {
   }> {
     // 先找到起始块及其版本
     const startBlockVersion = await this.blockVersionRepository
-      .createQueryBuilder('bv')
-      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)', { delCutoff: revisionCreatedAt })
-      .where('bv.docId = :docId', { docId })
-      .andWhere('bv.blockId = :blockId', { blockId: startBlockId })
-      .andWhere('bv.createdAt <= :createdAt', { createdAt: revisionCreatedAt })
-      .orderBy('bv.ver', 'DESC')
+      .createQueryBuilder("bv")
+      .innerJoin(
+        Block,
+        "b",
+        'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)',
+        { delCutoff: revisionCreatedAt },
+      )
+      .where("bv.docId = :docId", { docId })
+      .andWhere("bv.blockId = :blockId", { blockId: startBlockId })
+      .andWhere("bv.createdAt <= :createdAt", { createdAt: revisionCreatedAt })
+      .orderBy("bv.ver", "DESC")
       .limit(1)
       .getOne();
 
@@ -1514,10 +1602,10 @@ export class DocumentsService {
       return {
         tree: {
           blockId: rootVersion.blockId,
-          type: (rootVersion.payload as any)?.type || 'root',
+          type: (rootVersion.payload as any)?.type || "root",
           payload: rootVersion.payload,
           parentId: rootVersion.parentId,
-          sortKey: rootVersion.sortKey || '0',
+          sortKey: rootVersion.sortKey || "0",
           indent: rootVersion.indent || 0,
           collapsed: rootVersion.collapsed || false,
           children,
@@ -1535,29 +1623,34 @@ export class DocumentsService {
     // 注意：由于 sortKey 是字符串且使用分数排序，我们需要查询所有兄弟块然后在内存中筛选
     // 但可以通过限制查询数量来减少数据库压力
     const siblingsQuery = await this.blockVersionRepository
-      .createQueryBuilder('bv')
-      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)', { delCutoff: revisionCreatedAt })
-      .where('bv.docId = :docId', { docId })
-      .andWhere('bv.parentId = :parentId', { parentId: startBlockParentId })
-      .andWhere('bv.createdAt <= :createdAt', { createdAt: revisionCreatedAt })
-      .select('bv.blockId', 'blockId')
-      .addSelect('MAX(bv.ver)', 'maxVer')
-      .addSelect('MAX(bv.sortKey)', 'sortKey')
-      .groupBy('bv.blockId')
-      .orderBy('CAST(MAX(bv.sortKey) AS INTEGER)', 'ASC') // 按数字排序
-      .addOrderBy('bv.blockId', 'ASC')
+      .createQueryBuilder("bv")
+      .innerJoin(
+        Block,
+        "b",
+        'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)',
+        { delCutoff: revisionCreatedAt },
+      )
+      .where("bv.docId = :docId", { docId })
+      .andWhere("bv.parentId = :parentId", { parentId: startBlockParentId })
+      .andWhere("bv.createdAt <= :createdAt", { createdAt: revisionCreatedAt })
+      .select("bv.blockId", "blockId")
+      .addSelect("MAX(bv.ver)", "maxVer")
+      .addSelect("MAX(bv.sortKey)", "sortKey")
+      .groupBy("bv.blockId")
+      .orderBy("CAST(MAX(bv.sortKey) AS INTEGER)", "ASC") // 按数字排序
+      .addOrderBy("bv.blockId", "ASC")
       .getRawMany();
 
     // 在内存中按 sortKey 精确排序（使用 compareSortKey 函数）
     const sortedSiblings = siblingsQuery
       .map((row) => ({
         blockId: row.blockId,
-        maxVer: typeof row.maxVer === 'string' ? parseInt(row.maxVer, 10) : row.maxVer,
-        sortKey: row.sortKey || '500000',
+        maxVer: typeof row.maxVer === "string" ? parseInt(row.maxVer, 10) : row.maxVer,
+        sortKey: row.sortKey || "500000",
       }))
       .sort((a, b) => {
-        const sortKeyA = a.sortKey && a.sortKey.trim() !== '' ? a.sortKey : '500000';
-        const sortKeyB = b.sortKey && b.sortKey.trim() !== '' ? b.sortKey : '500000';
+        const sortKeyA = a.sortKey && a.sortKey.trim() !== "" ? a.sortKey : "500000";
+        const sortKeyB = b.sortKey && b.sortKey.trim() !== "" ? b.sortKey : "500000";
         const result = compareSortKey(sortKeyA, sortKeyB);
         if (result === 0) {
           return a.blockId.localeCompare(b.blockId);
@@ -1622,10 +1715,10 @@ export class DocumentsService {
 
       return {
         blockId: bv.blockId,
-        type: (bv.payload as any)?.type || 'paragraph',
+        type: (bv.payload as any)?.type || "paragraph",
         payload: bv.payload,
         parentId: bv.parentId,
-        sortKey: bv.sortKey || '500000',
+        sortKey: bv.sortKey || "500000",
         indent: bv.indent || 0,
         collapsed: bv.collapsed || false,
         children: childVersions,
@@ -1651,10 +1744,10 @@ export class DocumentsService {
       return {
         tree: {
           blockId: rootVersion.blockId,
-          type: (rootVersion.payload as any)?.type || 'root',
+          type: (rootVersion.payload as any)?.type || "root",
           payload: rootVersion.payload,
           parentId: rootVersion.parentId,
-          sortKey: rootVersion.sortKey || '0',
+          sortKey: rootVersion.sortKey || "0",
           indent: rootVersion.indent || 0,
           collapsed: rootVersion.collapsed || false,
           children: validChildren,
@@ -1678,10 +1771,10 @@ export class DocumentsService {
       return {
         tree: {
           blockId: parentVersion.blockId,
-          type: (parentVersion.payload as any)?.type || 'paragraph',
+          type: (parentVersion.payload as any)?.type || "paragraph",
           payload: parentVersion.payload,
           parentId: parentVersion.parentId,
-          sortKey: parentVersion.sortKey || '500000',
+          sortKey: parentVersion.sortKey || "500000",
           indent: parentVersion.indent || 0,
           collapsed: parentVersion.collapsed || false,
           children: validChildren,
@@ -1703,12 +1796,17 @@ export class DocumentsService {
     createdAt: number,
   ): Promise<BlockVersion | null> {
     return await this.blockVersionRepository
-      .createQueryBuilder('bv')
-      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)', { delCutoff: createdAt })
-      .where('bv.docId = :docId', { docId })
-      .andWhere('bv.blockId = :blockId', { blockId })
-      .andWhere('bv.createdAt <= :createdAt', { createdAt })
-      .orderBy('bv.ver', 'DESC')
+      .createQueryBuilder("bv")
+      .innerJoin(
+        Block,
+        "b",
+        'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)',
+        { delCutoff: createdAt },
+      )
+      .where("bv.docId = :docId", { docId })
+      .andWhere("bv.blockId = :blockId", { blockId })
+      .andWhere("bv.createdAt <= :createdAt", { createdAt })
+      .orderBy("bv.ver", "DESC")
       .limit(1)
       .getOne();
   }
@@ -1734,17 +1832,22 @@ export class DocumentsService {
 
     // 优化：一次性查询该父块的所有子块及其在该时间点的最大版本号，按 sortKey 排序
     const childRows = await this.blockVersionRepository
-      .createQueryBuilder('bv')
-      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)', { delCutoff: revisionCreatedAt })
-      .where('bv.docId = :docId', { docId })
-      .andWhere('bv.parentId = :parentId', { parentId })
-      .andWhere('bv.createdAt <= :createdAt', { createdAt: revisionCreatedAt })
-      .select('bv.blockId', 'blockId')
-      .addSelect('MAX(bv.ver)', 'maxVer')
-      .addSelect('MAX(bv.sortKey)', 'sortKey')
-      .groupBy('bv.blockId')
-      .orderBy('MAX(bv.sortKey)', 'ASC')
-      .addOrderBy('bv.blockId', 'ASC')
+      .createQueryBuilder("bv")
+      .innerJoin(
+        Block,
+        "b",
+        'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)',
+        { delCutoff: revisionCreatedAt },
+      )
+      .where("bv.docId = :docId", { docId })
+      .andWhere("bv.parentId = :parentId", { parentId })
+      .andWhere("bv.createdAt <= :createdAt", { createdAt: revisionCreatedAt })
+      .select("bv.blockId", "blockId")
+      .addSelect("MAX(bv.ver)", "maxVer")
+      .addSelect("MAX(bv.sortKey)", "sortKey")
+      .groupBy("bv.blockId")
+      .orderBy("MAX(bv.sortKey)", "ASC")
+      .addOrderBy("bv.blockId", "ASC")
       .limit(remainingLimit) // 限制查询数量
       .getRawMany();
 
@@ -1757,7 +1860,7 @@ export class DocumentsService {
       where: childRows.map((row) => ({
         docId,
         blockId: row.blockId,
-        ver: typeof row.maxVer === 'string' ? parseInt(row.maxVer, 10) : row.maxVer,
+        ver: typeof row.maxVer === "string" ? parseInt(row.maxVer, 10) : row.maxVer,
       })),
     });
 
@@ -1783,10 +1886,10 @@ export class DocumentsService {
 
       children.push({
         blockId: childVersion.blockId,
-        type: (childVersion.payload as any)?.type || 'paragraph',
+        type: (childVersion.payload as any)?.type || "paragraph",
         payload: childVersion.payload,
         parentId: childVersion.parentId,
-        sortKey: childVersion.sortKey || '500000',
+        sortKey: childVersion.sortKey || "500000",
         indent: childVersion.indent || 0,
         collapsed: childVersion.collapsed || false,
         children: grandchildren,
@@ -1829,7 +1932,11 @@ export class DocumentsService {
           hasMore: false,
         };
       }
-      if (rootBlock.isDeleted && (!revisionCreatedAt || (rootBlock.deletedAt != null && rootBlock.deletedAt <= revisionCreatedAt))) {
+      if (
+        rootBlock.isDeleted &&
+        (!revisionCreatedAt ||
+          (rootBlock.deletedAt != null && rootBlock.deletedAt <= revisionCreatedAt))
+      ) {
         return {
           tree: { __rootBlockDeleted: true },
           totalBlocks: 0,
@@ -1856,7 +1963,7 @@ export class DocumentsService {
     });
 
     if (!rootBlock) {
-      console.error('根块不存在，rootBlockId:', rootBlockId);
+      console.error("根块不存在，rootBlockId:", rootBlockId);
       return {
         tree: { __rootBlockMissing: true },
         totalBlocks: 0,
@@ -1865,8 +1972,12 @@ export class DocumentsService {
       };
     }
 
-    if (rootBlock.isDeleted && (!revisionCreatedAt || (rootBlock.deletedAt != null && rootBlock.deletedAt <= revisionCreatedAt))) {
-      console.error('根块在目标版本前已被删除，rootBlockId:', rootBlockId);
+    if (
+      rootBlock.isDeleted &&
+      (!revisionCreatedAt ||
+        (rootBlock.deletedAt != null && rootBlock.deletedAt <= revisionCreatedAt))
+    ) {
+      console.error("根块在目标版本前已被删除，rootBlockId:", rootBlockId);
       return {
         tree: { __rootBlockDeleted: true },
         totalBlocks: 0,
@@ -1886,11 +1997,9 @@ export class DocumentsService {
         where: {
           docId,
           blockId: In(nonRootBlockIds) as any,
-          deletedAt: revisionCreatedAt
-            ? Or(IsNull(), MoreThan(revisionCreatedAt))
-            : IsNull(),
+          deletedAt: revisionCreatedAt ? Or(IsNull(), MoreThan(revisionCreatedAt)) : IsNull(),
         },
-        select: ['blockId'],
+        select: ["blockId"],
       });
       for (const b of validBlocks) {
         validBlockIds.add(b.blockId);
@@ -1909,7 +2018,7 @@ export class DocumentsService {
     }
 
     if (validEntries.length === 0) {
-      console.error('validEntries 为空，但根块应该存在');
+      console.error("validEntries 为空，但根块应该存在");
       return { tree: null, totalBlocks: 0, returnedBlocks: 0, hasMore: false };
     }
 
@@ -1979,8 +2088,8 @@ export class DocumentsService {
           const childVersions = versions
             .filter((v) => v.parentId === blockId)
             .sort((a, b) => {
-              const sortKeyA = a.sortKey && a.sortKey.trim() !== '' ? a.sortKey : '500000';
-              const sortKeyB = b.sortKey && b.sortKey.trim() !== '' ? b.sortKey : '500000';
+              const sortKeyA = a.sortKey && a.sortKey.trim() !== "" ? a.sortKey : "500000";
+              const sortKeyB = b.sortKey && b.sortKey.trim() !== "" ? b.sortKey : "500000";
               const result = compareSortKey(sortKeyA, sortKeyB);
               if (result === 0) {
                 return a.blockId.localeCompare(b.blockId);
@@ -2011,10 +2120,10 @@ export class DocumentsService {
           const startBlock = byBlock.get(startBlockId);
           if (startBlock) {
             const startSortKey =
-              startBlock.sortKey && startBlock.sortKey.trim() !== ''
+              startBlock.sortKey && startBlock.sortKey.trim() !== ""
                 ? startBlock.sortKey
-                : '500000';
-            const currentSortKey = bv.sortKey && bv.sortKey.trim() !== '' ? bv.sortKey : '500000';
+                : "500000";
+            const currentSortKey = bv.sortKey && bv.sortKey.trim() !== "" ? bv.sortKey : "500000";
             // 如果当前块的 sortKey 小于起始块的 sortKey，跳过
             if (compareSortKey(currentSortKey, startSortKey) < 0) {
               visitedBlocks.add(blockId);
@@ -2031,8 +2140,8 @@ export class DocumentsService {
       const childVersions = versions
         .filter((v) => v.parentId === blockId)
         .sort((a, b) => {
-          const sortKeyA = a.sortKey && a.sortKey.trim() !== '' ? a.sortKey : '500000';
-          const sortKeyB = b.sortKey && b.sortKey.trim() !== '' ? b.sortKey : '500000';
+          const sortKeyA = a.sortKey && a.sortKey.trim() !== "" ? a.sortKey : "500000";
+          const sortKeyB = b.sortKey && b.sortKey.trim() !== "" ? b.sortKey : "500000";
           const result = compareSortKey(sortKeyA, sortKeyB);
           if (result === 0) {
             return a.blockId.localeCompare(b.blockId);
@@ -2068,8 +2177,8 @@ export class DocumentsService {
           const siblings = versions
             .filter((v) => v.parentId === bv.parentId)
             .sort((a, b) => {
-              const sortKeyA = a.sortKey && a.sortKey.trim() !== '' ? a.sortKey : '500000';
-              const sortKeyB = b.sortKey && b.sortKey.trim() !== '' ? b.sortKey : '500000';
+              const sortKeyA = a.sortKey && a.sortKey.trim() !== "" ? a.sortKey : "500000";
+              const sortKeyB = b.sortKey && b.sortKey.trim() !== "" ? b.sortKey : "500000";
               const result = compareSortKey(sortKeyA, sortKeyB);
               if (result === 0) {
                 return a.blockId.localeCompare(b.blockId);
@@ -2085,10 +2194,10 @@ export class DocumentsService {
 
       return {
         blockId: bv.blockId,
-        type: (bv.payload as any)?.type || 'paragraph',
+        type: (bv.payload as any)?.type || "paragraph",
         payload: bv.payload,
         parentId: bv.parentId,
-        sortKey: bv.sortKey || '500000',
+        sortKey: bv.sortKey || "500000",
         indent: bv.indent || 0,
         collapsed: bv.collapsed || false,
         children,
@@ -2106,8 +2215,8 @@ export class DocumentsService {
       const siblings = versions
         .filter((v) => v.parentId === startBlockParentId)
         .sort((a, b) => {
-          const sortKeyA = a.sortKey && a.sortKey.trim() !== '' ? a.sortKey : '500000';
-          const sortKeyB = b.sortKey && b.sortKey.trim() !== '' ? b.sortKey : '500000';
+          const sortKeyA = a.sortKey && a.sortKey.trim() !== "" ? a.sortKey : "500000";
+          const sortKeyB = b.sortKey && b.sortKey.trim() !== "" ? b.sortKey : "500000";
           const result = compareSortKey(sortKeyA, sortKeyB);
           if (result === 0) {
             return a.blockId.localeCompare(b.blockId);
@@ -2144,10 +2253,10 @@ export class DocumentsService {
             return {
               tree: {
                 blockId: root.blockId,
-                type: (root.payload as any)?.type || 'root',
+                type: (root.payload as any)?.type || "root",
                 payload: root.payload,
-                parentId: '',
-                sortKey: root.sortKey || '0',
+                parentId: "",
+                sortKey: root.sortKey || "0",
                 indent: 0,
                 collapsed: false,
                 children: allSiblingsFromStart,
@@ -2162,10 +2271,10 @@ export class DocumentsService {
             return {
               tree: {
                 blockId: parentBlock.blockId,
-                type: (parentBlock.payload as any)?.type || 'paragraph',
+                type: (parentBlock.payload as any)?.type || "paragraph",
                 payload: parentBlock.payload,
                 parentId: parentBlock.parentId,
-                sortKey: parentBlock.sortKey || '500000',
+                sortKey: parentBlock.sortKey || "500000",
                 indent: parentBlock.indent || 0,
                 collapsed: parentBlock.collapsed || false,
                 children: allSiblingsFromStart,
@@ -2215,7 +2324,7 @@ export class DocumentsService {
     workspaceId: string,
     tagIds: string[],
     manager: any = null,
-    operation: 'add' | 'remove' = 'add',
+    operation: "add" | "remove" = "add",
     docId?: string,
   ): Promise<void> {
     if (!tagIds || tagIds.length === 0) {
@@ -2237,13 +2346,13 @@ export class DocumentsService {
       const foundTagIds = tags.map((t) => t.tagId);
       const missingTagIds = tagIds.filter((id) => !foundTagIds.includes(id));
       throw new BadRequestException(
-        `以下标签不存在、已删除或不属于该工作空间: ${missingTagIds.join(', ')}`,
+        `以下标签不存在、已删除或不属于该工作空间: ${missingTagIds.join(", ")}`,
       );
     }
 
     // 更新标签的使用统计和文档ID列表
     for (const tag of tags) {
-      if (operation === 'add') {
+      if (operation === "add") {
         tag.usageCount = (tag.usageCount || 0) + 1;
         // 添加文档ID到列表（如果提供了docId且不在列表中）
         if (docId) {
