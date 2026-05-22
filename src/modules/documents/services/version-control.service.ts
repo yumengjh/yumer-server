@@ -1,8 +1,9 @@
-import { Injectable, Logger, NotFoundException, OnModuleDestroy } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
-import { Document } from '../../../entities/document.entity';
-import { DocRevision } from '../../../entities/doc-revision.entity';
+import { Injectable, Logger, NotFoundException, OnModuleDestroy } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { DataSource, Repository } from "typeorm";
+import { Document } from "../../../entities/document.entity";
+import { DocRevision } from "../../../entities/doc-revision.entity";
+import { DocumentSnapshotService } from "./document-snapshot.service";
 
 /**
  * 文档版本控制服务
@@ -26,6 +27,7 @@ export class VersionControlService implements OnModuleDestroy {
     @InjectRepository(DocRevision)
     private readonly docRevisionRepository: Repository<DocRevision>,
     private readonly dataSource: DataSource,
+    private readonly documentSnapshotService: DocumentSnapshotService,
   ) {
     // 启动定期清理任务
     this.startCleanupTask();
@@ -100,15 +102,24 @@ export class VersionControlService implements OnModuleDestroy {
         createdAt: Date.now(),
         createdBy: userId,
         message: message || `Document updated (${pendingCount} pending operations)`,
-        branch: 'draft',
+        branch: "draft",
         patches: [],
         rootBlockId: document.rootBlockId,
-        source: 'api',
+        source: "api",
         opSummary: {
           pendingOperations: pendingCount,
         },
       });
       await docRevisionRepo.save(revision);
+
+      await this.documentSnapshotService.createSnapshotForRevision(docId, document.head, manager, {
+        kind: "revision",
+        pinned: false,
+        metadata: {
+          source: "commit",
+          pendingOperations: pendingCount,
+        },
+      });
 
       return document.head;
     });

@@ -890,3 +890,16 @@ http://localhost:5200/api/docs
 
 - Swagger: http://localhost:5200/api/docs
 - 参考：`API_DESIGN.md` · `E2E_USER_JOURNEY.md` · `SETUP.md` · `INSTALL.md`
+
+## 文档版本快照语义（GC 前置）
+
+每个文档版本都会有一条对应的 `doc_snapshots` 记录。该快照保存精确的
+`{ blockId: blockVersion }` 映射，用于重建该文档版本的内容。
+
+历史内容读取、版本对比、回滚和发布内容读取都会优先使用
+`doc_snapshots.blockVersionMap`。旧的基于 `DocRevision.createdAt` 的时间点反推逻辑只作为
+历史数据完成快照回填前的兼容回退路径。
+
+发布文档时，系统发布的是一个确定的文档版本快照：`documents.publishedHead` 记录发布版本号，
+`documents.publishedSnapshotId` 记录对应的快照 ID。匿名公开站点读取始终返回已发布快照，
+不会因为传入 `version` 查询参数而读取草稿或任意历史版本。
