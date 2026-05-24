@@ -1003,9 +1003,15 @@ export class DocumentsService {
 
     try {
       const rendered = await this.documentRenderService.renderTree(response.tree);
+      const publicTree = this.stripRenderMetadata(rendered.tree);
+      const tree =
+        mode === "html"
+          ? this.stripRenderedPayloadForHtmlMode(publicTree)
+          : publicTree;
+
       return {
         ...response,
-        tree: this.stripRenderMetadata(rendered.tree),
+        tree,
         renderMode: mode,
         renderDiagnostics: {
           requestedMode: mode,
@@ -1047,6 +1053,25 @@ export class DocumentsService {
       ...response,
       tree: this.stripRenderMetadata(response.tree),
     };
+  }
+
+  private stripRenderedPayloadForHtmlMode(node: any): any {
+    if (!node || typeof node !== "object") {
+      return node;
+    }
+
+    const nextNode = { ...node };
+    if (Array.isArray(nextNode.children)) {
+      nextNode.children = nextNode.children.map((child: any) =>
+        this.stripRenderedPayloadForHtmlMode(child),
+      );
+    }
+
+    if (typeof nextNode.html === "string") {
+      delete nextNode.payload;
+    }
+
+    return nextNode;
   }
 
   private stripRenderMetadata(node: any): any {
