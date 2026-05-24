@@ -538,7 +538,87 @@ export class DocumentsService {
       docId,
       userId,
     );
+    await this.revalidatePublicDocumentPath(document);
     return this.findOne(docId, userId);
+  }
+
+  private async revalidatePublicDocumentPath(document: Document): Promise<void> {
+    if (document.visibility !== "public") {
+      return;
+    }
+
+    const url = process.env.PUBLIC_SITE_REVALIDATE_URL;
+    const secret = process.env.PUBLIC_SITE_REVALIDATE_SECRET;
+    if (!url || !secret) {
+      return;
+    }
+
+    let slug: string;
+    try {
+      slug = this.encodePublicDocSlug(document.docId);
+    } catch (error) {
+      this.logger.warn(
+        `公开文档缓存失效跳过：slug 编码失败 docId=${document.docId}, error=${(error as Error).message}`,
+      );
+      return;
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-revalidate-secret": secret,
+        },
+        body: JSON.stringify({ slug }),
+        signal: AbortSignal.timeout(2000),
+      });
+
+      if (!response.ok) {
+        this.logger.warn(
+          `公开文档缓存失效失败: docId=${document.docId}, slug=${slug}, status=${response.status}`,
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `公开文档缓存失效失败: docId=${document.docId}, error=${(error as Error).message}`,
+      );
+    }
+  }
+
+  private encodePublicDocSlug(docId: string): string {
+    if (!docId.startsWith("doc_")) {
+      throw new Error("invalid document id prefix");
+    }
+
+    const rest = docId.slice(4);
+    const underscoreIdx = rest.indexOf("_");
+    if (underscoreIdx <= 0 || underscoreIdx === rest.length - 1) {
+      throw new Error("invalid document id shape");
+    }
+
+    const timestamp = Number(rest.slice(0, underscoreIdx));
+    if (!Number.isFinite(timestamp)) {
+      throw new Error("invalid document timestamp");
+    }
+
+    const hex = rest.slice(underscoreIdx + 1);
+    return `${this.toBase36(timestamp)}-${hex}`;
+  }
+
+  private toBase36(num: number): string {
+    if (num === 0) {
+      return "0";
+    }
+
+    const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
+    let value = Math.floor(num);
+    let result = "";
+    while (value > 0) {
+      result = chars[value % 36] + result;
+      value = Math.floor(value / 36);
+    }
+    return result;
   }
 
   /**

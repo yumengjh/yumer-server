@@ -13,6 +13,7 @@ import { WorkspacesService } from "../workspaces/workspaces.service";
 import { ActivitiesService } from "../activities/activities.service";
 
 describe("DocumentsService", () => {
+  const originalFetch = global.fetch;
   const documentRepository = {
     findOne: jest.fn(),
     save: jest.fn(),
@@ -52,6 +53,9 @@ describe("DocumentsService", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    global.fetch = originalFetch;
+    delete process.env.PUBLIC_SITE_REVALIDATE_URL;
+    delete process.env.PUBLIC_SITE_REVALIDATE_SECRET;
     service = new (DocumentsService as any)(
       documentRepository,
       versionControlService,
@@ -227,6 +231,98 @@ describe("DocumentsService", () => {
         updatedBy: "user_1",
       }),
     );
+  });
+
+  it("?????????????????????", async () => {
+    process.env.PUBLIC_SITE_REVALIDATE_URL = "http://frontend.test/api/revalidate-doc";
+    process.env.PUBLIC_SITE_REVALIDATE_SECRET = "top-secret";
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true });
+    global.fetch = fetchMock as typeof fetch;
+
+    const document = {
+      docId: "doc_36_abcd1234",
+      workspaceId: "ws_1",
+      head: 5,
+      publishedHead: 0,
+      publishedSnapshotId: null,
+      visibility: "public",
+      status: "draft",
+      updatedBy: "old_user",
+    } as Document;
+    jest.mocked(documentRepository.findOne).mockResolvedValue(document);
+    (service as any).checkDocumentEditPermission = jest.fn().mockResolvedValue(undefined);
+    (service as any).findOne = jest.fn().mockResolvedValue({
+      ...document,
+      publishedHead: 5,
+      publishedSnapshotId: "doc_36_abcd1234@snap@5",
+    });
+    jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
+      snapshotId: "doc_36_abcd1234@snap@5",
+    });
+
+    const docRepo = {
+      findOne: jest.fn().mockResolvedValue({ ...document }),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    const manager = {
+      getRepository: jest.fn().mockReturnValue(docRepo),
+    };
+    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+
+    await service.publish("doc_36_abcd1234", "user_1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://frontend.test/api/revalidate-doc",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "content-type": "application/json",
+          "x-revalidate-secret": "top-secret",
+        }),
+        body: JSON.stringify({ slug: "10-abcd1234" }),
+      }),
+    );
+  });
+
+  it("??????????????????", async () => {
+    process.env.PUBLIC_SITE_REVALIDATE_URL = "http://frontend.test/api/revalidate-doc";
+    process.env.PUBLIC_SITE_REVALIDATE_SECRET = "top-secret";
+    global.fetch = jest.fn().mockRejectedValue(new Error("network")) as typeof fetch;
+
+    const document = {
+      docId: "doc_36_abcd1234",
+      workspaceId: "ws_1",
+      head: 5,
+      publishedHead: 0,
+      publishedSnapshotId: null,
+      visibility: "public",
+      status: "draft",
+      updatedBy: "old_user",
+    } as Document;
+    jest.mocked(documentRepository.findOne).mockResolvedValue(document);
+    (service as any).checkDocumentEditPermission = jest.fn().mockResolvedValue(undefined);
+    (service as any).findOne = jest.fn().mockResolvedValue({
+      ...document,
+      publishedHead: 5,
+      publishedSnapshotId: "doc_36_abcd1234@snap@5",
+    });
+    jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
+      snapshotId: "doc_36_abcd1234@snap@5",
+    });
+
+    const docRepo = {
+      findOne: jest.fn().mockResolvedValue({ ...document }),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    const manager = {
+      getRepository: jest.fn().mockReturnValue(docRepo),
+    };
+    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+
+    await expect(service.publish("doc_36_abcd1234", "user_1")).resolves.toMatchObject({
+      publishedHead: 5,
+      publishedSnapshotId: "doc_36_abcd1234@snap@5",
+    });
   });
 
   it("HTML 渲染失败时内容接口回退到原 JSON tree", async () => {
