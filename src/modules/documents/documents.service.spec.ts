@@ -26,7 +26,9 @@ describe("DocumentsService", () => {
     getSnapshotMapForVersion: jest.fn(),
   } as unknown as DocumentSnapshotService;
   const blockRepository = {} as Repository<Block>;
-  const blockVersionRepository = {} as Repository<BlockVersion>;
+  const blockVersionRepository = {
+    find: jest.fn(),
+  } as unknown as Repository<BlockVersion>;
   const docRevisionRepository = {
     findOne: jest.fn(),
   } as unknown as Repository<DocRevision>;
@@ -42,6 +44,9 @@ describe("DocumentsService", () => {
   const activitiesService = {
     record: jest.fn(),
   } as unknown as ActivitiesService;
+  const documentRenderService = {
+    renderTree: jest.fn(),
+  };
 
   let service: DocumentsService;
 
@@ -60,6 +65,7 @@ describe("DocumentsService", () => {
       dataSource,
       workspacesService,
       activitiesService,
+      documentRenderService,
     );
   });
 
@@ -221,5 +227,152 @@ describe("DocumentsService", () => {
         updatedBy: "user_1",
       }),
     );
+  });
+
+  it("HTML 渲染失败时内容接口回退到原 JSON tree", async () => {
+    const document = {
+      docId: "doc_1",
+      title: "Doc",
+      rootBlockId: "root_1",
+    } as Document;
+    jest.mocked(docRevisionRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      docVer: 2,
+      createdAt: 1000,
+    } as DocRevision);
+    jest.mocked((documentSnapshotService as any).getSnapshotMapForVersion).mockResolvedValue({
+      map: { root_1: 1, b_1: 1 },
+      rootBlockId: "root_1",
+      snapshot: { snapshotId: "doc_1@snap@2", createdAt: 1000 },
+    });
+    (blockRepository as any).findOne = jest.fn().mockResolvedValue({
+      blockId: "root_1",
+      isDeleted: false,
+    });
+    (blockRepository as any).find = jest.fn().mockResolvedValue([{ blockId: "b_1" }]);
+    jest.mocked(blockVersionRepository.find).mockResolvedValue([
+      {
+        id: 1,
+        docId: "doc_1",
+        blockId: "root_1",
+        ver: 1,
+        parentId: "",
+        sortKey: "0",
+        payload: { type: "root", children: [] },
+      },
+      {
+        id: 2,
+        docId: "doc_1",
+        blockId: "b_1",
+        ver: 1,
+        parentId: "root_1",
+        sortKey: "1",
+        payload: { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+      },
+    ] as BlockVersion[]);
+    documentRenderService.renderTree.mockRejectedValue(new Error("renderer unavailable"));
+
+    const result = await (service as any).getContentByDocument(
+      document,
+      2,
+      undefined,
+      undefined,
+      1000,
+      "html",
+    );
+
+    expect(documentRenderService.renderTree).toHaveBeenCalled();
+    expect(result.tree.children[0]).toMatchObject({
+      blockId: "b_1",
+      payload: { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+    });
+    expect(result.tree.children[0].html).toBeUndefined();
+    expect(result.tree.children[0].blockVersionId).toBeUndefined();
+  });
+
+  it("HTML 渲染成功时内容接口附加响应头诊断所需的内部渲染信息", async () => {
+    const document = {
+      docId: "doc_1",
+      title: "Doc",
+      rootBlockId: "root_1",
+    } as Document;
+    jest.mocked(docRevisionRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      docVer: 2,
+      createdAt: 1000,
+    } as DocRevision);
+    jest.mocked((documentSnapshotService as any).getSnapshotMapForVersion).mockResolvedValue({
+      map: { root_1: 1, b_1: 1 },
+      rootBlockId: "root_1",
+      snapshot: { snapshotId: "doc_1@snap@2", createdAt: 1000 },
+    });
+    (blockRepository as any).findOne = jest.fn().mockResolvedValue({
+      blockId: "root_1",
+      isDeleted: false,
+    });
+    (blockRepository as any).find = jest.fn().mockResolvedValue([{ blockId: "b_1" }]);
+    jest.mocked(blockVersionRepository.find).mockResolvedValue([
+      {
+        id: 1,
+        docId: "doc_1",
+        blockId: "root_1",
+        ver: 1,
+        parentId: "",
+        sortKey: "0",
+        payload: { type: "root", children: [] },
+      },
+      {
+        id: 2,
+        docId: "doc_1",
+        blockId: "b_1",
+        ver: 1,
+        parentId: "root_1",
+        sortKey: "1",
+        payload: { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+      },
+    ] as BlockVersion[]);
+    documentRenderService.renderTree.mockResolvedValue({
+      tree: {
+        blockId: "root_1",
+        type: "root",
+        payload: { type: "root", children: [] },
+        children: [
+          {
+            blockId: "b_1",
+            type: "paragraph",
+            payload: { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+            html: "<p>hello</p>",
+          },
+        ],
+      },
+      failures: [],
+      diagnostics: {
+        renderVersion: "tiptap-static-v1",
+        renderMode: "fresh",
+        cache: "miss",
+        totalBlocks: 1,
+        renderableBlocks: 1,
+        cachedBlocks: 0,
+        freshBlocks: 1,
+        clientBlocks: 0,
+        failedBlocks: 0,
+      },
+    });
+
+    const result = await (service as any).getContentByDocument(
+      document,
+      2,
+      undefined,
+      undefined,
+      1000,
+      "all",
+    );
+
+    expect(result.renderDiagnostics).toMatchObject({
+      requestedMode: "all",
+      renderMode: "fresh",
+      cache: "miss",
+      freshBlocks: 1,
+    });
   });
 });

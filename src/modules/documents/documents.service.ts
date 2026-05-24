@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  Logger,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { InjectDataSource } from "@nestjs/typeorm";
@@ -39,6 +40,10 @@ import { SyncStateResponseDto } from "./dto/sync-state-response.dto";
 import { ActivitiesService } from "../activities/activities.service";
 import { DOC_ACTIONS } from "../activities/constants/activity-actions";
 import { SITE_PUBLIC_ANONYMOUS_USER_ID } from "../../common/decorators/public.decorator";
+import {
+  DocumentRenderService,
+  type DocumentRenderDiagnostics,
+} from "./services/document-render.service";
 
 type DocumentActorSummary = {
   userId: string;
@@ -46,8 +51,14 @@ type DocumentActorSummary = {
   avatar: string | null;
 };
 
+export type ContentRenderDiagnostics = DocumentRenderDiagnostics & {
+  requestedMode: "json" | "html" | "all";
+};
+
 @Injectable()
 export class DocumentsService {
+  private readonly logger = new Logger(DocumentsService.name);
+
   constructor(
     @InjectRepository(Document)
     private documentRepository: Repository<Document>,
@@ -69,6 +80,7 @@ export class DocumentsService {
     private dataSource: DataSource,
     private workspacesService: WorkspacesService,
     private activitiesService: ActivitiesService,
+    private documentRenderService?: DocumentRenderService,
   ) {}
 
   /**
@@ -693,10 +705,11 @@ export class DocumentsService {
     maxDepth?: number,
     startBlockId?: string,
     limit?: number,
+    mode: "json" | "html" | "all" = "json",
   ) {
     const document = await this.findOne(docId, userId);
     const docVer = version || document.head;
-    return this.getContentByDocument(document, docVer, maxDepth, startBlockId, limit);
+    return this.getContentByDocument(document, docVer, maxDepth, startBlockId, limit, mode);
   }
 
   async findAllSitePublic(queryDto: QueryDocumentsDto) {
@@ -713,10 +726,11 @@ export class DocumentsService {
     maxDepth?: number,
     startBlockId?: string,
     limit?: number,
+    mode: "json" | "html" | "all" = "json",
   ) {
     const publicDocument = await this.getPublicDocumentEntity(docId);
     const docVer = publicDocument.publishedHead;
-    return this.getContentByDocument(publicDocument, docVer, maxDepth, startBlockId, limit);
+    return this.getContentByDocument(publicDocument, docVer, maxDepth, startBlockId, limit, mode);
   }
 
   private async findAllForSitePublic(queryDto: QueryDocumentsDto) {
@@ -869,6 +883,7 @@ export class DocumentsService {
     maxDepth?: number,
     startBlockId?: string,
     limit?: number,
+    mode: "json" | "html" | "all" = "json",
   ) {
     const revision = await this.docRevisionRepository.findOne({
       where: { docId: document.docId, docVer },
@@ -900,18 +915,21 @@ export class DocumentsService {
         throw new NotFoundException("根块不存在，无法获取文档内容。");
       }
 
-      return {
-        docId: document.docId,
-        docVer,
-        title: document.title,
-        tree: result.tree,
-        pagination: {
-          totalBlocks: result.totalBlocks,
-          returnedBlocks: result.returnedBlocks,
-          hasMore: result.hasMore,
-          nextStartBlockId: result.nextStartBlockId,
+      return this.withOptionalRenderedHtml(
+        {
+          docId: document.docId,
+          docVer,
+          title: document.title,
+          tree: result.tree,
+          pagination: {
+            totalBlocks: result.totalBlocks,
+            returnedBlocks: result.returnedBlocks,
+            hasMore: result.hasMore,
+            nextStartBlockId: result.nextStartBlockId,
+          },
         },
-      };
+        mode,
+      );
     }
 
     const { map: blockVersionMap } = await this.getBlockVersionMapForVersion(
@@ -942,18 +960,108 @@ export class DocumentsService {
       throw new NotFoundException("根块不存在，无法获取文档内容。");
     }
 
-    return {
-      docId: document.docId,
-      docVer,
-      title: document.title,
-      tree: result.tree,
-      pagination: {
-        totalBlocks: result.totalBlocks,
-        returnedBlocks: result.returnedBlocks,
-        hasMore: result.hasMore,
-        nextStartBlockId: result.nextStartBlockId,
+    return this.withOptionalRenderedHtml(
+      {
+        docId: document.docId,
+        docVer,
+        title: document.title,
+        tree: result.tree,
+        pagination: {
+          totalBlocks: result.totalBlocks,
+          returnedBlocks: result.returnedBlocks,
+          hasMore: result.hasMore,
+          nextStartBlockId: result.nextStartBlockId,
+        },
       },
+      mode,
+    );
+  }
+
+  private async withOptionalRenderedHtml<T extends { docId: string; tree: any }>(
+    response: T,
+    mode: "json" | "html" | "all",
+  ): Promise<
+    T & {
+      renderMode?: "html" | "all";
+      renderFailures?: unknown[];
+      renderDiagnostics?: ContentRenderDiagnostics;
+    }
+  > {
+    if (mode === "json") {
+      return {
+        ...this.toPublicContentResponse(response),
+        renderDiagnostics: this.createFallbackRenderDiagnostics(mode, "json"),
+      };
+    }
+
+    if (!this.documentRenderService) {
+      return {
+        ...this.toPublicContentResponse(response),
+        renderDiagnostics: this.createFallbackRenderDiagnostics(mode, "json"),
+      };
+    }
+
+    try {
+      const rendered = await this.documentRenderService.renderTree(response.tree);
+      return {
+        ...response,
+        tree: this.stripRenderMetadata(rendered.tree),
+        renderMode: mode,
+        renderDiagnostics: {
+          requestedMode: mode,
+          ...rendered.diagnostics,
+        },
+        ...(rendered.failures.length > 0 ? { renderFailures: rendered.failures } : {}),
+      };
+    } catch (error) {
+      this.logger.warn(
+        `文档 HTML 渲染失败，已回退 JSON: docId=${response.docId}, mode=${mode}, error=${(error as Error).message}`,
+      );
+      return {
+        ...this.toPublicContentResponse(response),
+        renderDiagnostics: this.createFallbackRenderDiagnostics(mode, "json"),
+      };
+    }
+  }
+
+  private createFallbackRenderDiagnostics(
+    requestedMode: "json" | "html" | "all",
+    renderMode: "json",
+  ): ContentRenderDiagnostics {
+    return {
+      requestedMode,
+      renderVersion: "none",
+      renderMode,
+      cache: "none",
+      totalBlocks: 0,
+      renderableBlocks: 0,
+      cachedBlocks: 0,
+      freshBlocks: 0,
+      clientBlocks: 0,
+      failedBlocks: 0,
     };
+  }
+
+  private toPublicContentResponse<T extends { tree: any }>(response: T): T {
+    return {
+      ...response,
+      tree: this.stripRenderMetadata(response.tree),
+    };
+  }
+
+  private stripRenderMetadata(node: any): any {
+    if (!node || typeof node !== "object") {
+      return node;
+    }
+
+    const { blockVersionId, docId, ver, children, ...publicNode } = node;
+    if (Array.isArray(children)) {
+      return {
+        ...publicNode,
+        children: children.map((child) => this.stripRenderMetadata(child)),
+      };
+    }
+    return publicNode;
   }
 
   /**
@@ -972,6 +1080,9 @@ export class DocumentsService {
     // 简化实现：只返回根块，实际应该递归加载子块
     return {
       blockId: rootBlockId,
+      blockVersionId: rootVersion.id,
+      docId: rootVersion.docId,
+      ver: rootVersion.ver,
       type: rootVersion.payload["type"] || "root",
       payload: rootVersion.payload,
       children: [], // 实际应该递归加载
@@ -1602,6 +1713,9 @@ export class DocumentsService {
       return {
         tree: {
           blockId: rootVersion.blockId,
+          blockVersionId: rootVersion.id,
+          docId: rootVersion.docId,
+          ver: rootVersion.ver,
           type: (rootVersion.payload as any)?.type || "root",
           payload: rootVersion.payload,
           parentId: rootVersion.parentId,
@@ -1715,6 +1829,9 @@ export class DocumentsService {
 
       return {
         blockId: bv.blockId,
+        blockVersionId: bv.id,
+        docId: bv.docId,
+        ver: bv.ver,
         type: (bv.payload as any)?.type || "paragraph",
         payload: bv.payload,
         parentId: bv.parentId,
@@ -1744,6 +1861,9 @@ export class DocumentsService {
       return {
         tree: {
           blockId: rootVersion.blockId,
+          blockVersionId: rootVersion.id,
+          docId: rootVersion.docId,
+          ver: rootVersion.ver,
           type: (rootVersion.payload as any)?.type || "root",
           payload: rootVersion.payload,
           parentId: rootVersion.parentId,
@@ -1771,6 +1891,9 @@ export class DocumentsService {
       return {
         tree: {
           blockId: parentVersion.blockId,
+          blockVersionId: parentVersion.id,
+          docId: parentVersion.docId,
+          ver: parentVersion.ver,
           type: (parentVersion.payload as any)?.type || "paragraph",
           payload: parentVersion.payload,
           parentId: parentVersion.parentId,
@@ -1886,6 +2009,9 @@ export class DocumentsService {
 
       children.push({
         blockId: childVersion.blockId,
+        blockVersionId: childVersion.id,
+        docId: childVersion.docId,
+        ver: childVersion.ver,
         type: (childVersion.payload as any)?.type || "paragraph",
         payload: childVersion.payload,
         parentId: childVersion.parentId,
@@ -2194,6 +2320,9 @@ export class DocumentsService {
 
       return {
         blockId: bv.blockId,
+        blockVersionId: bv.id,
+        docId: bv.docId,
+        ver: bv.ver,
         type: (bv.payload as any)?.type || "paragraph",
         payload: bv.payload,
         parentId: bv.parentId,
@@ -2253,6 +2382,9 @@ export class DocumentsService {
             return {
               tree: {
                 blockId: root.blockId,
+                blockVersionId: root.id,
+                docId: root.docId,
+                ver: root.ver,
                 type: (root.payload as any)?.type || "root",
                 payload: root.payload,
                 parentId: "",
@@ -2271,6 +2403,9 @@ export class DocumentsService {
             return {
               tree: {
                 blockId: parentBlock.blockId,
+                blockVersionId: parentBlock.id,
+                docId: parentBlock.docId,
+                ver: parentBlock.ver,
                 type: (parentBlock.payload as any)?.type || "paragraph",
                 payload: parentBlock.payload,
                 parentId: parentBlock.parentId,
