@@ -55,6 +55,16 @@ export type ContentRenderDiagnostics = DocumentRenderDiagnostics & {
   requestedMode: "json" | "html" | "all";
 };
 
+export type PublicDocumentRevalidationResult = {
+  attempted: boolean;
+  success: boolean;
+  skippedReason?: "not_public" | "missing_config" | "invalid_slug";
+  slug?: string;
+  status?: number;
+  responseBody?: string;
+  error?: string;
+};
+
 @Injectable()
 export class DocumentsService {
   private readonly logger = new Logger(DocumentsService.name);
@@ -538,19 +548,26 @@ export class DocumentsService {
       docId,
       userId,
     );
-    await this.revalidatePublicDocumentPath(document);
-    return this.findOne(docId, userId);
+    const revalidation = await this.revalidatePublicDocumentPath(document);
+    const publishedDocument = await this.findOne(docId, userId);
+    return {
+      document: publishedDocument,
+      revalidation,
+    };
   }
 
-  private async revalidatePublicDocumentPath(document: Document): Promise<void> {
+  private async revalidatePublicDocumentPath(
+    document: Document,
+  ): Promise<PublicDocumentRevalidationResult> {
     if (document.visibility !== "public") {
-      return;
-    }
-
-    const url = process.env.PUBLIC_SITE_REVALIDATE_URL;
-    const secret = process.env.PUBLIC_SITE_REVALIDATE_SECRET;
-    if (!url || !secret) {
-      return;
+      this.logger.log(
+        `公开文档缓存失效跳过：文档非公开 docId=${document.docId}, visibility=${document.visibility}`,
+      );
+      return {
+        attempted: false,
+        success: false,
+        skippedReason: "not_public",
+      };
     }
 
     let slug: string;
@@ -560,10 +577,32 @@ export class DocumentsService {
       this.logger.warn(
         `公开文档缓存失效跳过：slug 编码失败 docId=${document.docId}, error=${(error as Error).message}`,
       );
-      return;
+      return {
+        attempted: false,
+        success: false,
+        skippedReason: "invalid_slug",
+        error: (error as Error).message,
+      };
+    }
+
+    const url = process.env.PUBLIC_SITE_REVALIDATE_URL;
+    const secret = process.env.PUBLIC_SITE_REVALIDATE_SECRET;
+    if (!url || !secret) {
+      this.logger.log(
+        `公开文档缓存失效跳过：未配置回调 docId=${document.docId}, hasUrl=${Boolean(url)}, hasSecret=${Boolean(secret)}`,
+      );
+      return {
+        attempted: false,
+        success: false,
+        skippedReason: "missing_config",
+        slug,
+      };
     }
 
     try {
+      this.logger.log(
+        `公开文档缓存失效请求: docId=${document.docId}, slug=${slug}, url=${url}`,
+      );
       const response = await fetch(url, {
         method: "POST",
         headers: {
@@ -575,14 +614,53 @@ export class DocumentsService {
       });
 
       if (!response.ok) {
+        const responseBody = await this.readRevalidateResponseBody(response);
         this.logger.warn(
-          `公开文档缓存失效失败: docId=${document.docId}, slug=${slug}, status=${response.status}`,
+          `公开文档缓存失效失败: docId=${document.docId}, slug=${slug}, status=${response.status}, body=${responseBody}`,
         );
+        return {
+          attempted: true,
+          success: false,
+          slug,
+          status: response.status,
+          responseBody,
+        };
       }
+
+      const responseBody = await this.readRevalidateResponseBody(response);
+      this.logger.log(
+        `公开文档缓存失效成功: docId=${document.docId}, slug=${slug}, status=${response.status || "unknown"}`,
+      );
+      return {
+        attempted: true,
+        success: true,
+        slug,
+        status: response.status,
+        responseBody,
+      };
     } catch (error) {
       this.logger.warn(
-        `公开文档缓存失效失败: docId=${document.docId}, error=${(error as Error).message}`,
+        `公开文档缓存失效失败: docId=${document.docId}, slug=${slug}, url=${url}, error=${(error as Error).message}`,
       );
+      return {
+        attempted: true,
+        success: false,
+        slug,
+        error: (error as Error).message,
+      };
+    }
+  }
+
+  private async readRevalidateResponseBody(response: Response): Promise<string> {
+    if (typeof response.text !== "function") {
+      return "<unavailable>";
+    }
+
+    try {
+      const body = await response.text();
+      return body ? body.slice(0, 500) : "<empty>";
+    } catch (error) {
+      return `<unreadable: ${(error as Error).message}>`;
     }
   }
 

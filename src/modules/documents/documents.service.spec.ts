@@ -233,11 +233,132 @@ describe("DocumentsService", () => {
     );
   });
 
-  it("?????????????????????", async () => {
+  it("公开文档发布成功后调用前端缓存失效接口", async () => {
     process.env.PUBLIC_SITE_REVALIDATE_URL = "http://frontend.test/api/revalidate-doc";
     process.env.PUBLIC_SITE_REVALIDATE_SECRET = "top-secret";
-    const fetchMock = jest.fn().mockResolvedValue({ ok: true });
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200 });
     global.fetch = fetchMock as typeof fetch;
+
+    const document = {
+      docId: "doc_36_abcd1234",
+      workspaceId: "ws_1",
+      head: 5,
+      publishedHead: 0,
+      publishedSnapshotId: null,
+      visibility: "public",
+      status: "draft",
+      updatedBy: "old_user",
+    } as Document;
+    jest.mocked(documentRepository.findOne).mockResolvedValue(document);
+    (service as any).checkDocumentEditPermission = jest.fn().mockResolvedValue(undefined);
+    (service as any).findOne = jest.fn().mockResolvedValue({
+      ...document,
+      publishedHead: 5,
+      publishedSnapshotId: "doc_36_abcd1234@snap@5",
+    });
+    jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
+      snapshotId: "doc_36_abcd1234@snap@5",
+    });
+
+    const docRepo = {
+      findOne: jest.fn().mockResolvedValue({ ...document }),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    const manager = {
+      getRepository: jest.fn().mockReturnValue(docRepo),
+    };
+    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+
+    const result = await service.publish("doc_36_abcd1234", "user_1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://frontend.test/api/revalidate-doc",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "content-type": "application/json",
+          "x-revalidate-secret": "top-secret",
+        }),
+        body: JSON.stringify({ slug: "10-abcd1234" }),
+      }),
+    );
+    expect(result).toMatchObject({
+      document: {
+        docId: "doc_36_abcd1234",
+        publishedHead: 5,
+        publishedSnapshotId: "doc_36_abcd1234@snap@5",
+      },
+      revalidation: {
+        attempted: true,
+        success: true,
+        slug: "10-abcd1234",
+        status: 200,
+      },
+    });
+  });
+
+  it("公开文档发布后缺少缓存失效配置时记录跳过日志", async () => {
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as typeof fetch;
+    const loggerLog = jest.fn();
+    (service as any).logger.log = loggerLog;
+
+    const document = {
+      docId: "doc_36_abcd1234",
+      workspaceId: "ws_1",
+      head: 5,
+      publishedHead: 0,
+      publishedSnapshotId: null,
+      visibility: "public",
+      status: "draft",
+      updatedBy: "old_user",
+    } as Document;
+    jest.mocked(documentRepository.findOne).mockResolvedValue(document);
+    (service as any).checkDocumentEditPermission = jest.fn().mockResolvedValue(undefined);
+    (service as any).findOne = jest.fn().mockResolvedValue({
+      ...document,
+      publishedHead: 5,
+      publishedSnapshotId: "doc_36_abcd1234@snap@5",
+    });
+    jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
+      snapshotId: "doc_36_abcd1234@snap@5",
+    });
+
+    const docRepo = {
+      findOne: jest.fn().mockResolvedValue({ ...document }),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    const manager = {
+      getRepository: jest.fn().mockReturnValue(docRepo),
+    };
+    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+
+    const result = await service.publish("doc_36_abcd1234", "user_1");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(loggerLog).toHaveBeenCalledWith(
+      expect.stringContaining("公开文档缓存失效跳过：未配置回调"),
+    );
+    expect(result).toMatchObject({
+      document: {
+        docId: "doc_36_abcd1234",
+        publishedHead: 5,
+      },
+      revalidation: {
+        attempted: false,
+        success: false,
+        skippedReason: "missing_config",
+        slug: "10-abcd1234",
+      },
+    });
+  });
+
+  it("公开文档发布后缓存失效成功时记录生产可见日志", async () => {
+    process.env.PUBLIC_SITE_REVALIDATE_URL = "http://frontend.test/api/revalidate-doc";
+    process.env.PUBLIC_SITE_REVALIDATE_SECRET = "top-secret";
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 }) as typeof fetch;
+    const loggerLog = jest.fn();
+    (service as any).logger.log = loggerLog;
 
     const document = {
       docId: "doc_36_abcd1234",
@@ -271,20 +392,12 @@ describe("DocumentsService", () => {
 
     await service.publish("doc_36_abcd1234", "user_1");
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://frontend.test/api/revalidate-doc",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          "content-type": "application/json",
-          "x-revalidate-secret": "top-secret",
-        }),
-        body: JSON.stringify({ slug: "10-abcd1234" }),
-      }),
+    expect(loggerLog).toHaveBeenCalledWith(
+      "公开文档缓存失效成功: docId=doc_36_abcd1234, slug=10-abcd1234, status=200",
     );
   });
 
-  it("??????????????????", async () => {
+  it("前端缓存失效失败时不影响发布成功", async () => {
     process.env.PUBLIC_SITE_REVALIDATE_URL = "http://frontend.test/api/revalidate-doc";
     process.env.PUBLIC_SITE_REVALIDATE_SECRET = "top-secret";
     global.fetch = jest.fn().mockRejectedValue(new Error("network")) as typeof fetch;
@@ -320,8 +433,70 @@ describe("DocumentsService", () => {
     jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
 
     await expect(service.publish("doc_36_abcd1234", "user_1")).resolves.toMatchObject({
+      document: {
+        publishedHead: 5,
+        publishedSnapshotId: "doc_36_abcd1234@snap@5",
+      },
+      revalidation: {
+        attempted: true,
+        success: false,
+        slug: "10-abcd1234",
+        error: "network",
+      },
+    });
+  });
+
+  it("前端缓存失效返回非 2xx 时发布响应包含状态码和前端响应体", async () => {
+    process.env.PUBLIC_SITE_REVALIDATE_URL = "http://frontend.test/api/revalidate-doc";
+    process.env.PUBLIC_SITE_REVALIDATE_SECRET = "top-secret";
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: jest.fn().mockResolvedValue(JSON.stringify({ success: false, error: "Unauthorized" })),
+    }) as typeof fetch;
+
+    const document = {
+      docId: "doc_36_abcd1234",
+      workspaceId: "ws_1",
+      head: 5,
+      publishedHead: 0,
+      publishedSnapshotId: null,
+      visibility: "public",
+      status: "draft",
+      updatedBy: "old_user",
+    } as Document;
+    jest.mocked(documentRepository.findOne).mockResolvedValue(document);
+    (service as any).checkDocumentEditPermission = jest.fn().mockResolvedValue(undefined);
+    (service as any).findOne = jest.fn().mockResolvedValue({
+      ...document,
       publishedHead: 5,
       publishedSnapshotId: "doc_36_abcd1234@snap@5",
+    });
+    jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
+      snapshotId: "doc_36_abcd1234@snap@5",
+    });
+
+    const docRepo = {
+      findOne: jest.fn().mockResolvedValue({ ...document }),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    const manager = {
+      getRepository: jest.fn().mockReturnValue(docRepo),
+    };
+    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+
+    await expect(service.publish("doc_36_abcd1234", "user_1")).resolves.toMatchObject({
+      document: {
+        publishedHead: 5,
+        publishedSnapshotId: "doc_36_abcd1234@snap@5",
+      },
+      revalidation: {
+        attempted: true,
+        success: false,
+        slug: "10-abcd1234",
+        status: 401,
+        responseBody: '{"success":false,"error":"Unauthorized"}',
+      },
     });
   });
 
