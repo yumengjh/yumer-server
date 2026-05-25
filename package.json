@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "pnpm run start:dev",
     "build": "nest build",
+    "build:bundle": "ncc build dist/main.js -o dist-bundle --minify",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -117,6 +118,7 @@
     "@types/sanitize-html": "2.16.1",
     "@types/supertest": "^6.0.2",
     "@types/uuid": "^9.0.7",
+    "@vercel/ncc": "^0.38.4",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",
