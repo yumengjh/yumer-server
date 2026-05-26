@@ -12,6 +12,7 @@ import { BlockVersion } from "../../entities/block-version.entity";
 import { BlockRenderCache } from "../../entities/block-render-cache.entity";
 import { DocRevision } from "../../entities/doc-revision.entity";
 import { DocSnapshot } from "../../entities/doc-snapshot.entity";
+import { DocDraft } from "../../entities/doc-draft.entity";
 import { Tag } from "../../entities/tag.entity";
 import { User } from "../../entities/user.entity";
 import { WorkspacesModule } from "../workspaces/workspaces.module";
@@ -26,6 +27,7 @@ import { ActivitiesModule } from "../activities/activities.module";
       BlockRenderCache,
       DocRevision,
       DocSnapshot,
+      DocDraft,
       Tag,
       User,
     ]),
