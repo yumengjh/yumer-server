@@ -1621,7 +1621,7 @@ export class DocumentsService {
    * 获取文档待创建版本的数量
    */
   async getPendingVersions(docId: string, userId: string) {
-    await this.findOne(docId, userId);
+    await this.assertAccessWithoutViewIncrement(docId, userId);
     const draft = await this.documentDraftService.findByDocId(docId);
 
     return {

@@ -22,7 +22,12 @@ describe("DocumentsService", () => {
   const userRepository = {
     find: jest.fn(),
   } as unknown as Repository<User>;
-  const versionControlService = {} as VersionControlService;
+  const versionControlService = {
+    getPendingVersionCount: jest.fn(),
+    getPendingDraftState: jest.fn(),
+    recordPendingVersion: jest.fn(),
+    clearPendingVersions: jest.fn(),
+  } as unknown as VersionControlService;
   const documentSnapshotService = {
     createSnapshotForRevision: jest.fn(),
     getSnapshotMapForVersion: jest.fn(),
@@ -1140,4 +1145,55 @@ describe("DocumentsService", () => {
     });
   });
 
+  it("pending versions endpoint does not increment view count", async () => {
+    const document = {
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      status: "draft",
+    } as Document;
+    jest.mocked(documentRepository.findOne).mockResolvedValue(document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked((versionControlService as any).getPendingVersionCount).mockReturnValue(3);
+
+    const result = await service.getPendingVersions("doc_1", "user_1");
+
+    expect(result).toEqual({
+      docId: "doc_1",
+      pendingCount: 3,
+      hasPending: true,
+    });
+    expect(documentRepository.save).not.toHaveBeenCalled();
+  });
+
+  it("export source uses the latest committed head without view count side effects", async () => {
+    const document = {
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      status: "draft",
+      head: 4,
+    } as Document;
+    jest.mocked(documentRepository.findOne).mockResolvedValue(document);
+    const getContentByDocument = jest
+      .spyOn(service as any, "getContentByDocument")
+      .mockResolvedValue({
+        docId: "doc_1",
+        docVer: 4,
+        title: "Doc",
+        tree: { blockId: "root", type: "root", payload: {}, children: [] },
+      });
+
+    const result = await service.getExportSource("doc_1", "user_1");
+
+    expect(getContentByDocument).toHaveBeenCalledWith(
+      document,
+      4,
+      undefined,
+      undefined,
+      undefined,
+      "all",
+    );
+    expect(result.document).toBe(document);
+    expect(result.content.docVer).toBe(4);
+    expect(documentRepository.save).not.toHaveBeenCalled();
+  });
 });

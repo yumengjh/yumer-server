@@ -1,3 +1,4 @@
+import { StreamableFile } from "@nestjs/common";
 import { DocumentsController } from "./documents.controller";
 import { SITE_PUBLIC_ANONYMOUS_USER_ID } from "../../common/decorators/public.decorator";
 
@@ -8,12 +9,18 @@ describe("DocumentsController", () => {
     getEditContent: jest.fn(),
     discardDraft: jest.fn(),
   };
+  const documentExportService = {
+    exportDocument: jest.fn(),
+  };
 
   let controller: DocumentsController;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    controller = new DocumentsController(documentsService as any);
+    controller = new DocumentsController(
+      documentsService as any,
+      documentExportService as any,
+    );
   });
 
   it("文档内容接口将渲染诊断写入响应头并从响应体移除", async () => {
@@ -126,5 +133,37 @@ describe("DocumentsController", () => {
       discarded: true,
       fallbackSource: "head",
     });
+  });
+
+  it("瀵煎嚭鎺ュ彛浼氳繑鍥炰笅杞藉ご骞惰皟鐢ㄥ鍑烘湇鍔?, async () => {
+    documentExportService.exportDocument.mockResolvedValue({
+      buffer: Buffer.from("hello"),
+      filename: "Demo-v2.md",
+      contentType: "text/markdown; charset=utf-8",
+    });
+    const response = { setHeader: jest.fn() };
+
+    const result = await controller.exportDocument(
+      "doc_1",
+      { format: "md" } as any,
+      { userId: "user_1" },
+      response as any,
+    );
+
+    expect(documentExportService.exportDocument).toHaveBeenCalledWith(
+      "doc_1",
+      "md",
+      "user_1",
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      "Content-Type",
+      "text/markdown; charset=utf-8",
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      "Content-Disposition",
+      'attachment; filename="Demo-v2.md"',
+    );
+    expect(response.setHeader).toHaveBeenCalledWith("Content-Length", "5");
+    expect(result).toBeInstanceOf(StreamableFile);
   });
 });

@@ -11,9 +11,17 @@ import {
   HttpCode,
   HttpStatus,
   Res,
+  StreamableFile,
 } from "@nestjs/common";
 import type { Response } from "express";
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiParam } from "@nestjs/swagger";
+import {
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+  ApiResponse,
+  ApiParam,
+  ApiQuery,
+} from "@nestjs/swagger";
 import { DocumentsService, type ContentRenderDiagnostics } from "./documents.service";
 import { CreateDocumentDto } from "./dto/create-document.dto";
 import { UpdateDocumentDto } from "./dto/update-document.dto";
@@ -27,18 +35,23 @@ import { CommitVersionDto } from "./dto/commit-version.dto";
 import { QueryContentDto } from "./dto/query-content.dto";
 import { QueryEditContentDto } from "./dto/query-edit-content.dto";
 import { EditContentResponseDto } from "./dto/edit-content-response.dto";
+import { ExportDocumentDto } from "./dto/export-document.dto";
 import { SyncStateResponseDto } from "./dto/sync-state-response.dto";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import { AuditLog } from "../../common/decorators/audit-log.decorator";
 import { SitePublic, isSitePublicAnonymousUserId } from "../../common/decorators/public.decorator";
+import { DocumentExportService } from "./services/document-export.service";
 
 @ApiTags("documents")
 @Controller("documents")
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class DocumentsController {
-  constructor(private readonly documentsService: DocumentsService) {}
+  constructor(
+    private readonly documentsService: DocumentsService,
+    private readonly documentExportService: DocumentExportService,
+  ) {}
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
@@ -298,6 +311,35 @@ export class DocumentsController {
     @CurrentUser() user: any,
   ) {
     return this.documentsService.commitVersion(docId, commitDto.message, user.userId);
+  }
+
+  @Get(":docId/export")
+  @ApiOperation({ summary: "瀵煎嚭鏂囨。" })
+  @ApiParam({ name: "docId", description: "鏂囨。ID" })
+  @ApiQuery({ name: "format", required: false, enum: ["md", "html", "pdf"] })
+  @ApiResponse({ status: 200, description: "瀵煎嚭鎴愬姛" })
+  @ApiResponse({ status: 404, description: "鏂囨。涓嶅瓨鍦? })
+  @ApiResponse({ status: 403, description: "娌℃湁鏉冮檺" })
+  async exportDocument(
+    @Param("docId") docId: string,
+    @Query() queryDto: ExportDocumentDto,
+    @CurrentUser() user: any,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const artifact = await this.documentExportService.exportDocument(
+      docId,
+      queryDto.format || "md",
+      user.userId,
+    );
+
+    response.setHeader("Content-Type", artifact.contentType);
+    response.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${artifact.filename.replace(/"/g, '\\"')}"`,
+    );
+    response.setHeader("Content-Length", artifact.buffer.length.toString());
+
+    return new StreamableFile(artifact.buffer);
   }
 
   @Get(":docId/pending-versions")

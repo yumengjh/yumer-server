@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { DocumentsController } from "./documents.controller";
 import { DocumentsService } from "./documents.service";
+import { DocumentExportService } from "./services/document-export.service";
 import { DocumentSnapshotService } from "./services/document-snapshot.service";
 import { DocumentHtmlRendererService } from "./services/document-html-renderer.service";
 import { DocumentRenderService } from "./services/document-render.service";
@@ -38,6 +39,7 @@ import { ActivitiesModule } from "../activities/activities.module";
   controllers: [DocumentsController],
   providers: [
     DocumentsService,
+    DocumentExportService,
     VersionControlService,
     DocumentDraftService,
     DocumentSnapshotService,
@@ -46,6 +48,7 @@ import { ActivitiesModule } from "../activities/activities.module";
   ],
   exports: [
     DocumentsService,
+    DocumentExportService,
     VersionControlService,
     DocumentDraftService,
     DocumentSnapshotService,
