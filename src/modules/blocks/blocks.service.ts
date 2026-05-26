@@ -765,6 +765,7 @@ export class BlocksService {
               const created = await this.handleBatchCreate(
                 operation,
                 batchBlockDto.docId,
+                acceptedBatchId,
                 userId,
                 now,
                 manager,
@@ -870,6 +871,10 @@ export class BlocksService {
       this.versionControlService.recordPendingVersion(batchBlockDto.docId);
     }
 
+    this.logger.log(
+      `sync batch: docId=${batchBlockDto.docId}, clientBatchId=${acceptedBatchId}, source=${batchBlockDto.source ?? "unknown"}, operations=${batchBlockDto.operations.length}, serverHead=${txResult.serverHead}`,
+    );
+
     const doc = await this.documentRepository.findOne({
       where: { docId: batchBlockDto.docId },
       select: ["workspaceId"],
@@ -897,6 +902,7 @@ export class BlocksService {
   private async handleBatchCreate(
     operation: BatchCreateOperation,
     docId: string,
+    clientBatchId: string,
     userId: string,
     now: number,
     manager: EntityManager,
@@ -926,6 +932,25 @@ export class BlocksService {
       }
     }
 
+    const existing = await this.findExistingCreateByClientIdentity(
+      manager,
+      docId,
+      clientBatchId,
+      operation.clientId,
+    );
+    if (existing) {
+      return { blockId: existing.blockId };
+    }
+
+    const payload = {
+      ...(operation.data.payload as Record<string, unknown>),
+      attrs: {
+        ...(((operation.data.payload as Record<string, unknown>).attrs as Record<string, unknown> | undefined) ?? {}),
+        clientBatchId,
+        ...(operation.clientId ? { clientId: operation.clientId } : {}),
+      },
+    };
+
     const blockId = generateBlockId();
     const sortKey =
       operation.data.sortKey || (await this.generateSortKey(docId, parentId, manager));
@@ -944,7 +969,7 @@ export class BlocksService {
 
     await manager.save(Block, block);
 
-    const hash = this.calculateHash(operation.data.payload);
+    const hash = this.calculateHash(payload);
     const blockVersion = manager.create(BlockVersion, {
       versionId: generateVersionId(blockId, 1),
       docId,
@@ -956,15 +981,39 @@ export class BlocksService {
       sortKey,
       indent: operation.data.indent || 0,
       collapsed: operation.data.collapsed || false,
-      payload: operation.data.payload,
+      payload,
       hash,
-      plainText: this.extractPlainText(operation.data.payload),
+      plainText: this.extractPlainText(payload),
       refs: [],
     });
 
     await manager.save(BlockVersion, blockVersion);
 
     return { blockId };
+  }
+
+  private async findExistingCreateByClientIdentity(
+    manager: EntityManager,
+    docId: string,
+    clientBatchId: string | undefined,
+    clientId: string | undefined,
+  ): Promise<BlockVersion | null> {
+    if (!clientBatchId || !clientId) return null;
+
+    const latestVersions = await manager
+      .getRepository(BlockVersion)
+      .createQueryBuilder("bv")
+      .innerJoin(Block, "b", "b.blockId = bv.blockId AND b.latestVer = bv.ver")
+      .where("bv.docId = :docId", { docId })
+      .andWhere("b.isDeleted = false")
+      .getMany();
+
+    return (
+      latestVersions.find((version) => {
+        const attrs = (version.payload as { attrs?: Record<string, unknown> } | undefined)?.attrs;
+        return attrs?.clientBatchId === clientBatchId && attrs?.clientId === clientId;
+      }) ?? null
+    );
   }
 
   private async handleBatchUpdate(
