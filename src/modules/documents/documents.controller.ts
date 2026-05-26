@@ -25,6 +25,8 @@ import { RevertVersionDto } from "./dto/revert-version.dto";
 import { SearchQueryDto } from "./dto/search-query.dto";
 import { CommitVersionDto } from "./dto/commit-version.dto";
 import { QueryContentDto } from "./dto/query-content.dto";
+import { QueryEditContentDto } from "./dto/query-edit-content.dto";
+import { EditContentResponseDto } from "./dto/edit-content-response.dto";
 import { SyncStateResponseDto } from "./dto/sync-state-response.dto";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -117,6 +119,24 @@ export class DocumentsController {
     return this.withRenderDiagnosticsHeaders(result, response);
   }
 
+  @Get(":docId/edit-content")
+  @ApiOperation({ summary: "获取编辑器内容（优先返回草稿）" })
+  @ApiParam({ name: "docId", description: "文档ID" })
+  @ApiResponse({ status: 200, description: "获取成功", type: EditContentResponseDto })
+  async getEditContent(
+    @Param("docId") docId: string,
+    @Query() queryDto: QueryEditContentDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.documentsService.getEditContent(
+      docId,
+      user.userId,
+      queryDto.maxDepth,
+      queryDto.startBlockId,
+      queryDto.limit,
+    );
+  }
+
   private withRenderDiagnosticsHeaders(result: unknown, response: Response) {
     if (!result || typeof result !== "object") {
       return result;
@@ -199,6 +219,15 @@ export class DocumentsController {
   @ApiResponse({ status: 403, description: "没有权限" })
   async remove(@Param("docId") docId: string, @CurrentUser() user: any) {
     return this.documentsService.remove(docId, user.userId);
+  }
+
+  @Delete(":docId/draft")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "取消当前文档草稿" })
+  @ApiParam({ name: "docId", description: "文档ID" })
+  @ApiResponse({ status: 200, description: "取消成功" })
+  async discardDraft(@Param("docId") docId: string, @CurrentUser() user: any) {
+    return this.documentsService.discardDraft(docId, user.userId);
   }
 
   @Get(":docId/revisions")

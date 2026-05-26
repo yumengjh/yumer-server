@@ -17,6 +17,7 @@ import { Tag } from "../../entities/tag.entity";
 import { User } from "../../entities/user.entity";
 import { WorkspacesService } from "../workspaces/workspaces.service";
 import { DocumentSnapshotService } from "./services/document-snapshot.service";
+import { DocumentDraftService } from "./services/document-draft.service";
 import { VersionControlService } from "./services/version-control.service";
 import {
   generateDocId,
@@ -74,6 +75,7 @@ export class DocumentsService {
     private documentRepository: Repository<Document>,
     private versionControlService: VersionControlService,
     private documentSnapshotService: DocumentSnapshotService,
+    private documentDraftService: DocumentDraftService,
     @InjectRepository(Block)
     private blockRepository: Repository<Block>,
     @InjectRepository(BlockVersion)
@@ -870,6 +872,91 @@ export class DocumentsService {
     return this.getContentByDocument(document, docVer, maxDepth, startBlockId, limit, mode);
   }
 
+  async getEditContent(
+    docId: string,
+    userId: string,
+    maxDepth?: number,
+    startBlockId?: string,
+    limit?: number,
+  ) {
+    const document = await this.findOne(docId, userId);
+    const draft = await this.documentDraftService.findByDocId(docId);
+
+    if (draft) {
+      const result = await this.buildContentTreeFromVersionMap(
+        docId,
+        document.rootBlockId,
+        draft.blockVersionMap,
+        maxDepth,
+        startBlockId,
+        limit || 1000,
+      );
+
+      return {
+        docId,
+        source: "draft" as const,
+        head: document.head,
+        publishedHead: document.publishedHead,
+        draft: {
+          exists: true,
+          draftId: draft.draftId,
+          baseDocVer: draft.baseDocVer,
+          updatedAt: new Date(draft.updatedAt).toISOString(),
+          updatedBy: draft.updatedBy,
+        },
+        lock: {
+          locked: Boolean(draft.lockOwnerUserId),
+          lockOwnerUserId: draft.lockOwnerUserId,
+          lockExpiresAt:
+            draft.lockExpiresAt == null ? null : new Date(draft.lockExpiresAt).toISOString(),
+        },
+        tree: result.tree,
+        pagination: {
+          totalBlocks: result.totalBlocks,
+          returnedBlocks: result.returnedBlocks,
+          hasMore: result.hasMore,
+          ...(result.nextStartBlockId ? { nextStartBlockId: result.nextStartBlockId } : {}),
+        },
+      };
+    }
+
+    const headContent = await this.getContentByDocument(
+      document,
+      document.head,
+      maxDepth,
+      startBlockId,
+      limit,
+      "json",
+    );
+
+    return {
+      docId,
+      source: "head" as const,
+      head: document.head,
+      publishedHead: document.publishedHead,
+      draft: {
+        exists: false,
+        draftId: null,
+        baseDocVer: null,
+        updatedAt: null,
+        updatedBy: null,
+      },
+      lock: {
+        locked: false,
+        lockOwnerUserId: null,
+        lockExpiresAt: null,
+      },
+      tree: headContent.tree,
+      pagination: headContent.pagination,
+    };
+  }
+
+  async discardDraft(docId: string, userId: string) {
+    const document = await this.findOne(docId, userId);
+    await this.checkDocumentEditPermission(document, userId);
+    return this.documentDraftService.discardDraft(docId);
+  }
+
   async findAllSitePublic(queryDto: QueryDocumentsDto) {
     return this.findAllForSitePublic(queryDto);
   }
@@ -1509,23 +1596,7 @@ export class DocumentsService {
   async commitVersion(docId: string, message: string | undefined, userId: string) {
     const document = await this.findOne(docId, userId);
     await this.checkDocumentEditPermission(document, userId);
-
-    // 获取待创建版本的数量
-    const pendingCount = this.versionControlService.getPendingVersionCount(docId);
-
-    if (pendingCount === 0) {
-      throw new BadRequestException("没有待创建的版本，无需提交");
-    }
-
-    // 创建版本
-    const newVersion = await this.versionControlService.createVersion(docId, userId, message);
-
-    return {
-      docId,
-      version: newVersion,
-      pendingOperations: pendingCount,
-      message: message || `提交 ${pendingCount} 个待处理操作`,
-    };
+    return this.documentDraftService.commitDraft(docId, userId, message);
   }
 
   /**
@@ -1533,12 +1604,12 @@ export class DocumentsService {
    */
   async getPendingVersions(docId: string, userId: string) {
     await this.findOne(docId, userId);
-    const pendingCount = this.versionControlService.getPendingVersionCount(docId);
+    const draft = await this.documentDraftService.findByDocId(docId);
 
     return {
       docId,
-      pendingCount,
-      hasPending: pendingCount > 0,
+      pendingCount: draft ? 1 : 0,
+      hasPending: Boolean(draft),
     };
   }
 
@@ -1566,8 +1637,9 @@ export class DocumentsService {
 
     await this.checkDocumentAccess(document as Document, userId);
 
+    const draft = await this.documentDraftService.findByDocId(docId);
     const { pendingCount, hasPendingDraft } =
-      this.versionControlService.getPendingDraftState(docId);
+      this.versionControlService.getPendingDraftStateFromDraft(Boolean(draft));
 
     return {
       docId: document.docId,
@@ -2385,6 +2457,17 @@ export class DocumentsService {
 
       const bv = byBlock.get(blockId);
       if (!bv) return null;
+
+      const payloadAttrs =
+        bv.payload &&
+        typeof bv.payload === "object" &&
+        "attrs" in bv.payload &&
+        typeof (bv.payload as { attrs?: unknown }).attrs === "object"
+          ? ((bv.payload as { attrs?: Record<string, unknown> }).attrs ?? {})
+          : {};
+      if (payloadAttrs.deleted === true) {
+        return null;
+      }
 
       // 如果指定了 startBlockId，检查是否应该开始返回
       if (startBlockId && !shouldStart) {

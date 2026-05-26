@@ -71,6 +71,15 @@ export class VersionControlService implements OnModuleDestroy {
     };
   }
 
+  getPendingDraftStateFromDraft(
+    draftExists: boolean,
+  ): { pendingCount: number; hasPendingDraft: boolean } {
+    return {
+      pendingCount: draftExists ? 1 : 0,
+      hasPendingDraft: draftExists,
+    };
+  }
+
   /**
    * 创建文档版本（立即创建）
    * @param docId 文档ID

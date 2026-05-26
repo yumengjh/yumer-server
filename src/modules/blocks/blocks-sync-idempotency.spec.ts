@@ -118,11 +118,15 @@ function createBlocksServiceWithInMemoryRepositories() {
   const service = new BlocksService(
     {} as BlocksServiceConstructorArgs[0],
     {} as BlocksServiceConstructorArgs[1],
-    { recordPendingVersion: jest.fn() } as unknown as BlocksServiceConstructorArgs[2],
-    { createSnapshotForRevision: jest.fn() } as unknown as BlocksServiceConstructorArgs[3],
-    { findOne: jest.fn().mockResolvedValue({ workspaceId: "workspace_1" }) } as unknown as BlocksServiceConstructorArgs[4],
-    dataSource as unknown as BlocksServiceConstructorArgs[5],
-    { assertAccessWithoutViewIncrement: jest.fn().mockResolvedValue(undefined) } as unknown as BlocksServiceConstructorArgs[6],
+    { createSnapshotForRevision: jest.fn() } as unknown as BlocksServiceConstructorArgs[2],
+    { findOne: jest.fn().mockResolvedValue({ workspaceId: "workspace_1" }) } as unknown as BlocksServiceConstructorArgs[3],
+    dataSource as unknown as BlocksServiceConstructorArgs[4],
+    { assertAccessWithoutViewIncrement: jest.fn().mockResolvedValue(undefined) } as unknown as BlocksServiceConstructorArgs[5],
+    {
+      ensureDraftForMutation: jest.fn().mockResolvedValue({ docId: "doc_1", draftId: "draft_1" }),
+      pointBlockToVersion: jest.fn().mockResolvedValue(undefined),
+      pointBlockToDeletedVersion: jest.fn().mockResolvedValue(undefined),
+    } as unknown as BlocksServiceConstructorArgs[6],
     { record: jest.fn().mockResolvedValue(undefined) } as unknown as BlocksServiceConstructorArgs[7],
   );
 

@@ -5,6 +5,7 @@ import { DocumentsService } from "./documents.service";
 import { DocumentSnapshotService } from "./services/document-snapshot.service";
 import { DocumentHtmlRendererService } from "./services/document-html-renderer.service";
 import { DocumentRenderService } from "./services/document-render.service";
+import { DocumentDraftService } from "./services/document-draft.service";
 import { VersionControlService } from "./services/version-control.service";
 import { Document } from "../../entities/document.entity";
 import { Block } from "../../entities/block.entity";
@@ -12,6 +13,7 @@ import { BlockVersion } from "../../entities/block-version.entity";
 import { BlockRenderCache } from "../../entities/block-render-cache.entity";
 import { DocRevision } from "../../entities/doc-revision.entity";
 import { DocSnapshot } from "../../entities/doc-snapshot.entity";
+import { DocDraft } from "../../entities/doc-draft.entity";
 import { Tag } from "../../entities/tag.entity";
 import { User } from "../../entities/user.entity";
 import { WorkspacesModule } from "../workspaces/workspaces.module";
@@ -26,6 +28,7 @@ import { ActivitiesModule } from "../activities/activities.module";
       BlockRenderCache,
       DocRevision,
       DocSnapshot,
+      DocDraft,
       Tag,
       User,
     ]),
@@ -36,6 +39,7 @@ import { ActivitiesModule } from "../activities/activities.module";
   providers: [
     DocumentsService,
     VersionControlService,
+    DocumentDraftService,
     DocumentSnapshotService,
     DocumentHtmlRendererService,
     DocumentRenderService,
@@ -43,6 +47,7 @@ import { ActivitiesModule } from "../activities/activities.module";
   exports: [
     DocumentsService,
     VersionControlService,
+    DocumentDraftService,
     DocumentSnapshotService,
     DocumentRenderService,
   ],

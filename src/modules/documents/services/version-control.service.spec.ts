@@ -50,6 +50,17 @@ describe("VersionControlService", () => {
     });
   });
 
+  it("maps draft existence to compatibility pending state", () => {
+    expect((service as any).getPendingDraftStateFromDraft(true)).toEqual({
+      pendingCount: 1,
+      hasPendingDraft: true,
+    });
+    expect((service as any).getPendingDraftStateFromDraft(false)).toEqual({
+      pendingCount: 0,
+      hasPendingDraft: false,
+    });
+  });
+
   it("creates a matching snapshot when committing a pending document version", async () => {
     service.recordPendingVersion("doc_1");
 

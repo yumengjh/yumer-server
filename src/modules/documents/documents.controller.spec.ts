@@ -5,6 +5,8 @@ describe("DocumentsController", () => {
   const documentsService = {
     getContent: jest.fn(),
     getContentSitePublic: jest.fn(),
+    getEditContent: jest.fn(),
+    discardDraft: jest.fn(),
   };
 
   let controller: DocumentsController;
@@ -86,5 +88,43 @@ describe("DocumentsController", () => {
 
     expect(response.setHeader).toHaveBeenCalledWith("X-Yuediter-Render-Mode", "cache");
     expect(response.setHeader).toHaveBeenCalledWith("X-Yuediter-Render-Cache", "hit");
+  });
+  it("returns draft-backed edit content when a draft exists", async () => {
+    documentsService.getEditContent.mockResolvedValue({
+      docId: "doc_1",
+      source: "draft",
+      head: 3,
+      publishedHead: 2,
+      draft: { exists: true, draftId: "draft_1", baseDocVer: 3 },
+      lock: { locked: false, lockOwnerUserId: null, lockExpiresAt: null },
+      tree: { blockId: "root_1", type: "root", children: [] },
+      pagination: { totalBlocks: 1, returnedBlocks: 1, hasMore: false },
+    });
+
+    await expect(
+      controller.getEditContent("doc_1", {} as any, {
+        userId: "user_1",
+      }),
+    ).resolves.toMatchObject({
+      source: "draft",
+    });
+  });
+
+  it("discards a draft idempotently", async () => {
+    documentsService.discardDraft.mockResolvedValue({
+      docId: "doc_1",
+      discarded: true,
+      fallbackSource: "head",
+    });
+
+    await expect(
+      controller.discardDraft("doc_1", {
+        userId: "user_1",
+      }),
+    ).resolves.toEqual({
+      docId: "doc_1",
+      discarded: true,
+      fallbackSource: "head",
+    });
   });
 });
