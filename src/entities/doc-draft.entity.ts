@@ -26,7 +26,7 @@ export class DocDraft {
   @Column()
   baseDocVer: number;
 
-  @Column({ nullable: true, length: 150 })
+  @Column({ type: "varchar", nullable: true, length: 150 })
   baseSnapshotId: string | null;
 
   @Column({ type: isSqlite() ? "simple-json" : "jsonb" })
@@ -47,7 +47,7 @@ export class DocDraft {
   @Column({ type: "bigint" })
   updatedAt: number;
 
-  @Column({ nullable: true })
+  @Column({ type: "varchar", nullable: true })
   lockOwnerUserId: string | null;
 
   @Column({ type: "bigint", nullable: true })
@@ -59,6 +59,6 @@ export class DocDraft {
   @Column({ type: "bigint", nullable: true })
   lockExpiresAt: number | null;
 
-  @Column({ nullable: true, length: 100 })
+  @Column({ type: "varchar", nullable: true, length: 100 })
   lockToken: string | null;
 }
