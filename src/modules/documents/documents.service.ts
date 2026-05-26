@@ -2458,6 +2458,17 @@ export class DocumentsService {
       const bv = byBlock.get(blockId);
       if (!bv) return null;
 
+      const payloadAttrs =
+        bv.payload &&
+        typeof bv.payload === "object" &&
+        "attrs" in bv.payload &&
+        typeof (bv.payload as { attrs?: unknown }).attrs === "object"
+          ? ((bv.payload as { attrs?: Record<string, unknown> }).attrs ?? {})
+          : {};
+      if (payloadAttrs.deleted === true) {
+        return null;
+      }
+
       // 如果指定了 startBlockId，检查是否应该开始返回
       if (startBlockId && !shouldStart) {
         if (blockId === startBlockId) {

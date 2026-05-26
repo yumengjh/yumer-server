@@ -2,7 +2,6 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
-  Inject,
   forwardRef,
   Logger,
 } from "@nestjs/common";
@@ -14,8 +13,8 @@ import { BlockVersion } from "../../entities/block-version.entity";
 import { Document } from "../../entities/document.entity";
 import { DocRevision } from "../../entities/doc-revision.entity";
 import { DocumentsService } from "../documents/documents.service";
+import { DocumentDraftService } from "../documents/services/document-draft.service";
 import { DocumentSnapshotService } from "../documents/services/document-snapshot.service";
-import { VersionControlService } from "../documents/services/version-control.service";
 import { generateBlockId, generateVersionId } from "../../common/utils/id-generator.util";
 import { generateSortKey as generateSortKeyUtil } from "../../common/utils/sort-key.util";
 import { CreateBlockDto } from "./dto/create-block.dto";
@@ -43,14 +42,13 @@ export class BlocksService {
     private blockRepository: Repository<Block>,
     @InjectRepository(BlockVersion)
     private blockVersionRepository: Repository<BlockVersion>,
-    @Inject(forwardRef(() => VersionControlService))
-    private versionControlService: VersionControlService,
     private documentSnapshotService: DocumentSnapshotService,
     @InjectRepository(Document)
     private documentRepository: Repository<Document>,
     @InjectDataSource()
     private dataSource: DataSource,
     private documentsService: DocumentsService,
+    private documentDraftService: DocumentDraftService,
     private activitiesService: ActivitiesService,
   ) {}
 
@@ -134,8 +132,16 @@ export class BlocksService {
       const shouldCreateVersion = createBlockDto.createVersion !== false; // 默认为 true
       if (shouldCreateVersion) {
         await this.incrementDocumentHead(createBlockDto.docId, userId, manager);
+      } else {
+        await this.documentDraftService.ensureDraftForMutation(createBlockDto.docId, userId, manager);
+        await this.documentDraftService.pointBlockToVersion(
+          createBlockDto.docId,
+          blockId,
+          1,
+          userId,
+          manager,
+        );
       }
-      // 如果 shouldCreateVersion 为 false，在事务外记录待创建版本
 
       return {
         blockId,
@@ -146,10 +152,6 @@ export class BlocksService {
       };
     });
 
-    // 事务成功后，如果 createVersion 为 false，记录待创建版本
-    if (createBlockDto.createVersion === false) {
-      this.versionControlService.recordPendingVersion(createBlockDto.docId);
-    }
     const doc = await this.documentRepository.findOne({
       where: { docId: createBlockDto.docId },
       select: ["workspaceId"],
@@ -268,6 +270,15 @@ export class BlocksService {
           const shouldCreateVersion = updateBlockDto.createVersion !== false;
           if (shouldCreateVersion) {
             await this.incrementDocumentHead(lockedBlock.docId, userId, manager);
+          } else {
+            await this.documentDraftService.ensureDraftForMutation(lockedBlock.docId, userId, manager);
+            await this.documentDraftService.pointBlockToVersion(
+              lockedBlock.docId,
+              blockId,
+              newVer,
+              userId,
+              manager,
+            );
           }
 
           return {
@@ -279,10 +290,6 @@ export class BlocksService {
       { blockId, userId },
     );
 
-    // 事务成功后，如果 createVersion 为 false，记录待创建版本
-    if (updateBlockDto.createVersion === false) {
-      this.versionControlService.recordPendingVersion(docId);
-    }
     const doc = await this.documentRepository.findOne({
       where: { docId },
       select: ["workspaceId"],
@@ -514,8 +521,16 @@ export class BlocksService {
       const shouldCreateVersion = moveBlockDto.createVersion !== false; // 默认为 true
       if (shouldCreateVersion) {
         await this.incrementDocumentHead(block.docId, userId, manager);
+      } else {
+        await this.documentDraftService.ensureDraftForMutation(block.docId, userId, manager);
+        await this.documentDraftService.pointBlockToVersion(
+          block.docId,
+          blockId,
+          newVer,
+          userId,
+          manager,
+        );
       }
-      // 如果 shouldCreateVersion 为 false，在事务外记录待创建版本
 
       return {
         blockId,
@@ -525,10 +540,6 @@ export class BlocksService {
       };
     });
 
-    // 事务成功后，如果 createVersion 为 false，记录待创建版本
-    if (moveBlockDto.createVersion === false) {
-      this.versionControlService.recordPendingVersion(block.docId);
-    }
     const doc = await this.documentRepository.findOne({
       where: { docId: block.docId },
       select: ["workspaceId"],
@@ -758,6 +769,12 @@ export class BlocksService {
 
         const results: SyncOperationResultDto[] = [];
         const now = Date.now();
+        const shouldCreateVersion = batchBlockDto.createVersion !== false;
+        const draftMutations: Array<{
+          type: "point" | "deleted";
+          blockId: string;
+          version: number;
+        }> = [];
 
         for (const operation of batchBlockDto.operations) {
           try {
@@ -770,6 +787,13 @@ export class BlocksService {
                 now,
                 manager,
               );
+              if (!shouldCreateVersion) {
+                draftMutations.push({
+                  type: "point",
+                  blockId: created.blockId,
+                  version: created.version,
+                });
+              }
               results.push({
                 operation: BatchOperationType.CREATE,
                 success: true,
@@ -784,6 +808,13 @@ export class BlocksService {
                 now,
                 manager,
               );
+              if (!shouldCreateVersion) {
+                draftMutations.push({
+                  type: "point",
+                  blockId: updated.blockId,
+                  version: updated.version,
+                });
+              }
               results.push({
                 operation: BatchOperationType.UPDATE,
                 success: true,
@@ -796,7 +827,15 @@ export class BlocksService {
                 userId,
                 now,
                 manager,
+                shouldCreateVersion,
               );
+              if (!shouldCreateVersion && removed.version) {
+                draftMutations.push({
+                  type: "deleted",
+                  blockId: removed.blockId,
+                  version: removed.version,
+                });
+              }
               results.push({
                 operation: BatchOperationType.DELETE,
                 success: true,
@@ -810,6 +849,13 @@ export class BlocksService {
                 now,
                 manager,
               );
+              if (!shouldCreateVersion) {
+                draftMutations.push({
+                  type: "point",
+                  blockId: moved.blockId,
+                  version: moved.version,
+                });
+              }
               results.push({
                 operation: BatchOperationType.MOVE,
                 success: true,
@@ -836,9 +882,33 @@ export class BlocksService {
         }
 
         const successCount = results.filter((item) => item.success).length;
-        const shouldCreateVersion = batchBlockDto.createVersion !== false;
         if (shouldCreateVersion && successCount > 0) {
           await this.incrementDocumentHead(batchBlockDto.docId, userId, manager);
+        } else if (!shouldCreateVersion && draftMutations.length > 0) {
+          await this.documentDraftService.ensureDraftForMutation(
+            batchBlockDto.docId,
+            userId,
+            manager,
+          );
+          for (const mutation of draftMutations) {
+            if (mutation.type === "deleted") {
+              await this.documentDraftService.pointBlockToDeletedVersion(
+                batchBlockDto.docId,
+                mutation.blockId,
+                mutation.version,
+                userId,
+                manager,
+              );
+            } else {
+              await this.documentDraftService.pointBlockToVersion(
+                batchBlockDto.docId,
+                mutation.blockId,
+                mutation.version,
+                userId,
+                manager,
+              );
+            }
+          }
         }
 
         const docAfterBatch = await manager.findOne(Document, {
@@ -865,10 +935,6 @@ export class BlocksService {
         conflicts: txResult.conflicts,
         results: [],
       };
-    }
-
-    if (batchBlockDto.createVersion === false && txResult.successCount > 0) {
-      this.versionControlService.recordPendingVersion(batchBlockDto.docId);
     }
 
     this.logger.log(
@@ -906,7 +972,7 @@ export class BlocksService {
     userId: string,
     now: number,
     manager: EntityManager,
-  ): Promise<{ blockId: string }> {
+  ): Promise<{ blockId: string; version: number }> {
     if (operation.data.docId && operation.data.docId !== docId) {
       throw new BadRequestException(
         `Create operation docId mismatch: ${operation.data.docId} !== ${docId}`,
@@ -939,7 +1005,7 @@ export class BlocksService {
       operation.clientId,
     );
     if (existing) {
-      return { blockId: existing.blockId };
+      return { blockId: existing.blockId, version: existing.ver };
     }
 
     const payload = {
@@ -989,7 +1055,7 @@ export class BlocksService {
 
     await manager.save(BlockVersion, blockVersion);
 
-    return { blockId };
+    return { blockId, version: 1 };
   }
 
   private async findExistingCreateByClientIdentity(
@@ -1071,7 +1137,8 @@ export class BlocksService {
     userId: string,
     now: number,
     manager: EntityManager,
-  ): Promise<{ blockId: string }> {
+    shouldCreateVersion: boolean,
+  ): Promise<{ blockId: string; version?: number }> {
     const block = await manager.findOne(Block, {
       where: { blockId: operation.blockId, docId, isDeleted: false },
     });
@@ -1080,12 +1147,56 @@ export class BlocksService {
       throw new NotFoundException(`Block ${operation.blockId} not found`);
     }
 
-    block.isDeleted = true;
-    block.deletedAt = now;
-    block.deletedBy = userId;
+    if (shouldCreateVersion) {
+      block.isDeleted = true;
+      block.deletedAt = now;
+      block.deletedBy = userId;
+      await manager.save(Block, block);
+      return { blockId: operation.blockId };
+    }
+
+    const latestVersion = await manager.findOne(BlockVersion, {
+      where: { docId, blockId: operation.blockId, ver: block.latestVer },
+    });
+
+    if (!latestVersion) {
+      throw new NotFoundException("Block version not found");
+    }
+
+    const newVer = block.latestVer + 1;
+    const deletedPayload = {
+      ...(latestVersion.payload as Record<string, unknown>),
+      attrs: {
+        ...(((latestVersion.payload as Record<string, unknown>).attrs as Record<string, unknown> | undefined) ?? {}),
+        deleted: true,
+      },
+    };
+
+    const blockVersion = manager.create(BlockVersion, {
+      versionId: generateVersionId(operation.blockId, newVer),
+      docId: block.docId,
+      blockId: operation.blockId,
+      ver: newVer,
+      createdAt: now,
+      createdBy: userId,
+      parentId: latestVersion.parentId,
+      sortKey: latestVersion.sortKey,
+      indent: latestVersion.indent,
+      collapsed: latestVersion.collapsed,
+      payload: deletedPayload,
+      hash: this.calculateHash(deletedPayload),
+      plainText: latestVersion.plainText,
+      refs: latestVersion.refs,
+    });
+
+    await manager.save(BlockVersion, blockVersion);
+
+    block.latestVer = newVer;
+    block.latestAt = now;
+    block.latestBy = userId;
     await manager.save(Block, block);
 
-    return { blockId: operation.blockId };
+    return { blockId: operation.blockId, version: newVer };
   }
 
   private async handleBatchMove(
