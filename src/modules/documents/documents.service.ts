@@ -66,6 +66,25 @@ export type PublicDocumentRevalidationResult = {
   error?: string;
 };
 
+function toSafeISOString(value: unknown): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  let date: Date;
+  if (value instanceof Date) {
+    date = value;
+  } else if (typeof value === "number") {
+    date = new Date(value);
+  } else if (typeof value === "string" && /^\d+$/.test(value)) {
+    date = new Date(Number(value));
+  } else {
+    date = new Date(value as string);
+  }
+
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 @Injectable()
 export class DocumentsService {
   private readonly logger = new Logger(DocumentsService.name);
@@ -901,14 +920,13 @@ export class DocumentsService {
           exists: true,
           draftId: draft.draftId,
           baseDocVer: draft.baseDocVer,
-          updatedAt: new Date(draft.updatedAt).toISOString(),
+          updatedAt: toSafeISOString(draft.updatedAt),
           updatedBy: draft.updatedBy,
         },
         lock: {
           locked: Boolean(draft.lockOwnerUserId),
           lockOwnerUserId: draft.lockOwnerUserId,
-          lockExpiresAt:
-            draft.lockExpiresAt == null ? null : new Date(draft.lockExpiresAt).toISOString(),
+          lockExpiresAt: toSafeISOString(draft.lockExpiresAt),
         },
         tree: result.tree,
         pagination: {
