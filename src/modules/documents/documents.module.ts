@@ -5,6 +5,7 @@ import { DocumentsService } from "./documents.service";
 import { DocumentSnapshotService } from "./services/document-snapshot.service";
 import { DocumentHtmlRendererService } from "./services/document-html-renderer.service";
 import { DocumentRenderService } from "./services/document-render.service";
+import { DocumentDraftService } from "./services/document-draft.service";
 import { VersionControlService } from "./services/version-control.service";
 import { Document } from "../../entities/document.entity";
 import { Block } from "../../entities/block.entity";
@@ -38,6 +39,7 @@ import { ActivitiesModule } from "../activities/activities.module";
   providers: [
     DocumentsService,
     VersionControlService,
+    DocumentDraftService,
     DocumentSnapshotService,
     DocumentHtmlRendererService,
     DocumentRenderService,
@@ -45,6 +47,7 @@ import { ActivitiesModule } from "../activities/activities.module";
   exports: [
     DocumentsService,
     VersionControlService,
+    DocumentDraftService,
     DocumentSnapshotService,
     DocumentRenderService,
   ],
