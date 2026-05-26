@@ -30,6 +30,7 @@ describe("DocumentsService", () => {
   const documentDraftService = {
     findByDocId: jest.fn(),
     discardDraft: jest.fn(),
+    commitDraft: jest.fn(),
   } as unknown as DocumentDraftService;
   const blockRepository = {
     findOne: jest.fn(),
@@ -162,6 +163,64 @@ describe("DocumentsService", () => {
       docId: "doc_1",
       discarded: true,
       fallbackSource: "head",
+    });
+  });
+
+  it("commits the current draft through POST /documents/:docId/commit", async () => {
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 3,
+      publishedHead: 2,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
+    jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
+    jest.mocked((documentDraftService as any).commitDraft).mockResolvedValue({
+      docId: "doc_1",
+      committed: true,
+      version: 4,
+      draftRemoved: true,
+    });
+
+    await expect(service.commitVersion("doc_1", "manual save", "user_1")).resolves.toMatchObject({
+      docId: "doc_1",
+      committed: true,
+      version: 4,
+    });
+  });
+
+  it("maps pending-versions to draft existence for compatibility", async () => {
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 3,
+      publishedHead: 2,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
+    jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
+    jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue({
+      draftId: "draft_1",
+    });
+
+    await expect(service.getPendingVersions("doc_1", "user_1")).resolves.toEqual({
+      docId: "doc_1",
+      pendingCount: 1,
+      hasPending: true,
     });
   });
 

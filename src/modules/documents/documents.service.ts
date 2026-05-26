@@ -1596,23 +1596,7 @@ export class DocumentsService {
   async commitVersion(docId: string, message: string | undefined, userId: string) {
     const document = await this.findOne(docId, userId);
     await this.checkDocumentEditPermission(document, userId);
-
-    // 获取待创建版本的数量
-    const pendingCount = this.versionControlService.getPendingVersionCount(docId);
-
-    if (pendingCount === 0) {
-      throw new BadRequestException("没有待创建的版本，无需提交");
-    }
-
-    // 创建版本
-    const newVersion = await this.versionControlService.createVersion(docId, userId, message);
-
-    return {
-      docId,
-      version: newVersion,
-      pendingOperations: pendingCount,
-      message: message || `提交 ${pendingCount} 个待处理操作`,
-    };
+    return this.documentDraftService.commitDraft(docId, userId, message);
   }
 
   /**
@@ -1620,12 +1604,12 @@ export class DocumentsService {
    */
   async getPendingVersions(docId: string, userId: string) {
     await this.findOne(docId, userId);
-    const pendingCount = this.versionControlService.getPendingVersionCount(docId);
+    const draft = await this.documentDraftService.findByDocId(docId);
 
     return {
       docId,
-      pendingCount,
-      hasPending: pendingCount > 0,
+      pendingCount: draft ? 1 : 0,
+      hasPending: Boolean(draft),
     };
   }
 
@@ -1653,8 +1637,9 @@ export class DocumentsService {
 
     await this.checkDocumentAccess(document as Document, userId);
 
+    const draft = await this.documentDraftService.findByDocId(docId);
     const { pendingCount, hasPendingDraft } =
-      this.versionControlService.getPendingDraftState(docId);
+      this.versionControlService.getPendingDraftStateFromDraft(Boolean(draft));
 
     return {
       docId: document.docId,
