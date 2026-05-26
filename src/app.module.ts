@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+// cspell:words Millis
 import { APP_GUARD } from "@nestjs/core";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { ConfigModule, ConfigService } from "@nestjs/config";
@@ -14,6 +15,7 @@ import { WorkspacesModule } from "./modules/workspaces/workspaces.module";
 import { DocumentsModule } from "./modules/documents/documents.module";
 import { BlocksModule } from "./modules/blocks/blocks.module";
 import { AssetsModule } from "./modules/assets/assets.module";
+import { ImagesModule } from "./modules/images/images.module";
 import { SecurityModule } from "./modules/security/security.module";
 import { TagsModule } from "./modules/tags/tags.module";
 import { FavoritesModule } from "./modules/favorites/favorites.module";
@@ -51,6 +53,34 @@ import { Guestbook } from "./entities/guestbook.entity";
 import { GuestbookLike } from "./entities/guestbook-like.entity";
 import { SensitiveWord } from "./entities/sensitive-word.entity";
 
+export const databaseEntities = [
+  User,
+  Admin,
+  Workspace,
+  WorkspaceMember,
+  Document,
+  Block,
+  BlockVersion,
+  BlockRenderCache,
+  DocRevision,
+  DocSnapshot,
+  Asset,
+  Tag,
+  Favorite,
+  Comment,
+  Activity,
+  Session,
+  AuditLog,
+  SecurityLog,
+  SettingsProfile,
+  RuntimeConfig,
+  Emoji,
+  Reaction,
+  Guestbook,
+  GuestbookLike,
+  SensitiveWord,
+];
+
 @Module({
   imports: [
     // 配置模块
@@ -66,33 +96,7 @@ import { SensitiveWord } from "./entities/sensitive-word.entity";
         const baseConfig: Record<string, unknown> = {
           type: dbType,
           database: configService.get<string>("database.database"),
-          entities: [
-            User,
-            Admin,
-            Workspace,
-            WorkspaceMember,
-            Document,
-            Block,
-            BlockVersion,
-            BlockRenderCache,
-            DocRevision,
-            DocSnapshot,
-            Asset,
-            Tag,
-            Favorite,
-            Comment,
-            Activity,
-            Session,
-            AuditLog,
-            SecurityLog,
-            SettingsProfile,
-            RuntimeConfig,
-            Emoji,
-            Reaction,
-            Guestbook,
-            GuestbookLike,
-            SensitiveWord,
-          ],
+          entities: databaseEntities,
           synchronize: configService.get<string>("app.env") === "development",
           logging: configService.get<boolean>("database.logging") ?? false,
           manualInitialization: process.env.OPENAPI_EXPORT === "true",
@@ -144,6 +148,7 @@ import { SensitiveWord } from "./entities/sensitive-word.entity";
     DocumentsModule,
     BlocksModule,
     AssetsModule,
+    ImagesModule,
     TagsModule,
     FavoritesModule,
     CommentsModule,

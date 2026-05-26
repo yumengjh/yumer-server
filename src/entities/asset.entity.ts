@@ -6,11 +6,13 @@ import {
   ManyToOne,
   JoinColumn,
   Index,
-} from 'typeorm';
-import { isSqlite } from '../common/db-type';
+} from "typeorm";
+import { isSqlite } from "../common/db-type";
+import type { User } from "./user.entity";
+import type { Workspace } from "./workspace.entity";
 
-@Entity('assets')
-@Index(['workspaceId'])
+@Entity("assets")
+@Index(["workspaceId"])
 export class Asset {
   @PrimaryGeneratedColumn()
   id: number;
@@ -18,16 +20,16 @@ export class Asset {
   @Column({ unique: true, length: 50 })
   assetId: string;
 
-  @ManyToOne('Workspace', 'assets')
-  @JoinColumn({ name: 'workspace_id', referencedColumnName: 'workspaceId' })
-  workspace: any;
+  @ManyToOne("Workspace", "assets")
+  @JoinColumn({ name: "workspace_id", referencedColumnName: "workspaceId" })
+  workspace: Workspace;
 
   @Column()
   workspaceId: string;
 
-  @ManyToOne('User')
-  @JoinColumn({ name: 'uploaded_by', referencedColumnName: 'userId' })
-  uploadedByUser: any;
+  @ManyToOne("User")
+  @JoinColumn({ name: "uploaded_by", referencedColumnName: "userId" })
+  uploadedByUser: User;
 
   @Column()
   uploadedBy: string;
@@ -38,7 +40,7 @@ export class Asset {
   @Column()
   mimeType: string;
 
-  @Column({ type: 'bigint' })
+  @Column({ type: "bigint" })
   size: number;
 
   @Column()
@@ -50,11 +52,11 @@ export class Asset {
   @Column()
   url: string;
 
-  @Column({ nullable: true })
-  width: number;
+  @Column({ type: "integer", nullable: true })
+  width: number | null;
 
-  @Column({ nullable: true })
-  height: number;
+  @Column({ type: "integer", nullable: true })
+  height: number | null;
 
   @Column({ nullable: true })
   thumbnail: string;
@@ -62,14 +64,14 @@ export class Asset {
   @CreateDateColumn()
   createdAt: Date;
 
-  @Column({ default: 'active' })
+  @Column({ default: "active" })
   status: string;
 
   @Column({ default: 0 })
   refCount: number;
 
   @Column({
-    type: isSqlite() ? 'simple-json' : 'jsonb',
+    type: isSqlite() ? "simple-json" : "jsonb",
     default: () => (isSqlite() ? "'[]'" : "'[]'"),
   })
   refs: object[];

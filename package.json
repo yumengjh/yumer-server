@@ -34,6 +34,7 @@
     "snapshots:backfill": "ts-node -r tsconfig-paths/register scripts/backfill-doc-snapshots.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.917.0",
     "@nestjs/cache-manager": "^2.1.1",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^3.1.1",
