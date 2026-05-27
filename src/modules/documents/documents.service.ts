@@ -5,6 +5,7 @@ import {
   BadRequestException,
   Logger,
 } from "@nestjs/common";
+import { randomBytes } from "crypto";
 import { InjectRepository } from "@nestjs/typeorm";
 import { InjectDataSource } from "@nestjs/typeorm";
 import { Repository, DataSource, In, Or, MoreThan, IsNull } from "typeorm";
@@ -911,6 +912,10 @@ export class DocumentsService {
         limit || 1000,
       );
 
+      const { node: patchedTree, updates } = this.ensureHeadingAnchorIds(result.tree);
+      this.persistAnchorIds(updates).catch(() => {});
+      result.tree = patchedTree;
+
       return {
         docId,
         source: "draft" as const,
@@ -1178,6 +1183,10 @@ export class DocumentsService {
         throw new NotFoundException("根块不存在，无法获取文档内容。");
       }
 
+      const { node: patchedTreeA, updates: updatesA } = this.ensureHeadingAnchorIds(result.tree);
+      this.persistAnchorIds(updatesA).catch(() => {});
+      result.tree = patchedTreeA;
+
       return this.withOptionalRenderedHtml(
         {
           docId: document.docId,
@@ -1222,6 +1231,10 @@ export class DocumentsService {
     if (result.tree && typeof result.tree === "object" && "__rootBlockMissing" in result.tree) {
       throw new NotFoundException("根块不存在，无法获取文档内容。");
     }
+
+    const { node: patchedTree, updates } = this.ensureHeadingAnchorIds(result.tree);
+    this.persistAnchorIds(updates).catch(() => {});
+    result.tree = patchedTree;
 
     return this.withOptionalRenderedHtml(
       {
@@ -1336,6 +1349,62 @@ export class DocumentsService {
 
     return nextNode;
   }
+
+  private generateAnchorId(): string {
+    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    const bytes = randomBytes(6);
+    let result = "";
+    for (let i = 0; i < 6; i++) {
+      result += letters[bytes[i] % 52];
+    }
+    return result;
+  }
+
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  private ensureHeadingAnchorIds(node: any): { node: any; updates: Array<{ blockId: string; payload: Record<string, unknown> }> } {
+    const updates: Array<{ blockId: string; payload: Record<string, unknown> }> = [];
+
+    const walk = (n: any) => {
+      if (!n || typeof n !== "object") return;
+
+      if (n.type === "heading" && n.payload?.attrs && !n.payload.attrs.anchorId) {
+        const anchorId = this.generateAnchorId();
+        n.payload = {
+          ...n.payload,
+          attrs: { ...n.payload.attrs, anchorId },
+        };
+        if (n.blockId) {
+          updates.push({ blockId: n.blockId, payload: n.payload });
+        }
+      }
+
+      if (Array.isArray(n.children)) {
+        n.children.forEach(walk);
+      }
+    };
+
+    walk(node);
+    return { node, updates };
+  }
+
+  private async persistAnchorIds(updates: Array<{ blockId: string; payload: Record<string, unknown> }>): Promise<void> {
+    if (updates.length === 0) return;
+    for (const { blockId, payload } of updates) {
+      try {
+        const latest = await this.blockVersionRepository.findOne({
+          where: { blockId },
+          order: { ver: "DESC" },
+        });
+        if (latest) {
+          latest.payload = payload;
+          await this.blockVersionRepository.save(latest);
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to persist anchorId for ${blockId}: ${(err as Error).message}`);
+      }
+    }
+  }
+  /* eslint-enable @typescript-eslint/no-explicit-any */
 
   private stripRenderMetadata(node: any): any {
     if (!node || typeof node !== "object") {

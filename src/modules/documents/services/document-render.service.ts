@@ -4,7 +4,7 @@ import { In, Repository } from "typeorm";
 import { BlockRenderCache } from "../../../entities/block-render-cache.entity";
 import { DocumentHtmlRendererService } from "./document-html-renderer.service";
 
-export const DOCUMENT_RENDER_VERSION = "tiptap-static-v1";
+export const DOCUMENT_RENDER_VERSION = "tiptap-static-v2";
 
 export const CLIENT_RENDERED_BLOCK_TYPES: Record<string, true> = {
   codeBlock: true,
@@ -143,7 +143,10 @@ export class DocumentRenderService {
 
     try {
       const rawHtml = this.htmlRenderer.renderBlock(node as { payload: object });
-      const html = this.htmlRenderer.sanitize(rawHtml);
+      const html = this.injectHeadingAnchorId(
+        this.htmlRenderer.sanitize(rawHtml),
+        node.payload,
+      );
       diagnostics.freshBlocks++;
       cacheWrites.push(
         this.cacheRepository.create({
@@ -183,6 +186,19 @@ export class DocumentRenderService {
       );
       return nextNode;
     }
+  }
+
+  private injectHeadingAnchorId(html: string, payload?: object): string {
+    if (!payload || typeof payload !== "object") return html;
+    const p = payload as Record<string, unknown>;
+    if (p.type !== "heading" || !p.attrs) return html;
+    const attrs = p.attrs as Record<string, unknown>;
+    if (!attrs.anchorId) return html;
+    const tag = `h${attrs.level || 1}`;
+    return html.replace(
+      new RegExp(`^(<${tag})(\\s|>)`, "i"),
+      `$1 id="${attrs.anchorId}"$2`,
+    );
   }
 
   private canRenderOnServer(node: RenderTreeNode): boolean {

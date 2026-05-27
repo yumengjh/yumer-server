@@ -1,4 +1,17 @@
 import { Extension, Node, mergeAttributes } from "@tiptap/core";
+import { randomBytes } from "crypto";
+
+const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+const ANCHOR_LENGTH = 6;
+
+function generateAnchorId(): string {
+  const bytes = randomBytes(ANCHOR_LENGTH);
+  let result = "";
+  for (let i = 0; i < ANCHOR_LENGTH; i++) {
+    result += LETTERS[bytes[i] % 52];
+  }
+  return result;
+}
 import StarterKit from "@tiptap/starter-kit";
 import CodeBlock from "@tiptap/extension-code-block";
 import Code from "@tiptap/extension-code";
@@ -171,6 +184,26 @@ const Indent = Extension.create({
   },
 });
 
+const HeadingAnchorId = Extension.create({
+  name: "headingAnchorId",
+  addGlobalAttributes() {
+    return [
+      {
+        types: ["heading"],
+        attributes: {
+          anchorId: {
+            default: null,
+            renderHTML: (attributes: Record<string, unknown>) => {
+              const anchorId = (attributes.anchorId as string) || generateAnchorId();
+              return { id: anchorId };
+            },
+          },
+        },
+      },
+    ];
+  },
+});
+
 const BlockIdAttribute = Extension.create({
   name: "blockIdAttribute",
   addGlobalAttributes() {
@@ -246,4 +279,5 @@ export const tiptapSerializationExtensions = [
   HighlightBlock,
   Indent.configure({ types: ["paragraph", "heading"], maxLevel: 8 }),
   BlockIdAttribute,
+  HeadingAnchorId,
 ];
