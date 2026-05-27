@@ -1,5 +1,7 @@
 # API 使用文档
 
+<!-- cspell:words XVCJ autosync tsvector -->
+
 ## 目录
 
 - [基础信息](#基础信息)
@@ -318,15 +320,16 @@ Authorization: Bearer <your-access-token>
 
 > 该模块不使用 JWT，而是使用 `x-system-admin-token` 请求头鉴权，用于运维/平台层控制。
 
-| 方法  | 路径                                | 说明         | 认证               |
-| ----- | ----------------------------------- | ------------ | ------------------ |
-| GET   | `/runtime-configs/rate-limit`       | 读取限流配置 | 系统管理员令牌     |
-| PATCH | `/runtime-configs/rate-limit`       | 更新限流配置 | 系统管理员令牌     |
-| POST  | `/runtime-configs/rate-limit/reset` | 重置限流配置 | 系统管理员令牌     |
+| 方法  | 路径                                | 说明         | 认证           |
+| ----- | ----------------------------------- | ------------ | -------------- |
+| GET   | `/runtime-configs/rate-limit`       | 读取限流配置 | 系统管理员令牌 |
+| PATCH | `/runtime-configs/rate-limit`       | 更新限流配置 | 系统管理员令牌 |
+| POST  | `/runtime-configs/rate-limit/reset` | 重置限流配置 | 系统管理员令牌 |
 
 ---
 
 ## 业务接口说明
+
 - **详情** `GET /documents/:docId`  
   返回文档元数据，并额外补充 `creator` / `updater`：`{ userId, displayName, avatar }`，适合公开页 SSR 直接展示作者与最后更新者。
 
@@ -903,3 +906,28 @@ http://localhost:5200/api/docs
 发布文档时，系统发布的是一个确定的文档版本快照：`documents.publishedHead` 记录发布版本号，
 `documents.publishedSnapshotId` 记录对应的快照 ID。匿名公开站点读取始终返回已发布快照，
 不会因为传入 `version` 查询参数而读取草稿或任意历史版本。
+
+## 内部 GC Preview API
+
+块版本 GC 第一版只提供 preview/statistics，不执行删除。
+
+| 方法 | 路径                                              | 说明                      | 认证           |
+| ---- | ------------------------------------------------- | ------------------------- | -------------- |
+| POST | `/admin/gc/block-versions/runs`                   | 创建块版本 GC preview run | 系统管理员令牌 |
+| GET  | `/admin/gc/block-versions/runs`                   | 查询 preview run 列表     | 系统管理员令牌 |
+| GET  | `/admin/gc/block-versions/runs/:runId`            | 查询单个 preview run      | 系统管理员令牌 |
+| GET  | `/admin/gc/block-versions/runs/:runId/candidates` | 查询已保存的候选明细      | 系统管理员令牌 |
+| GET  | `/admin/gc/block-versions/health`                 | 查询当前 GC 健康状态      | 系统管理员令牌 |
+
+所有接口必须带 `x-system-admin-token`。可选 `x-operator-id` 会被记录为本次 preview 的触发人。
+
+当前块版本 GC root 只来自：
+
+- `doc_snapshots.blockVersionMap`
+- `document_drafts.blockVersionMap`
+
+如果存在以下任一情况，preview run 会返回 `blocked`，并且不会生成候选明细：
+
+- `doc_revisions` 存在缺失 `doc_snapshots` 的版本
+- `documents.publishedSnapshotId` 指向不存在的快照
+- snapshot 或 draft map 引用了不存在的 `block_versions`

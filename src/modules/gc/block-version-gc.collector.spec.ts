@@ -1,0 +1,88 @@
+import type { Repository } from "typeorm";
+import { Block } from "../../entities/block.entity";
+import { BlockVersion } from "../../entities/block-version.entity";
+import { DocDraft } from "../../entities/doc-draft.entity";
+import { DocSnapshot } from "../../entities/doc-snapshot.entity";
+import { Document } from "../../entities/document.entity";
+import { BlockVersionGcCollector } from "./block-version-gc.collector";
+import type { BlockVersionGcPolicy } from "./gc.types";
+
+function repository<T>(overrides: Partial<Record<keyof Repository<T>, jest.Mock>>) {
+  return overrides as unknown as Repository<T>;
+}
+
+const policy: BlockVersionGcPolicy = {
+  gracePeriodMs: 60_000,
+  keepLatestPerBlock: 1,
+  maxCandidatesToStore: 1000,
+  rootSources: ["doc_snapshots", "document_drafts"],
+};
+
+describe("BlockVersionGcCollector", () => {
+  it("never returns hard rooted snapshot or draft block versions as candidates", async () => {
+    const now = Date.now();
+    const old = now - 60 * 24 * 60 * 60 * 1000;
+    const collector = new BlockVersionGcCollector(
+      repository<Document>({
+        findOne: jest.fn().mockResolvedValue({ docId: "doc_1", workspaceId: "ws_1" }),
+        find: jest.fn().mockResolvedValue([{ docId: "doc_1", workspaceId: "ws_1" }]),
+      }),
+      repository<Block>({
+        find: jest.fn().mockResolvedValue([{ blockId: "b_1", docId: "doc_1", latestVer: 3 }]),
+      }),
+      repository<BlockVersion>({
+        find: jest.fn().mockResolvedValue([
+          { id: 1, docId: "doc_1", blockId: "b_1", ver: 1, createdAt: old },
+          { id: 2, docId: "doc_1", blockId: "b_1", ver: 2, createdAt: old },
+          { id: 3, docId: "doc_1", blockId: "b_1", ver: 3, createdAt: old },
+        ]),
+      }),
+      repository<DocSnapshot>({
+        find: jest.fn().mockResolvedValue([{ docId: "doc_1", blockVersionMap: { b_1: 1 } }]),
+      }),
+      repository<DocDraft>({
+        find: jest.fn().mockResolvedValue([{ docId: "doc_1", blockVersionMap: { b_1: 2 } }]),
+      }),
+    );
+
+    const result = await collector.preview({ docId: "doc_1" }, policy);
+
+    expect(result.candidates).toEqual([]);
+    expect(result.summary.hardRootedBlockVersions).toBe(2);
+    expect(result.summary.policyRetainedBlockVersions).toBe(1);
+  });
+
+  it("returns old unreferenced versions outside the latest-per-block retention as candidates", async () => {
+    const now = Date.now();
+    const old = now - 60 * 24 * 60 * 60 * 1000;
+    const collector = new BlockVersionGcCollector(
+      repository<Document>({
+        findOne: jest.fn().mockResolvedValue({ docId: "doc_1", workspaceId: "ws_1" }),
+        find: jest.fn().mockResolvedValue([{ docId: "doc_1", workspaceId: "ws_1" }]),
+      }),
+      repository<Block>({
+        find: jest.fn().mockResolvedValue([{ blockId: "b_1", docId: "doc_1", latestVer: 4 }]),
+      }),
+      repository<BlockVersion>({
+        find: jest.fn().mockResolvedValue([
+          { id: 1, docId: "doc_1", blockId: "b_1", ver: 1, createdAt: old },
+          { id: 2, docId: "doc_1", blockId: "b_1", ver: 2, createdAt: old },
+          { id: 3, docId: "doc_1", blockId: "b_1", ver: 3, createdAt: old },
+          { id: 4, docId: "doc_1", blockId: "b_1", ver: 4, createdAt: old },
+        ]),
+      }),
+      repository<DocSnapshot>({
+        find: jest.fn().mockResolvedValue([{ docId: "doc_1", blockVersionMap: { b_1: 1 } }]),
+      }),
+      repository<DocDraft>({ find: jest.fn().mockResolvedValue([]) }),
+    );
+
+    const result = await collector.preview({ docId: "doc_1" }, policy);
+
+    expect(result.candidates.map((candidate) => candidate.resourceKey)).toEqual(["b_1@2", "b_1@3"]);
+    expect(result.summary.candidateBlockVersions).toBe(2);
+    expect(result.summary.candidateReasons).toEqual({
+      unreferenced_older_than_policy: 2,
+    });
+  });
+});

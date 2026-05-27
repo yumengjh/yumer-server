@@ -25,6 +25,7 @@ import { ActivitiesModule } from "./modules/activities/activities.module";
 import { SettingsModule } from "./modules/settings/settings.module";
 import { RuntimeConfigModule } from "./modules/runtime-config/runtime-config.module";
 import { RuntimeConfigService } from "./modules/runtime-config/runtime-config.service";
+import { GcModule } from "./modules/gc/gc.module";
 
 // 导入所有实体
 import { User } from "./entities/user.entity";
@@ -48,6 +49,8 @@ import { AuditLog } from "./entities/audit-log.entity";
 import { SecurityLog } from "./entities/security-log.entity";
 import { SettingsProfile } from "./entities/settings-profile.entity";
 import { RuntimeConfig } from "./entities/runtime-config.entity";
+import { GcRun } from "./entities/gc-run.entity";
+import { GcRunCandidate } from "./entities/gc-run-candidate.entity";
 import { Emoji } from "./entities/emoji.entity";
 import { Reaction } from "./entities/reaction.entity";
 import { Guestbook } from "./entities/guestbook.entity";
@@ -76,6 +79,8 @@ export const databaseEntities = [
   SecurityLog,
   SettingsProfile,
   RuntimeConfig,
+  GcRun,
+  GcRunCandidate,
   Emoji,
   Reaction,
   Guestbook,
@@ -126,6 +131,7 @@ export const databaseEntities = [
 
     // 运行时配置模块（支持热更新，供限流等系统能力使用）
     RuntimeConfigModule,
+    GcModule,
 
     // 限流（可运行时热更新 enabled/ttl/limit）
     ThrottlerModule.forRootAsync({

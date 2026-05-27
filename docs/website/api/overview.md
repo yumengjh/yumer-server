@@ -1,3 +1,5 @@
+<!-- cspell:words Referer Apifox -->
+
 # API 总览
 
 本文档提供个人知识库后端系统的完整 API 接口列表和快速参考。
@@ -67,6 +69,18 @@ Authorization: Bearer <your-access-token>
 | GET  | `/tags`                             | 获取指定工作空间标签列表                             |
 | GET  | `/workspaces/:workspaceId`          | 获取工作空间公开信息                                 |
 | GET  | `/workspaces/:workspaceId/settings` | 获取工作空间公开设置                                 |
+
+### 内部 GC Preview 接口
+
+块版本 GC 第一版只提供内部 preview/statistics，不执行删除。
+
+| 方法 | 路径                                              | 说明                      | 认证           |
+| ---- | ------------------------------------------------- | ------------------------- | -------------- |
+| POST | `/admin/gc/block-versions/runs`                   | 创建块版本 GC preview run | 系统管理员令牌 |
+| GET  | `/admin/gc/block-versions/runs`                   | 查询 preview run 列表     | 系统管理员令牌 |
+| GET  | `/admin/gc/block-versions/runs/:runId`            | 查询单个 preview run      | 系统管理员令牌 |
+| GET  | `/admin/gc/block-versions/runs/:runId/candidates` | 查询已保存的候选明细      | 系统管理员令牌 |
+| GET  | `/admin/gc/block-versions/health`                 | 查询当前 GC 健康状态      | 系统管理员令牌 |
 
 ### 相关环境变量
 

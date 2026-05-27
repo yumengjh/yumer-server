@@ -12,6 +12,7 @@ import {
   normalizeOrigin,
   parseSiteOriginPatterns,
 } from './common/utils/site-origin.util';
+import { getAllowedCorsHeaders } from './common/utils/cors-options.util';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -61,7 +62,7 @@ async function bootstrap() {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: getAllowedCorsHeaders(),
   });
 
   // 全局管道
