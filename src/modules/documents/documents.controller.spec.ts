@@ -23,7 +23,7 @@ describe("DocumentsController", () => {
     );
   });
 
-  it("文档内容接口将渲染诊断写入响应头并从响应体移除", async () => {
+  it("writes render diagnostics headers for authenticated content requests", async () => {
     documentsService.getContent.mockResolvedValue({
       docId: "doc_1",
       docVer: 2,
@@ -65,7 +65,7 @@ describe("DocumentsController", () => {
     expect(result).not.toHaveProperty("renderDiagnostics");
   });
 
-  it("站点公开访问也写入渲染诊断响应头", async () => {
+  it("writes render diagnostics headers for site public content requests", async () => {
     documentsService.getContentSitePublic.mockResolvedValue({
       docId: "doc_1",
       docVer: 2,
@@ -96,6 +96,7 @@ describe("DocumentsController", () => {
     expect(response.setHeader).toHaveBeenCalledWith("X-Yuediter-Render-Mode", "cache");
     expect(response.setHeader).toHaveBeenCalledWith("X-Yuediter-Render-Cache", "hit");
   });
+
   it("returns draft-backed edit content when a draft exists", async () => {
     documentsService.getEditContent.mockResolvedValue({
       docId: "doc_1",
@@ -135,7 +136,7 @@ describe("DocumentsController", () => {
     });
   });
 
-  it("瀵煎嚭鎺ュ彛浼氳繑鍥炰笅杞藉ご骞惰皟鐢ㄥ鍑烘湇鍔?, async () => {
+  it("returns a download response for document export", async () => {
     documentExportService.exportDocument.mockResolvedValue({
       buffer: Buffer.from("hello"),
       filename: "Demo-v2.md",

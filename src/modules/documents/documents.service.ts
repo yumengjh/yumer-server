@@ -1623,11 +1623,31 @@ export class DocumentsService {
   async getPendingVersions(docId: string, userId: string) {
     await this.assertAccessWithoutViewIncrement(docId, userId);
     const draft = await this.documentDraftService.findByDocId(docId);
+    const legacyPendingCount = this.versionControlService.getPendingVersionCount(docId);
+    const pendingCount =
+      typeof legacyPendingCount === "number" ? legacyPendingCount : draft ? 1 : 0;
 
     return {
       docId,
-      pendingCount: draft ? 1 : 0,
-      hasPending: Boolean(draft),
+      pendingCount,
+      hasPending: pendingCount > 0,
+    };
+  }
+
+  async getExportSource(docId: string, userId: string) {
+    const document = await this.assertAccessWithoutViewIncrement(docId, userId);
+    const content = await this.getContentByDocument(
+      document,
+      document.head,
+      undefined,
+      undefined,
+      undefined,
+      "all",
+    );
+
+    return {
+      document,
+      content,
     };
   }
 

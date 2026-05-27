@@ -56,18 +56,18 @@ export class DocumentsController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @AuditLog({ action: "CREATE", resourceType: "document" })
-  @ApiOperation({ summary: "创建文档" })
-  @ApiResponse({ status: 201, description: "创建成功" })
-  @ApiResponse({ status: 400, description: "请求参数错误" })
-  @ApiResponse({ status: 403, description: "没有权限" })
+  @ApiOperation({ summary: "Create document" })
+  @ApiResponse({ status: 201, description: "Created" })
+  @ApiResponse({ status: 400, description: "Bad request" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
   async create(@Body() createDocumentDto: CreateDocumentDto, @CurrentUser() user: any) {
     return this.documentsService.create(createDocumentDto, user.userId);
   }
 
   @Get()
   @SitePublic()
-  @ApiOperation({ summary: "获取文档列表" })
-  @ApiResponse({ status: 200, description: "获取成功" })
+  @ApiOperation({ summary: "List documents" })
+  @ApiResponse({ status: 200, description: "Success" })
   async findAll(@Query() queryDto: QueryDocumentsDto, @CurrentUser() user: any) {
     if (isSitePublicAnonymousUserId(user?.userId)) {
       return this.documentsService.findAllSitePublic(queryDto);
@@ -76,19 +76,19 @@ export class DocumentsController {
   }
 
   @Get("search")
-  @ApiOperation({ summary: "搜索文档" })
-  @ApiResponse({ status: 200, description: "搜索成功" })
+  @ApiOperation({ summary: "Search documents" })
+  @ApiResponse({ status: 200, description: "Success" })
   async search(@Query() searchQueryDto: SearchQueryDto, @CurrentUser() user: any) {
     return this.documentsService.search(searchQueryDto, user.userId);
   }
 
   @Get(":docId")
   @SitePublic()
-  @ApiOperation({ summary: "获取文档详情" })
-  @ApiParam({ name: "docId", description: "文档ID" })
-  @ApiResponse({ status: 200, description: "获取成功" })
-  @ApiResponse({ status: 404, description: "文档不存在" })
-  @ApiResponse({ status: 403, description: "没有权限访问" })
+  @ApiOperation({ summary: "Get document details" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
+  @ApiResponse({ status: 404, description: "Document not found" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
   async findOne(@Param("docId") docId: string, @CurrentUser() user: any) {
     if (isSitePublicAnonymousUserId(user?.userId)) {
       return this.documentsService.findOneSitePublic(docId);
@@ -98,10 +98,10 @@ export class DocumentsController {
 
   @Get(":docId/content")
   @SitePublic()
-  @ApiOperation({ summary: "获取文档内容（渲染树，支持分页）" })
-  @ApiParam({ name: "docId", description: "文档ID" })
-  @ApiResponse({ status: 200, description: "获取成功" })
-  @ApiResponse({ status: 404, description: "文档不存在" })
+  @ApiOperation({ summary: "Get document content" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
+  @ApiResponse({ status: 404, description: "Document not found" })
   async getContent(
     @Param("docId") docId: string,
     @Query() queryDto: QueryContentDto,
@@ -133,9 +133,9 @@ export class DocumentsController {
   }
 
   @Get(":docId/edit-content")
-  @ApiOperation({ summary: "获取编辑器内容（优先返回草稿）" })
-  @ApiParam({ name: "docId", description: "文档ID" })
-  @ApiResponse({ status: 200, description: "获取成功", type: EditContentResponseDto })
+  @ApiOperation({ summary: "Get editor content" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success", type: EditContentResponseDto })
   async getEditContent(
     @Param("docId") docId: string,
     @Query() queryDto: QueryEditContentDto,
@@ -184,11 +184,11 @@ export class DocumentsController {
   }
 
   @Patch(":docId")
-  @ApiOperation({ summary: "更新文档元数据" })
-  @ApiParam({ name: "docId", description: "文档ID" })
-  @ApiResponse({ status: 200, description: "更新成功" })
-  @ApiResponse({ status: 404, description: "文档不存在" })
-  @ApiResponse({ status: 403, description: "没有权限" })
+  @ApiOperation({ summary: "Update document metadata" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
+  @ApiResponse({ status: 404, description: "Document not found" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
   async update(
     @Param("docId") docId: string,
     @Body() updateDocumentDto: UpdateDocumentDto,
@@ -198,22 +198,22 @@ export class DocumentsController {
   }
 
   @Post(":docId/publish")
-  @ApiOperation({ summary: "发布文档" })
-  @ApiParam({ name: "docId", description: "文档ID" })
-  @ApiResponse({ status: 200, description: "发布成功" })
-  @ApiResponse({ status: 404, description: "文档不存在" })
-  @ApiResponse({ status: 403, description: "没有权限" })
+  @ApiOperation({ summary: "Publish document" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
+  @ApiResponse({ status: 404, description: "Document not found" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
   async publish(@Param("docId") docId: string, @CurrentUser() user: any) {
     return this.documentsService.publish(docId, user.userId);
   }
 
   @Post(":docId/move")
-  @ApiOperation({ summary: "移动文档" })
-  @ApiParam({ name: "docId", description: "文档ID" })
-  @ApiResponse({ status: 200, description: "移动成功" })
-  @ApiResponse({ status: 404, description: "文档不存在" })
-  @ApiResponse({ status: 403, description: "没有权限" })
-  @ApiResponse({ status: 400, description: "移动操作无效" })
+  @ApiOperation({ summary: "Move document" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
+  @ApiResponse({ status: 404, description: "Document not found" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
+  @ApiResponse({ status: 400, description: "Invalid move" })
   async move(
     @Param("docId") docId: string,
     @Body() moveDocumentDto: MoveDocumentDto,
@@ -225,30 +225,30 @@ export class DocumentsController {
   @Delete(":docId")
   @HttpCode(HttpStatus.OK)
   @AuditLog({ action: "DELETE", resourceType: "document", resourceIdKey: "docId" })
-  @ApiOperation({ summary: "删除文档" })
-  @ApiParam({ name: "docId", description: "文档ID" })
-  @ApiResponse({ status: 200, description: "删除成功" })
-  @ApiResponse({ status: 404, description: "文档不存在" })
-  @ApiResponse({ status: 403, description: "没有权限" })
+  @ApiOperation({ summary: "Delete document" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
+  @ApiResponse({ status: 404, description: "Document not found" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
   async remove(@Param("docId") docId: string, @CurrentUser() user: any) {
     return this.documentsService.remove(docId, user.userId);
   }
 
   @Delete(":docId/draft")
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: "取消当前文档草稿" })
-  @ApiParam({ name: "docId", description: "文档ID" })
-  @ApiResponse({ status: 200, description: "取消成功" })
+  @ApiOperation({ summary: "Discard current draft" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
   async discardDraft(@Param("docId") docId: string, @CurrentUser() user: any) {
     return this.documentsService.discardDraft(docId, user.userId);
   }
 
   @Get(":docId/revisions")
-  @ApiOperation({ summary: "获取文档修订历史" })
-  @ApiParam({ name: "docId", description: "文档ID" })
-  @ApiResponse({ status: 200, description: "获取成功" })
-  @ApiResponse({ status: 404, description: "文档不存在" })
-  @ApiResponse({ status: 403, description: "没有权限" })
+  @ApiOperation({ summary: "Get revision history" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
+  @ApiResponse({ status: 404, description: "Document not found" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
   async getRevisions(
     @Param("docId") docId: string,
     @Query() queryDto: QueryRevisionsDto,
@@ -258,11 +258,11 @@ export class DocumentsController {
   }
 
   @Get(":docId/diff")
-  @ApiOperation({ summary: "版本对比" })
-  @ApiParam({ name: "docId", description: "文档ID" })
-  @ApiResponse({ status: 200, description: "对比结果" })
-  @ApiResponse({ status: 400, description: "参数错误" })
-  @ApiResponse({ status: 404, description: "文档或版本不存在" })
+  @ApiOperation({ summary: "Diff revisions" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
+  @ApiResponse({ status: 400, description: "Bad request" })
+  @ApiResponse({ status: 404, description: "Document or revision not found" })
   async getDiff(
     @Param("docId") docId: string,
     @Query() queryDto: DiffVersionsDto,
@@ -272,12 +272,12 @@ export class DocumentsController {
   }
 
   @Post(":docId/revert")
-  @ApiOperation({ summary: "回滚到指定版本" })
-  @ApiParam({ name: "docId", description: "文档ID" })
-  @ApiResponse({ status: 200, description: "回滚成功" })
-  @ApiResponse({ status: 400, description: "参数错误" })
-  @ApiResponse({ status: 404, description: "文档或版本不存在" })
-  @ApiResponse({ status: 403, description: "没有权限" })
+  @ApiOperation({ summary: "Revert to revision" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
+  @ApiResponse({ status: 400, description: "Bad request" })
+  @ApiResponse({ status: 404, description: "Document or revision not found" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
   async revert(
     @Param("docId") docId: string,
     @Body() revertDto: RevertVersionDto,
@@ -288,23 +288,23 @@ export class DocumentsController {
 
   @Post(":docId/snapshots")
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: "创建文档快照" })
-  @ApiParam({ name: "docId", description: "文档ID" })
-  @ApiResponse({ status: 201, description: "创建成功" })
-  @ApiResponse({ status: 404, description: "文档不存在" })
-  @ApiResponse({ status: 403, description: "没有权限" })
+  @ApiOperation({ summary: "Create snapshot" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 201, description: "Created" })
+  @ApiResponse({ status: 404, description: "Document not found" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
   async createSnapshot(@Param("docId") docId: string, @CurrentUser() user: any) {
     return this.documentsService.createSnapshot(docId, user.userId);
   }
 
   @Post(":docId/commit")
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: "手动触发创建文档版本" })
-  @ApiParam({ name: "docId", description: "文档ID" })
-  @ApiResponse({ status: 200, description: "版本创建成功" })
-  @ApiResponse({ status: 400, description: "没有待创建的版本" })
-  @ApiResponse({ status: 404, description: "文档不存在" })
-  @ApiResponse({ status: 403, description: "没有权限" })
+  @ApiOperation({ summary: "Commit version" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
+  @ApiResponse({ status: 400, description: "No pending version" })
+  @ApiResponse({ status: 404, description: "Document not found" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
   async commitVersion(
     @Param("docId") docId: string,
     @Body() commitDto: CommitVersionDto,
@@ -314,12 +314,12 @@ export class DocumentsController {
   }
 
   @Get(":docId/export")
-  @ApiOperation({ summary: "瀵煎嚭鏂囨。" })
-  @ApiParam({ name: "docId", description: "鏂囨。ID" })
+  @ApiOperation({ summary: "Export document" })
+  @ApiParam({ name: "docId", description: "Document ID" })
   @ApiQuery({ name: "format", required: false, enum: ["md", "html", "pdf"] })
-  @ApiResponse({ status: 200, description: "瀵煎嚭鎴愬姛" })
-  @ApiResponse({ status: 404, description: "鏂囨。涓嶅瓨鍦? })
-  @ApiResponse({ status: 403, description: "娌℃湁鏉冮檺" })
+  @ApiResponse({ status: 200, description: "Export succeeded" })
+  @ApiResponse({ status: 404, description: "Document not found" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
   async exportDocument(
     @Param("docId") docId: string,
     @Query() queryDto: ExportDocumentDto,
@@ -343,21 +343,21 @@ export class DocumentsController {
   }
 
   @Get(":docId/pending-versions")
-  @ApiOperation({ summary: "获取文档待创建版本的数量" })
-  @ApiParam({ name: "docId", description: "文档ID" })
-  @ApiResponse({ status: 200, description: "获取成功" })
-  @ApiResponse({ status: 404, description: "文档不存在" })
-  @ApiResponse({ status: 403, description: "没有权限" })
+  @ApiOperation({ summary: "Get pending version count" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
+  @ApiResponse({ status: 404, description: "Document not found" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
   async getPendingVersions(@Param("docId") docId: string, @CurrentUser() user: any) {
     return this.documentsService.getPendingVersions(docId, user.userId);
   }
 
   @Get(":docId/sync-state")
-  @ApiOperation({ summary: "获取文档同步状态" })
-  @ApiParam({ name: "docId", description: "文档ID" })
-  @ApiResponse({ status: 200, description: "获取成功", type: SyncStateResponseDto })
-  @ApiResponse({ status: 404, description: "文档不存在" })
-  @ApiResponse({ status: 403, description: "没有权限" })
+  @ApiOperation({ summary: "Get document sync state" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success", type: SyncStateResponseDto })
+  @ApiResponse({ status: 404, description: "Document not found" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
   async getSyncState(@Param("docId") docId: string, @CurrentUser() user: any) {
     return this.documentsService.getSyncState(docId, user.userId);
   }
