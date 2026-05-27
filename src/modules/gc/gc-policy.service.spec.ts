@@ -5,7 +5,8 @@ describe("GcPolicyService", () => {
     const service = new GcPolicyService();
 
     expect(service.getBlockVersionPolicy()).toEqual({
-      gracePeriodMs: 60_000,
+      gracePeriodMs: 10_000,
+      tombstoneGracePeriodMs: 10_000,
       keepLatestPerBlock: 1,
       maxCandidatesToStore: 1000,
       rootSources: ["doc_snapshots", "document_drafts"],

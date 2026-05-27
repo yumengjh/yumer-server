@@ -159,8 +159,12 @@ export class GcRunService {
     return {
       blockVersionsScanned: 0,
       hardRootedBlockVersions: 0,
+      liveRootedBlockVersions: 0,
+      tombstoneRootedBlockVersions: 0,
       policyRetainedBlockVersions: 0,
+      softDeletedMapEntries: 0,
       candidateBlockVersions: 0,
+      tombstoneCompactionCandidates: 0,
       rootSources: {
         docSnapshots: 0,
         documentDrafts: 0,

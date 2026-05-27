@@ -8,6 +8,7 @@ export type BlockVersionGcScope = {
 
 export type BlockVersionGcPolicy = {
   gracePeriodMs: number;
+  tombstoneGracePeriodMs: number;
   keepLatestPerBlock: number;
   maxCandidatesToStore: number;
   rootSources: Array<"doc_snapshots" | "document_drafts">;
@@ -33,7 +34,7 @@ export type BlockVersionGcCandidate = {
   blockId: string;
   blockVer: number;
   versionCreatedAt: number;
-  reasonCode: "unreferenced_older_than_policy";
+  reasonCode: "unreferenced_older_than_policy" | "deleted_tombstone_map_entry";
   reasonDetail: Record<string, unknown>;
   riskLevel: GcCandidateRiskLevel;
 };
@@ -41,8 +42,12 @@ export type BlockVersionGcCandidate = {
 export type BlockVersionGcCollectorSummary = {
   blockVersionsScanned: number;
   hardRootedBlockVersions: number;
+  liveRootedBlockVersions: number;
+  tombstoneRootedBlockVersions: number;
   policyRetainedBlockVersions: number;
+  softDeletedMapEntries: number;
   candidateBlockVersions: number;
+  tombstoneCompactionCandidates: number;
   rootSources: {
     docSnapshots: number;
     documentDrafts: number;

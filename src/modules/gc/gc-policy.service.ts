@@ -29,6 +29,18 @@ const BLOCK_VERSION_GC_POLICY: BlockVersionGcPolicy = {
   gracePeriodMs: 10 * SECOND,
 
   /**
+   * 对 `payload.attrs.deleted === true` 且仍然挂在 `blockVersionMap` 里的 tombstone root，
+   * 单独使用这个宽限期判断是否进入“压缩 map 引用”的候选集。
+   *
+   * 作用：
+   * - 未超过这个窗口：继续作为 tombstone root 展示，但不进入候选
+   * - 超过这个窗口：进入 `compact_map_entry` preview 候选，用来提示后续可以从 map 中移除该引用
+   *
+   * 这一步不会删除 `block_versions`，只是在 preview 中暴露“可以压缩 map”的信号。
+   */
+  tombstoneGracePeriodMs: 10 * SECOND,
+
+  /**
    * 每个 `blockId` 无论是否被引用，都额外保留最近 N 个版本。
    *
    * 作用：

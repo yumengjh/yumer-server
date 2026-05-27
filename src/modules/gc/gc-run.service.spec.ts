@@ -23,6 +23,7 @@ describe("GcRunService", () => {
       {
         getBlockVersionPolicy: jest.fn().mockReturnValue({
           gracePeriodMs: 60_000,
+          tombstoneGracePeriodMs: 60_000,
           keepLatestPerBlock: 5,
           maxCandidatesToStore: 1000,
           rootSources: ["doc_snapshots", "document_drafts"],
@@ -44,7 +45,10 @@ describe("GcRunService", () => {
       { preview: jest.fn() } as unknown as BlockVersionGcCollector,
     );
 
-    const result = await service.previewBlockVersions({ docId: "doc_1", includeCandidates: true }, "tester");
+    const result = await service.previewBlockVersions(
+      { docId: "doc_1", includeCandidates: true },
+      "tester",
+    );
 
     expect(result.status).toBe("blocked");
     expect(candidateRepo.save).not.toHaveBeenCalled();
@@ -65,6 +69,7 @@ describe("GcRunService", () => {
       {
         getBlockVersionPolicy: jest.fn().mockReturnValue({
           gracePeriodMs: 60_000,
+          tombstoneGracePeriodMs: 60_000,
           keepLatestPerBlock: 5,
           maxCandidatesToStore: 1,
           rootSources: ["doc_snapshots", "document_drafts"],
@@ -88,8 +93,12 @@ describe("GcRunService", () => {
           summary: {
             blockVersionsScanned: 2,
             hardRootedBlockVersions: 0,
+            liveRootedBlockVersions: 0,
+            tombstoneRootedBlockVersions: 0,
             policyRetainedBlockVersions: 0,
+            softDeletedMapEntries: 0,
             candidateBlockVersions: 2,
+            tombstoneCompactionCandidates: 0,
             rootSources: { docSnapshots: 0, documentDrafts: 0 },
             candidateReasons: { unreferenced_older_than_policy: 2 },
           },
@@ -123,7 +132,10 @@ describe("GcRunService", () => {
       } as unknown as BlockVersionGcCollector,
     );
 
-    const result = await service.previewBlockVersions({ docId: "doc_1", includeCandidates: true }, "tester");
+    const result = await service.previewBlockVersions(
+      { docId: "doc_1", includeCandidates: true },
+      "tester",
+    );
 
     expect(result.status).toBe("completed");
     expect(result.candidateDetailsStored).toBe(true);

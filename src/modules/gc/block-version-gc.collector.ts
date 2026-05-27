@@ -14,6 +14,14 @@ import type {
   BlockVersionGcScope,
 } from "./gc.types";
 
+type RootSource = "doc_snapshots" | "document_drafts";
+type RootKind = "live" | "tombstone";
+
+type RootEntry = {
+  source: RootSource;
+  kind: RootKind;
+};
+
 @Injectable()
 export class BlockVersionGcCollector {
   constructor(
@@ -35,7 +43,9 @@ export class BlockVersionGcCollector {
   ): Promise<BlockVersionGcCollectorResult> {
     const documents = await this.findScopedDocuments(scope);
     const docIds = documents.map((document) => document.docId);
-    const workspaceByDoc = new Map(documents.map((document) => [document.docId, document.workspaceId]));
+    const workspaceByDoc = new Map(
+      documents.map((document) => [document.docId, document.workspaceId]),
+    );
 
     if (docIds.length === 0) {
       return this.emptyResult();
@@ -51,32 +61,112 @@ export class BlockVersionGcCollector {
       this.docDraftRepository.find({ where: { docId: In(docIds) } }),
     ]);
 
-    const hardRoots = new Set<string>();
+    const versionByResourceKey = new Map(
+      blockVersions.map((version) => [
+        blockVersionResourceKey(version.blockId, version.ver),
+        version,
+      ]),
+    );
+    const liveRoots = new Set<string>();
+    const tombstoneRoots = new Set<string>();
+    const rootEntriesByResourceKey = new Map<string, RootEntry[]>();
     let docSnapshotRootCount = 0;
     let documentDraftRootCount = 0;
+    let softDeletedMapEntries = 0;
 
     for (const snapshot of snapshots) {
       const keys = snapshotMapToResourceKeys(snapshot.blockVersionMap as Record<string, number>);
       docSnapshotRootCount += keys.size;
-      for (const key of keys) hardRoots.add(key);
+      for (const key of keys) {
+        const rootEntry = this.classifyRootEntry(versionByResourceKey.get(key), "doc_snapshots");
+        if (!rootEntry) continue;
+
+        if (rootEntry.kind === "tombstone") {
+          softDeletedMapEntries += 1;
+          tombstoneRoots.add(key);
+        } else {
+          liveRoots.add(key);
+        }
+
+        const entries = rootEntriesByResourceKey.get(key) ?? [];
+        entries.push(rootEntry);
+        rootEntriesByResourceKey.set(key, entries);
+      }
     }
 
     for (const draft of drafts) {
       const keys = snapshotMapToResourceKeys(draft.blockVersionMap);
       documentDraftRootCount += keys.size;
-      for (const key of keys) hardRoots.add(key);
+      for (const key of keys) {
+        const rootEntry = this.classifyRootEntry(versionByResourceKey.get(key), "document_drafts");
+        if (!rootEntry) continue;
+
+        if (rootEntry.kind === "tombstone") {
+          softDeletedMapEntries += 1;
+          tombstoneRoots.add(key);
+        } else {
+          liveRoots.add(key);
+        }
+
+        const entries = rootEntriesByResourceKey.get(key) ?? [];
+        entries.push(rootEntry);
+        rootEntriesByResourceKey.set(key, entries);
+      }
     }
 
     const retained = this.calculatePolicyRetained(blockVersions, blocks, policy);
     const candidates: BlockVersionGcCandidate[] = [];
     const candidateReasons: Record<string, number> = {};
+    let candidateBlockVersions = 0;
+    let tombstoneCompactionCandidates = 0;
 
     for (const version of blockVersions) {
       const resourceKey = blockVersionResourceKey(version.blockId, version.ver);
-      if (hardRoots.has(resourceKey) || retained.has(resourceKey)) continue;
+      const rootEntries = rootEntriesByResourceKey.get(resourceKey) ?? [];
+      const rootKind = liveRoots.has(resourceKey)
+        ? "live"
+        : tombstoneRoots.has(resourceKey)
+          ? "tombstone"
+          : "none";
+      const primarySource = rootEntries[0]?.source ?? null;
+      const deleted = this.isDeletedTombstone(version);
+
+      if (rootKind === "live") continue;
+
+      if (rootKind === "tombstone") {
+        if (!this.isOlderThan(version.createdAt, policy.tombstoneGracePeriodMs)) continue;
+
+        const reasonCode = "deleted_tombstone_map_entry";
+        candidateReasons[reasonCode] = (candidateReasons[reasonCode] ?? 0) + 1;
+        tombstoneCompactionCandidates += 1;
+        candidates.push({
+          resourceKey,
+          resourceRowId: version.id,
+          docId: version.docId,
+          workspaceId: workspaceByDoc.get(version.docId) ?? null,
+          blockId: version.blockId,
+          blockVer: version.ver,
+          versionCreatedAt: Number(version.createdAt),
+          reasonCode,
+          reasonDetail: {
+            rootKind,
+            deleted,
+            source: primarySource,
+            action: "compact_map_entry",
+            hardRooted: true,
+            retainedByPolicy: retained.has(resourceKey),
+            tombstoneGracePeriodMs: policy.tombstoneGracePeriodMs,
+          },
+          riskLevel: "low",
+        });
+        continue;
+      }
+
+      if (retained.has(resourceKey)) continue;
 
       const reasonCode = "unreferenced_older_than_policy";
       candidateReasons[reasonCode] = (candidateReasons[reasonCode] ?? 0) + 1;
+      candidateBlockVersions += 1;
       candidates.push({
         resourceKey,
         resourceRowId: version.id,
@@ -87,6 +177,10 @@ export class BlockVersionGcCollector {
         versionCreatedAt: Number(version.createdAt),
         reasonCode,
         reasonDetail: {
+          rootKind,
+          deleted,
+          source: primarySource,
+          action: "candidate_block_version",
           hardRooted: false,
           retainedByPolicy: false,
           gracePeriodMs: policy.gracePeriodMs,
@@ -99,9 +193,13 @@ export class BlockVersionGcCollector {
     return {
       summary: {
         blockVersionsScanned: blockVersions.length,
-        hardRootedBlockVersions: hardRoots.size,
+        hardRootedBlockVersions: liveRoots.size + tombstoneRoots.size,
+        liveRootedBlockVersions: liveRoots.size,
+        tombstoneRootedBlockVersions: tombstoneRoots.size,
         policyRetainedBlockVersions: retained.size,
-        candidateBlockVersions: candidates.length,
+        softDeletedMapEntries,
+        candidateBlockVersions,
+        tombstoneCompactionCandidates,
         rootSources: {
           docSnapshots: docSnapshotRootCount,
           documentDrafts: documentDraftRootCount,
@@ -167,8 +265,12 @@ export class BlockVersionGcCollector {
       summary: {
         blockVersionsScanned: 0,
         hardRootedBlockVersions: 0,
+        liveRootedBlockVersions: 0,
+        tombstoneRootedBlockVersions: 0,
         policyRetainedBlockVersions: 0,
+        softDeletedMapEntries: 0,
         candidateBlockVersions: 0,
+        tombstoneCompactionCandidates: 0,
         rootSources: {
           docSnapshots: 0,
           documentDrafts: 0,
@@ -177,5 +279,27 @@ export class BlockVersionGcCollector {
       },
       candidates: [],
     };
+  }
+
+  private classifyRootEntry(
+    version: BlockVersion | undefined,
+    source: RootSource,
+  ): RootEntry | null {
+    if (!version) return null;
+
+    return {
+      source,
+      kind: this.isDeletedTombstone(version) ? "tombstone" : "live",
+    };
+  }
+
+  private isDeletedTombstone(version: BlockVersion): boolean {
+    const payload = (version.payload ?? {}) as Record<string, unknown>;
+    const attrs = (payload.attrs ?? {}) as Record<string, unknown>;
+    return attrs.deleted === true;
+  }
+
+  private isOlderThan(createdAt: number, gracePeriodMs: number): boolean {
+    return Number(createdAt) < Date.now() - gracePeriodMs;
   }
 }
