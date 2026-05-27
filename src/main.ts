@@ -5,6 +5,7 @@ import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { ConfigService } from '@nestjs/config';
+import express from 'express';
 import boxen from 'boxen';
 import chalk from 'chalk';
 import {
@@ -15,7 +16,9 @@ import {
 import { getAllowedCorsHeaders } from './common/utils/cors-options.util';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    bodyParser: false,
+  });
   const configService = app.get(ConfigService);
   const normalizePath = (path = '') => path.replace(/^\/+|\/+$/g, '');
   const joinPath = (...segments: Array<string | undefined>) =>
@@ -43,6 +46,9 @@ async function bootstrap() {
 
   // 全局前缀
   app.setGlobalPrefix(apiPrefix);
+
+  app.use(express.json({ limit: '2mb' }));
+  app.use(express.urlencoded({ limit: '2mb', extended: true }));
 
   // 跨域
   app.enableCors({

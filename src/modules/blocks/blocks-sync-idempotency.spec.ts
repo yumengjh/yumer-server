@@ -130,7 +130,7 @@ function createBlocksServiceWithInMemoryRepositories() {
     { record: jest.fn().mockResolvedValue(undefined) } as unknown as BlocksServiceConstructorArgs[7],
   );
 
-  return { service, blocks };
+  return { service, blocks, versions };
 }
 
 describe("BlocksService sync idempotency", () => {
@@ -163,5 +163,158 @@ describe("BlocksService sync idempotency", () => {
 
     expect(second.results[0].blockId).toBe(first.results[0].blockId);
     expect(blocks.filter((block) => block.type === "paragraph")).toHaveLength(1);
+  });
+
+  it("does not create a second block when the same syncCreateId is replayed in another batch", async () => {
+    const { service, blocks } = createBlocksServiceWithInMemoryRepositories();
+
+    const first = await service.batch({
+      docId: "doc_1",
+      baseVersion: 1,
+      clientBatchId: "batch_first",
+      source: BatchSourceType.AUTOSYNC,
+      createVersion: false,
+      operations: [
+        {
+          type: BatchOperationType.CREATE,
+          clientId: "client_inserted",
+          syncCreateId: "sync-create:client_inserted",
+          data: {
+            docId: "doc_1",
+            type: "paragraph",
+            parentId: "root_1",
+            sortKey: "001500",
+            payload: { type: "paragraph", attrs: { clientId: "client_inserted" } },
+          },
+        } as any,
+      ],
+    }, "user_1");
+
+    const second = await service.batch({
+      docId: "doc_1",
+      baseVersion: 1,
+      clientBatchId: "batch_retry_after_lost_response",
+      source: BatchSourceType.AUTOSYNC,
+      createVersion: false,
+      operations: [
+        {
+          type: BatchOperationType.CREATE,
+          clientId: "client_inserted",
+          syncCreateId: "sync-create:client_inserted",
+          data: {
+            docId: "doc_1",
+            type: "paragraph",
+            parentId: "root_1",
+            sortKey: "001500",
+            payload: { type: "paragraph", attrs: { clientId: "client_inserted" } },
+          },
+        } as any,
+      ],
+    }, "user_1");
+
+    expect(second.results[0].blockId).toBe(first.results[0].blockId);
+    expect(blocks.filter((block) => block.type === "paragraph")).toHaveLength(1);
+  });
+
+  it("stores unique sortKeys when multiple creates request an occupied sortKey", async () => {
+    const { service, blocks, versions } = createBlocksServiceWithInMemoryRepositories();
+    blocks.push({
+      blockId: "block_b",
+      docId: "doc_1",
+      type: "paragraph",
+      latestVer: 1,
+      isDeleted: false,
+    });
+    versions.push({
+      versionId: "block_b_v1",
+      docId: "doc_1",
+      blockId: "block_b",
+      ver: 1,
+      parentId: "root_1",
+      sortKey: "002000",
+      payload: { type: "paragraph", attrs: { clientId: "client_b" } },
+      hash: "b",
+      refs: [],
+    });
+
+    const response = await service.batch({
+      docId: "doc_1",
+      baseVersion: 1,
+      clientBatchId: "batch_paste",
+      source: BatchSourceType.AUTOSYNC,
+      createVersion: false,
+      operations: ["x", "y"].map((suffix) => ({
+        type: BatchOperationType.CREATE,
+        clientId: `client_${suffix}`,
+        syncCreateId: `sync-create:client_${suffix}`,
+        data: {
+          docId: "doc_1",
+          type: "paragraph",
+          parentId: "root_1",
+          sortKey: "002000",
+          payload: { type: "paragraph", attrs: { clientId: `client_${suffix}` } },
+        },
+      })) as any,
+    }, "user_1");
+
+    const createdSortKeys = response.results
+      .map((result) => result.sortKey);
+
+    expect(new Set(createdSortKeys).size).toBe(2);
+    expect(createdSortKeys.every((sortKey) => sortKey && sortKey < "002000")).toBe(true);
+  });
+
+  it("preserves sync create attrs when updating a created block", async () => {
+    const { service, versions } = createBlocksServiceWithInMemoryRepositories();
+
+    const created = await service.batch({
+      docId: "doc_1",
+      baseVersion: 1,
+      clientBatchId: "batch_create",
+      source: BatchSourceType.AUTOSYNC,
+      createVersion: false,
+      operations: [
+        {
+          type: BatchOperationType.CREATE,
+          clientId: "client_update",
+          syncCreateId: "sync-create:client_update",
+          data: {
+            docId: "doc_1",
+            type: "paragraph",
+            parentId: "root_1",
+            sortKey: "001500",
+            payload: { type: "paragraph", attrs: { clientId: "client_update" } },
+          },
+        } as any,
+      ],
+    }, "user_1");
+
+    const blockId = created.results[0].blockId!;
+    await service.batch({
+      docId: "doc_1",
+      baseVersion: 1,
+      clientBatchId: "batch_update",
+      source: BatchSourceType.AUTOSYNC,
+      createVersion: false,
+      operations: [
+        {
+          type: BatchOperationType.UPDATE,
+          blockId,
+          data: {
+            payload: {
+              type: "paragraph",
+              attrs: { clientId: "client_update" },
+              content: [{ type: "text", text: "updated" }],
+            },
+          },
+        },
+      ],
+    }, "user_1");
+
+    const latest = versions.find((version) => version.blockId === blockId && version.ver === 2);
+    expect((latest?.payload as { attrs?: Record<string, unknown> })?.attrs).toMatchObject({
+      clientId: "client_update",
+      syncCreateId: "sync-create:client_update",
+    });
   });
 });

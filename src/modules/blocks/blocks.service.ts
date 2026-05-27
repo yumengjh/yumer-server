@@ -375,6 +375,123 @@ export class BlocksService {
     return JSON.stringify(payload);
   }
 
+  private parseSortKey(value: string | null | undefined): number | null {
+    if (!value || value.trim() === "") return null;
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private formatSortKey(value: number): string {
+    return String(Math.max(0, Math.floor(value))).padStart(6, "0");
+  }
+
+  private createSortKeyBetween(previous: string | null, next: string | null): string {
+    const previousValue = this.parseSortKey(previous);
+    const nextValue = this.parseSortKey(next);
+
+    if (previousValue == null && nextValue == null) return "001000";
+    if (previousValue == null && nextValue != null) return this.formatSortKey(nextValue / 2);
+    if (previousValue != null && nextValue == null) return this.formatSortKey(previousValue + 1000);
+
+    const left = previousValue ?? 0;
+    const right = nextValue ?? left + 1000;
+    if (right - left <= 1) return this.formatSortKey(left + 1);
+    return this.formatSortKey((left + right) / 2);
+  }
+
+  private compareSortKeys(left: string, right: string): number {
+    return (this.parseSortKey(left) ?? 0) - (this.parseSortKey(right) ?? 0);
+  }
+
+  private mergePayloadPreservingSyncAttrs(
+    incomingPayload: Record<string, unknown>,
+    previousPayload?: Record<string, unknown> | null,
+  ): Record<string, unknown> {
+    const previousAttrs = (previousPayload?.attrs as Record<string, unknown> | undefined) ?? {};
+    const incomingAttrs = (incomingPayload.attrs as Record<string, unknown> | undefined) ?? {};
+
+    return {
+      ...incomingPayload,
+      attrs: {
+        ...previousAttrs,
+        ...incomingAttrs,
+        ...(previousAttrs.clientId && incomingAttrs.clientId == null ? { clientId: previousAttrs.clientId } : {}),
+        ...(previousAttrs.clientBatchId && incomingAttrs.clientBatchId == null ? { clientBatchId: previousAttrs.clientBatchId } : {}),
+        ...(previousAttrs.syncCreateId && incomingAttrs.syncCreateId == null ? { syncCreateId: previousAttrs.syncCreateId } : {}),
+      },
+    };
+  }
+
+  private async listSiblingSortKeys(
+    docId: string,
+    parentId: string,
+    manager: EntityManager,
+    excludeBlockId?: string,
+  ): Promise<string[]> {
+    const siblings = await manager
+      .getRepository(BlockVersion)
+      .createQueryBuilder("bv")
+      .innerJoin(Block, "b", "bv.blockId = b.blockId AND b.isDeleted = false")
+      .where("bv.docId = :docId", { docId })
+      .andWhere("bv.parentId = :parentId", { parentId })
+      .andWhere("bv.ver = b.latestVer")
+      .getMany();
+
+    return siblings
+      .filter((sibling) => sibling.blockId !== excludeBlockId)
+      .map((sibling) => sibling.sortKey)
+      .filter((sortKey): sortKey is string => typeof sortKey === "string" && sortKey.trim() !== "")
+      .sort((left, right) => this.compareSortKeys(left, right));
+  }
+
+  private async reserveUniqueSortKey(input: {
+    docId: string;
+    parentId: string;
+    requestedSortKey?: string;
+    manager: EntityManager;
+    reservedByParent: Map<string, Set<string>>;
+    excludeBlockId?: string;
+  }): Promise<string> {
+    const siblingSortKeys = await this.listSiblingSortKeys(
+      input.docId,
+      input.parentId,
+      input.manager,
+      input.excludeBlockId,
+    );
+    const reserved = input.reservedByParent.get(input.parentId) ?? new Set<string>();
+    const taken = new Set<string>([...siblingSortKeys, ...reserved]);
+    const requestedSortKey = input.requestedSortKey?.trim() ? input.requestedSortKey : undefined;
+
+    if (requestedSortKey && !taken.has(requestedSortKey)) {
+      reserved.add(requestedSortKey);
+      input.reservedByParent.set(input.parentId, reserved);
+      return requestedSortKey;
+    }
+
+    const orderedTaken = [...taken].sort((left, right) => this.compareSortKeys(left, right));
+    let previous: string | null = null;
+    let next: string | null = null;
+
+    if (requestedSortKey) {
+      const nextIndex = orderedTaken.findIndex((sortKey) => this.compareSortKeys(sortKey, requestedSortKey) >= 0);
+      next = nextIndex === -1 ? null : orderedTaken[nextIndex];
+      previous = nextIndex <= 0 ? null : orderedTaken[nextIndex - 1];
+    } else {
+      previous = orderedTaken.length > 0 ? orderedTaken[orderedTaken.length - 1] : null;
+      next = null;
+    }
+
+    let candidate = this.createSortKeyBetween(previous, next);
+    while (taken.has(candidate)) {
+      previous = candidate;
+      candidate = this.createSortKeyBetween(previous, next);
+    }
+
+    reserved.add(candidate);
+    input.reservedByParent.set(input.parentId, reserved);
+    return candidate;
+  }
+
   /**
    * 生成排序键（异步方法，基于同级块的位置）
    */
@@ -770,6 +887,7 @@ export class BlocksService {
         const results: SyncOperationResultDto[] = [];
         const now = Date.now();
         const shouldCreateVersion = batchBlockDto.createVersion !== false;
+        const reservedSortKeysByParent = new Map<string, Set<string>>();
         const draftMutations: Array<{
           type: "point" | "deleted";
           blockId: string;
@@ -786,6 +904,7 @@ export class BlocksService {
                 userId,
                 now,
                 manager,
+                reservedSortKeysByParent,
               );
               if (!shouldCreateVersion) {
                 draftMutations.push({
@@ -848,6 +967,7 @@ export class BlocksService {
                 userId,
                 now,
                 manager,
+                reservedSortKeysByParent,
               );
               if (!shouldCreateVersion) {
                 draftMutations.push({
@@ -972,7 +1092,8 @@ export class BlocksService {
     userId: string,
     now: number,
     manager: EntityManager,
-  ): Promise<{ blockId: string; version: number }> {
+    reservedSortKeysByParent: Map<string, Set<string>>,
+  ): Promise<{ blockId: string; version: number; sortKey: string }> {
     if (operation.data.docId && operation.data.docId !== docId) {
       throw new BadRequestException(
         `Create operation docId mismatch: ${operation.data.docId} !== ${docId}`,
@@ -1003,9 +1124,10 @@ export class BlocksService {
       docId,
       clientBatchId,
       operation.clientId,
+      operation.syncCreateId,
     );
     if (existing) {
-      return { blockId: existing.blockId, version: existing.ver };
+      return { blockId: existing.blockId, version: existing.ver, sortKey: existing.sortKey };
     }
 
     const payload = {
@@ -1014,12 +1136,18 @@ export class BlocksService {
         ...(((operation.data.payload as Record<string, unknown>).attrs as Record<string, unknown> | undefined) ?? {}),
         clientBatchId,
         ...(operation.clientId ? { clientId: operation.clientId } : {}),
+        ...(operation.syncCreateId ? { syncCreateId: operation.syncCreateId } : {}),
       },
     };
 
     const blockId = generateBlockId();
-    const sortKey =
-      operation.data.sortKey || (await this.generateSortKey(docId, parentId, manager));
+    const sortKey = await this.reserveUniqueSortKey({
+      docId,
+      parentId,
+      requestedSortKey: operation.data.sortKey,
+      manager,
+      reservedByParent: reservedSortKeysByParent,
+    });
 
     const block = manager.create(Block, {
       blockId,
@@ -1055,7 +1183,7 @@ export class BlocksService {
 
     await manager.save(BlockVersion, blockVersion);
 
-    return { blockId, version: 1 };
+    return { blockId, version: 1, sortKey };
   }
 
   private async findExistingCreateByClientIdentity(
@@ -1063,8 +1191,9 @@ export class BlocksService {
     docId: string,
     clientBatchId: string | undefined,
     clientId: string | undefined,
+    syncCreateId?: string,
   ): Promise<BlockVersion | null> {
-    if (!clientBatchId || !clientId) return null;
+    if (!syncCreateId && (!clientBatchId || !clientId)) return null;
 
     const latestVersions = await manager
       .getRepository(BlockVersion)
@@ -1077,6 +1206,9 @@ export class BlocksService {
     return (
       latestVersions.find((version) => {
         const attrs = (version.payload as { attrs?: Record<string, unknown> } | undefined)?.attrs;
+        if (syncCreateId && attrs?.syncCreateId === syncCreateId) {
+          return true;
+        }
         return attrs?.clientBatchId === clientBatchId && attrs?.clientId === clientId;
       }) ?? null
     );
@@ -1098,11 +1230,14 @@ export class BlocksService {
     }
 
     const newVer = block.latestVer + 1;
-    const hash = this.calculateHash(operation.data.payload);
-
     const latestVersion = await manager.findOne(BlockVersion, {
       where: { docId, blockId: operation.blockId, ver: block.latestVer },
     });
+    const payload = this.mergePayloadPreservingSyncAttrs(
+      operation.data.payload as Record<string, unknown>,
+      (latestVersion?.payload as Record<string, unknown> | undefined) ?? undefined,
+    );
+    const hash = this.calculateHash(payload);
 
     const blockVersion = manager.create(BlockVersion, {
       versionId: generateVersionId(operation.blockId, newVer),
@@ -1115,9 +1250,9 @@ export class BlocksService {
       sortKey: latestVersion?.sortKey || "0",
       indent: latestVersion?.indent || 0,
       collapsed: latestVersion?.collapsed || false,
-      payload: operation.data.payload,
+      payload,
       hash,
-      plainText: operation.data.plainText || this.extractPlainText(operation.data.payload),
+      plainText: operation.data.plainText || this.extractPlainText(payload),
       refs: [],
     });
 
@@ -1205,7 +1340,8 @@ export class BlocksService {
     userId: string,
     now: number,
     manager: EntityManager,
-  ): Promise<{ blockId: string; version: number }> {
+    reservedSortKeysByParent: Map<string, Set<string>>,
+  ): Promise<{ blockId: string; version: number; sortKey: string }> {
     const block = await manager.findOne(Block, {
       where: { blockId: operation.blockId, docId, isDeleted: false },
     });
@@ -1241,6 +1377,15 @@ export class BlocksService {
       throw new NotFoundException("Block version not found");
     }
 
+    const resolvedSortKey = await this.reserveUniqueSortKey({
+      docId,
+      parentId: operation.parentId || "",
+      requestedSortKey: operation.sortKey,
+      manager,
+      reservedByParent: reservedSortKeysByParent,
+      excludeBlockId: operation.blockId,
+    });
+
     const newVer = block.latestVer + 1;
     const blockVersion = manager.create(BlockVersion, {
       versionId: generateVersionId(operation.blockId, newVer),
@@ -1250,7 +1395,7 @@ export class BlocksService {
       createdAt: now,
       createdBy: userId,
       parentId: operation.parentId || "",
-      sortKey: operation.sortKey,
+      sortKey: resolvedSortKey,
       indent: operation.indent || 0,
       collapsed: latestVersion.collapsed,
       payload: latestVersion.payload,
@@ -1266,6 +1411,6 @@ export class BlocksService {
     block.latestBy = userId;
     await manager.save(Block, block);
 
-    return { blockId: operation.blockId, version: newVer };
+    return { blockId: operation.blockId, version: newVer, sortKey: resolvedSortKey };
   }
 }
