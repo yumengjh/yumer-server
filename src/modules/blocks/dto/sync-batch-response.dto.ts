@@ -27,6 +27,9 @@ export class SyncOperationResultDto {
   @ApiPropertyOptional({ description: '服务端 blockId', example: 'b_1234567890_abc123' })
   blockId?: string;
 
+  @ApiPropertyOptional({ description: '服务端最终采用的排序键', example: '001500' })
+  sortKey?: string;
+
   @ApiPropertyOptional({ description: '操作后的版本号', example: 2 })
   version?: number;
 
@@ -53,4 +56,3 @@ export class SyncBatchResponseDto {
   @ApiProperty({ type: () => [SyncOperationResultDto], description: '逐操作结果与 ack 信息' })
   results: SyncOperationResultDto[];
 }
-

@@ -41,6 +41,14 @@ export class BatchCreateOperation {
   @IsOptional()
   @IsString()
   clientId?: string;
+
+  @ApiPropertyOptional({
+    description: '稳定的创建幂等ID（跨 batch 重试保持不变）',
+    example: 'sync-create:cid_01HZXFXXR93Z2',
+  })
+  @IsOptional()
+  @IsString()
+  syncCreateId?: string;
 }
 
 export class BatchUpdateOperation {
@@ -164,4 +172,3 @@ export class BatchBlockDto {
   @IsEnum(BatchSourceType)
   source?: BatchSourceType;
 }
-
