@@ -7,6 +7,7 @@ describe("DocumentsController", () => {
     getContent: jest.fn(),
     getContentSitePublic: jest.fn(),
     getEditContent: jest.fn(),
+    updateEditorState: jest.fn(),
     discardDraft: jest.fn(),
   };
   const documentExportService = {
@@ -103,6 +104,12 @@ describe("DocumentsController", () => {
       source: "draft",
       head: 3,
       publishedHead: 2,
+      editorState: {
+        lastEditPosition: {
+          blockId: "block_b",
+          updatedAt: "2026-05-28T12:00:00.000Z",
+        },
+      },
       draft: { exists: true, draftId: "draft_1", baseDocVer: 3 },
       lock: { locked: false, lockOwnerUserId: null, lockExpiresAt: null },
       tree: { blockId: "root_1", type: "root", children: [] },
@@ -115,6 +122,47 @@ describe("DocumentsController", () => {
       }),
     ).resolves.toMatchObject({
       source: "draft",
+      editorState: {
+        lastEditPosition: {
+          blockId: "block_b",
+          updatedAt: "2026-05-28T12:00:00.000Z",
+        },
+      },
+    });
+  });
+
+  it("updates document editor state through the dedicated endpoint", async () => {
+    documentsService.updateEditorState.mockResolvedValue({
+      docId: "doc_1",
+      editorState: {
+        lastEditPosition: {
+          blockId: "block_c",
+          updatedAt: "2026-05-28T12:30:00.000Z",
+        },
+      },
+    });
+
+    await expect(
+      controller.updateEditorState(
+        "doc_1",
+        {
+          editorState: {
+            lastEditPosition: {
+              blockId: "block_c",
+              updatedAt: "2026-05-28T12:30:00.000Z",
+            },
+          },
+        } as any,
+        { userId: "user_1" },
+      ),
+    ).resolves.toEqual({
+      docId: "doc_1",
+      editorState: {
+        lastEditPosition: {
+          blockId: "block_c",
+          updatedAt: "2026-05-28T12:30:00.000Z",
+        },
+      },
     });
   });
 

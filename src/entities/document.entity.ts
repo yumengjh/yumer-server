@@ -92,6 +92,9 @@ export class Document {
   @Column({ type: isSqlite() ? "simple-json" : "tsvector", nullable: true })
   searchVector: any;
 
+  @Column({ type: isSqlite() ? "simple-json" : "jsonb", nullable: true })
+  editorState: Record<string, unknown> | null;
+
   // 关联
   @OneToMany("Block", "document")
   blocks: any[];

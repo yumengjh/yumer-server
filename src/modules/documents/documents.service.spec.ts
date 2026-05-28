@@ -101,6 +101,12 @@ describe("DocumentsService", () => {
       visibility: "workspace",
       status: "draft",
       viewCount: 0,
+      editorState: {
+        lastEditPosition: {
+          blockId: "block_b",
+          updatedAt: "2026-05-28T12:00:00.000Z",
+        },
+      },
     } as Document);
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
     jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
@@ -138,6 +144,71 @@ describe("DocumentsService", () => {
       (service as any).getEditContent("doc_1", "user_1", undefined, undefined, undefined),
     ).resolves.toMatchObject({
       source: "draft",
+      editorState: {
+        lastEditPosition: {
+          blockId: "block_b",
+          updatedAt: "2026-05-28T12:00:00.000Z",
+        },
+      },
+    });
+  });
+
+  it("updates editor state without touching draft content or block sync state", async () => {
+    const document = {
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 3,
+      publishedHead: 2,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+      editorState: null,
+    } as Document;
+    jest.mocked(documentRepository.findOne).mockResolvedValue(document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest.mocked(documentRepository.save).mockImplementation(async (value) => value as never);
+
+    const result = await (service as any).updateEditorState(
+      "doc_1",
+      {
+        editorState: {
+          lastEditPosition: {
+            blockId: "block_c",
+            previousBlockId: "block_b",
+            updatedAt: "2026-05-28T12:30:00.000Z",
+          },
+        },
+      },
+      "user_1",
+    );
+
+    expect(documentRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        docId: "doc_1",
+        editorState: {
+          lastEditPosition: {
+            blockId: "block_c",
+            previousBlockId: "block_b",
+            updatedAt: "2026-05-28T12:30:00.000Z",
+          },
+        },
+      }),
+    );
+    expect(documentDraftService.findByDocId).not.toHaveBeenCalled();
+    expect(blockVersionRepository.find).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      docId: "doc_1",
+      editorState: {
+        lastEditPosition: {
+          blockId: "block_c",
+          previousBlockId: "block_b",
+          updatedAt: "2026-05-28T12:30:00.000Z",
+        },
+      },
     });
   });
 

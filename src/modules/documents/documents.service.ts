@@ -28,6 +28,7 @@ import {
 import { compareSortKey } from "../../common/utils/sort-key.util";
 import { CreateDocumentDto } from "./dto/create-document.dto";
 import { UpdateDocumentDto } from "./dto/update-document.dto";
+import { UpdateEditorStateDto } from "./dto/update-editor-state.dto";
 import type {
   DiffResponse,
   DiffChangeItem,
@@ -918,10 +919,11 @@ export class DocumentsService {
 
       return {
         docId,
-        source: "draft" as const,
-        head: document.head,
-        publishedHead: document.publishedHead,
-        draft: {
+      source: "draft" as const,
+      head: document.head,
+      publishedHead: document.publishedHead,
+      editorState: document.editorState ?? null,
+      draft: {
           exists: true,
           draftId: draft.draftId,
           baseDocVer: draft.baseDocVer,
@@ -957,6 +959,7 @@ export class DocumentsService {
       source: "head" as const,
       head: document.head,
       publishedHead: document.publishedHead,
+      editorState: document.editorState ?? null,
       draft: {
         exists: false,
         draftId: null,
@@ -978,6 +981,34 @@ export class DocumentsService {
     const document = await this.findOne(docId, userId);
     await this.checkDocumentEditPermission(document, userId);
     return this.documentDraftService.discardDraft(docId);
+  }
+
+  async updateEditorState(docId: string, updateEditorStateDto: UpdateEditorStateDto, userId: string) {
+    const document = await this.documentRepository.findOne({
+      where: { docId },
+    });
+
+    if (!document) {
+      throw new NotFoundException("文档不存在");
+    }
+
+    if (document.status === "deleted") {
+      throw new NotFoundException("文档不存在");
+    }
+
+    await this.checkDocumentEditPermission(document, userId);
+
+    document.editorState = {
+      ...(document.editorState ?? {}),
+      ...((updateEditorStateDto?.editorState as Record<string, unknown> | undefined) ?? {}),
+    };
+    document.updatedBy = userId;
+    await this.documentRepository.save(document);
+
+    return {
+      docId: document.docId,
+      editorState: document.editorState,
+    };
   }
 
   async findAllSitePublic(queryDto: QueryDocumentsDto) {

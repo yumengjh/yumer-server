@@ -35,6 +35,7 @@ import { CommitVersionDto } from "./dto/commit-version.dto";
 import { QueryContentDto } from "./dto/query-content.dto";
 import { QueryEditContentDto } from "./dto/query-edit-content.dto";
 import { EditContentResponseDto } from "./dto/edit-content-response.dto";
+import { UpdateEditorStateDto } from "./dto/update-editor-state.dto";
 import { ExportDocumentDto } from "./dto/export-document.dto";
 import { SyncStateResponseDto } from "./dto/sync-state-response.dto";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -195,6 +196,18 @@ export class DocumentsController {
     @CurrentUser() user: any,
   ) {
     return this.documentsService.update(docId, updateDocumentDto, user.userId);
+  }
+
+  @Patch(":docId/editor-state")
+  @ApiOperation({ summary: "Update document editor state" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
+  async updateEditorState(
+    @Param("docId") docId: string,
+    @Body() updateEditorStateDto: UpdateEditorStateDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.documentsService.updateEditorState(docId, updateEditorStateDto, user.userId);
   }
 
   @Post(":docId/publish")

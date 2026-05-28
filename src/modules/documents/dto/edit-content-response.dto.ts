@@ -42,6 +42,25 @@ class EditPaginationDto {
   nextStartBlockId?: string | null;
 }
 
+class LastEditPositionDto {
+  @ApiProperty()
+  blockId: string;
+
+  @ApiProperty({ required: false, nullable: true })
+  previousBlockId?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  nextBlockId?: string | null;
+
+  @ApiProperty()
+  updatedAt: string;
+}
+
+class EditorStateDto {
+  @ApiProperty({ type: LastEditPositionDto, required: false, nullable: true })
+  lastEditPosition?: LastEditPositionDto | null;
+}
+
 export class EditContentResponseDto {
   @ApiProperty()
   docId: string;
@@ -54,6 +73,9 @@ export class EditContentResponseDto {
 
   @ApiProperty()
   publishedHead: number;
+
+  @ApiProperty({ type: EditorStateDto, required: false, nullable: true })
+  editorState?: EditorStateDto | null;
 
   @ApiProperty({ type: EditDraftMetaDto })
   draft: EditDraftMetaDto;
