@@ -406,6 +406,7 @@ export class BlocksService {
   private mergePayloadPreservingSyncAttrs(
     incomingPayload: Record<string, unknown>,
     previousPayload?: Record<string, unknown> | null,
+    canonicalSortKey?: string | null,
   ): Record<string, unknown> {
     const previousAttrs = (previousPayload?.attrs as Record<string, unknown> | undefined) ?? {};
     const incomingAttrs = (incomingPayload.attrs as Record<string, unknown> | undefined) ?? {};
@@ -418,6 +419,7 @@ export class BlocksService {
         ...(previousAttrs.clientId && incomingAttrs.clientId == null ? { clientId: previousAttrs.clientId } : {}),
         ...(previousAttrs.clientBatchId && incomingAttrs.clientBatchId == null ? { clientBatchId: previousAttrs.clientBatchId } : {}),
         ...(previousAttrs.syncCreateId && incomingAttrs.syncCreateId == null ? { syncCreateId: previousAttrs.syncCreateId } : {}),
+        ...(canonicalSortKey ? { sortKey: canonicalSortKey } : {}),
       },
     };
   }
@@ -1236,6 +1238,7 @@ export class BlocksService {
     const payload = this.mergePayloadPreservingSyncAttrs(
       operation.data.payload as Record<string, unknown>,
       (latestVersion?.payload as Record<string, unknown> | undefined) ?? undefined,
+      latestVersion?.sortKey,
     );
     const hash = this.calculateHash(payload);
 

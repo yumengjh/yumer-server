@@ -154,7 +154,7 @@ describe("BlocksService sync idempotency", () => {
             sortKey: "001500",
             payload: { type: "paragraph", attrs: { clientId: "client_inserted" } },
           },
-        },
+        } as any,
       ],
     };
 
@@ -208,7 +208,7 @@ describe("BlocksService sync idempotency", () => {
             sortKey: "001500",
             payload: { type: "paragraph", attrs: { clientId: "client_inserted" } },
           },
-        } as any,
+        },
       ],
     }, "user_1");
 
@@ -316,5 +316,61 @@ describe("BlocksService sync idempotency", () => {
       clientId: "client_update",
       syncCreateId: "sync-create:client_update",
     });
+  });
+
+  it("keeps payload sortKey aligned with the persisted version sortKey during update", async () => {
+    const { service, versions } = createBlocksServiceWithInMemoryRepositories();
+
+    const created = await service.batch({
+      docId: "doc_1",
+      baseVersion: 1,
+      clientBatchId: "batch_create_sort",
+      source: BatchSourceType.AUTOSYNC,
+      createVersion: false,
+      operations: [
+        {
+          type: BatchOperationType.CREATE,
+          clientId: "client_sort",
+          syncCreateId: "sync-create:client_sort",
+          data: {
+            docId: "doc_1",
+            type: "paragraph",
+            parentId: "root_1",
+            sortKey: "001000",
+            payload: {
+              type: "paragraph",
+              attrs: { clientId: "client_sort", sortKey: "001000" },
+            },
+          },
+        },
+      ],
+    }, "user_1");
+
+    const blockId = created.results[0].blockId!;
+    const serverSortKey = created.results[0].sortKey!;
+    await service.batch({
+      docId: "doc_1",
+      baseVersion: 1,
+      clientBatchId: "batch_update_stale_sort",
+      source: BatchSourceType.AUTOSYNC,
+      createVersion: false,
+      operations: [
+        {
+          type: BatchOperationType.UPDATE,
+          blockId,
+          data: {
+            payload: {
+              type: "paragraph",
+              attrs: { clientId: "client_sort", sortKey: "stale-client-sort-key" },
+              content: [{ type: "text", text: "updated" }],
+            },
+          },
+        },
+      ],
+    }, "user_1");
+
+    const latest = versions.find((version) => version.blockId === blockId && version.ver === 2);
+    expect(latest?.sortKey).toBe(serverSortKey);
+    expect((latest?.payload as { attrs?: Record<string, unknown> })?.attrs?.sortKey).toBe(serverSortKey);
   });
 });
