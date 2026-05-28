@@ -10,6 +10,7 @@ export const DEFAULT_SETTINGS: SettingsPayload = {
   editor: {
     contentWidth: 800,
     fontSize: 16,
+    confirmBeforeLeave: false,
   },
   advanced: {
     compactList: true,
@@ -25,6 +26,7 @@ export const DEFAULT_SETTINGS_SCHEMA: SettingsSchema = {
   editor: {
     contentWidth: { type: 'number', min: 680, max: 1200 },
     fontSize: { type: 'number', min: 13, max: 22 },
+    confirmBeforeLeave: { type: 'boolean' },
   },
   advanced: {
     compactList: { type: 'boolean' },

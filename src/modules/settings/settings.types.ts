@@ -8,6 +8,7 @@ export interface SettingsPayload {
   editor?: {
     contentWidth?: number;
     fontSize?: number;
+    confirmBeforeLeave?: boolean;
   };
   advanced?: {
     compactList?: boolean;
@@ -23,6 +24,7 @@ export interface SettingsPatchPayload {
   editor?: {
     contentWidth?: number | null;
     fontSize?: number | null;
+    confirmBeforeLeave?: boolean | null;
   } | null;
   advanced?: {
     compactList?: boolean | null;

@@ -42,6 +42,11 @@ class EditorSettingsPatchDto {
   @Min(13)
   @Max(22)
   fontSize?: number | null;
+
+  @ApiPropertyOptional({ description: '离开页面时是否确认', example: false })
+  @IsOptional()
+  @IsBoolean()
+  confirmBeforeLeave?: boolean | null;
 }
 
 class AdvancedSettingsPatchDto {
