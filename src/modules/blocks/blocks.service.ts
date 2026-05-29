@@ -1,10 +1,4 @@
-import {
-  Injectable,
-  NotFoundException,
-  BadRequestException,
-  forwardRef,
-  Logger,
-} from "@nestjs/common";
+import { Injectable, NotFoundException, BadRequestException, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { InjectDataSource } from "@nestjs/typeorm";
 import { Repository, DataSource, EntityManager } from "typeorm";
@@ -133,7 +127,11 @@ export class BlocksService {
       if (shouldCreateVersion) {
         await this.incrementDocumentHead(createBlockDto.docId, userId, manager);
       } else {
-        await this.documentDraftService.ensureDraftForMutation(createBlockDto.docId, userId, manager);
+        await this.documentDraftService.ensureDraftForMutation(
+          createBlockDto.docId,
+          userId,
+          manager,
+        );
         await this.documentDraftService.pointBlockToVersion(
           createBlockDto.docId,
           blockId,
@@ -271,7 +269,11 @@ export class BlocksService {
           if (shouldCreateVersion) {
             await this.incrementDocumentHead(lockedBlock.docId, userId, manager);
           } else {
-            await this.documentDraftService.ensureDraftForMutation(lockedBlock.docId, userId, manager);
+            await this.documentDraftService.ensureDraftForMutation(
+              lockedBlock.docId,
+              userId,
+              manager,
+            );
             await this.documentDraftService.pointBlockToVersion(
               lockedBlock.docId,
               blockId,
@@ -307,7 +309,7 @@ export class BlocksService {
   }
 
   private isRetryableConflict(error: unknown): boolean {
-    const dbCode = (error as any)?.driverError?.code as string | undefined;
+    const dbCode = (error as { driverError?: { code?: string } })?.driverError?.code;
     // 23505: unique_violation, 40001: serialization_failure, 40P01: deadlock_detected
     return dbCode === "23505" || dbCode === "40001" || dbCode === "40P01";
   }
@@ -331,8 +333,9 @@ export class BlocksService {
           throw error;
         }
 
-        const dbCode = (error as any)?.driverError?.code;
-        const constraint = (error as any)?.driverError?.constraint;
+        const driverError = error as { driverError?: { code?: string; constraint?: string } };
+        const dbCode = driverError.driverError?.code;
+        const constraint = driverError.driverError?.constraint;
         const backoff = attempt === 1 ? 20 : 60;
         this.logger.warn(
           `updateContent 并发冲突重试: blockId=${context.blockId}, userId=${context.userId}, attempt=${attempt}/${maxAttempts}, dbCode=${dbCode ?? "unknown"}, constraint=${constraint ?? "unknown"}, backoffMs=${backoff}`,
@@ -346,7 +349,7 @@ export class BlocksService {
   /**
    * 计算内容的哈希值
    */
-  private calculateHash(content: any): string {
+  private calculateHash(content: unknown): string {
     const str = JSON.stringify(content);
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
@@ -360,17 +363,21 @@ export class BlocksService {
   /**
    * 从 payload 中提取纯文本
    */
-  private extractPlainText(payload: any): string {
+  private extractPlainText(payload: unknown): string {
     if (typeof payload === "string") {
       return payload;
     }
-    if (payload?.text) {
-      return payload.text;
+    if (payload && typeof payload === "object" && "text" in payload) {
+      const text = (payload as { text?: unknown }).text;
+      if (typeof text === "string") {
+        return text;
+      }
     }
-    if (payload?.content) {
-      return Array.isArray(payload.content)
-        ? payload.content.map((c: any) => this.extractPlainText(c)).join(" ")
-        : String(payload.content);
+    if (payload && typeof payload === "object" && "content" in payload) {
+      const content = (payload as { content?: unknown }).content;
+      return Array.isArray(content)
+        ? content.map((item) => this.extractPlainText(item)).join(" ")
+        : String(content);
     }
     return JSON.stringify(payload);
   }
@@ -410,17 +417,30 @@ export class BlocksService {
   ): Record<string, unknown> {
     const previousAttrs = (previousPayload?.attrs as Record<string, unknown> | undefined) ?? {};
     const incomingAttrs = (incomingPayload.attrs as Record<string, unknown> | undefined) ?? {};
+    const attrs = {
+      ...previousAttrs,
+      ...incomingAttrs,
+      ...(previousAttrs.clientId && incomingAttrs.clientId == null
+        ? { clientId: previousAttrs.clientId }
+        : {}),
+      ...(previousAttrs.clientBatchId && incomingAttrs.clientBatchId == null
+        ? { clientBatchId: previousAttrs.clientBatchId }
+        : {}),
+      ...(previousAttrs.syncCreateId && incomingAttrs.syncCreateId == null
+        ? { syncCreateId: previousAttrs.syncCreateId }
+        : {}),
+      ...(canonicalSortKey ? { sortKey: canonicalSortKey } : {}),
+    };
+
+    if (incomingAttrs.deleted === true) {
+      attrs.deleted = true;
+    } else {
+      delete attrs.deleted;
+    }
 
     return {
       ...incomingPayload,
-      attrs: {
-        ...previousAttrs,
-        ...incomingAttrs,
-        ...(previousAttrs.clientId && incomingAttrs.clientId == null ? { clientId: previousAttrs.clientId } : {}),
-        ...(previousAttrs.clientBatchId && incomingAttrs.clientBatchId == null ? { clientBatchId: previousAttrs.clientBatchId } : {}),
-        ...(previousAttrs.syncCreateId && incomingAttrs.syncCreateId == null ? { syncCreateId: previousAttrs.syncCreateId } : {}),
-        ...(canonicalSortKey ? { sortKey: canonicalSortKey } : {}),
-      },
+      attrs,
     };
   }
 
@@ -475,7 +495,9 @@ export class BlocksService {
     let next: string | null = null;
 
     if (requestedSortKey) {
-      const nextIndex = orderedTaken.findIndex((sortKey) => this.compareSortKeys(sortKey, requestedSortKey) >= 0);
+      const nextIndex = orderedTaken.findIndex(
+        (sortKey) => this.compareSortKeys(sortKey, requestedSortKey) >= 0,
+      );
       next = nextIndex === -1 ? null : orderedTaken[nextIndex];
       previous = nextIndex <= 0 ? null : orderedTaken[nextIndex - 1];
     } else {
@@ -497,7 +519,11 @@ export class BlocksService {
   /**
    * 生成排序键（异步方法，基于同级块的位置）
    */
-  private async generateSortKey(docId: string, parentId: string, manager: any): Promise<string> {
+  private async generateSortKey(
+    docId: string,
+    parentId: string,
+    manager: EntityManager,
+  ): Promise<string> {
     // 查询同级块的最新版本
     const siblings = await manager
       .createQueryBuilder(BlockVersion, "bv")
@@ -535,7 +561,11 @@ export class BlocksService {
   /**
    * 增加文档版本号，并创建文档修订记录
    */
-  private async incrementDocumentHead(docId: string, userId: string, manager: any): Promise<void> {
+  private async incrementDocumentHead(
+    docId: string,
+    userId: string,
+    manager: EntityManager,
+  ): Promise<void> {
     const document = await manager.findOne(Document, { where: { docId } });
     if (document) {
       document.head += 1;
@@ -1135,7 +1165,9 @@ export class BlocksService {
     const payload = {
       ...(operation.data.payload as Record<string, unknown>),
       attrs: {
-        ...(((operation.data.payload as Record<string, unknown>).attrs as Record<string, unknown> | undefined) ?? {}),
+        ...(((operation.data.payload as Record<string, unknown>).attrs as
+          | Record<string, unknown>
+          | undefined) ?? {}),
         clientBatchId,
         ...(operation.clientId ? { clientId: operation.clientId } : {}),
         ...(operation.syncCreateId ? { syncCreateId: operation.syncCreateId } : {}),
@@ -1305,7 +1337,9 @@ export class BlocksService {
     const deletedPayload = {
       ...(latestVersion.payload as Record<string, unknown>),
       attrs: {
-        ...(((latestVersion.payload as Record<string, unknown>).attrs as Record<string, unknown> | undefined) ?? {}),
+        ...(((latestVersion.payload as Record<string, unknown>).attrs as
+          | Record<string, unknown>
+          | undefined) ?? {}),
         deleted: true,
       },
     };

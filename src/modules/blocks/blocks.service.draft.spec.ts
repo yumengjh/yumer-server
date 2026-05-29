@@ -1,9 +1,13 @@
+// cspell:ignore AUTOSYNC
+
 import { BlocksService } from "./blocks.service";
 import { Block } from "../../entities/block.entity";
 import { BlockVersion } from "../../entities/block-version.entity";
 import { Document } from "../../entities/document.entity";
 import { BatchOperationType, BatchSourceType } from "./dto/batch-block.dto";
 import type { DocumentDraftService } from "../documents/services/document-draft.service";
+import type { DocumentSnapshotService } from "../documents/services/document-snapshot.service";
+import type { DataSource } from "typeorm";
 
 type BlockState = Partial<Block>;
 type BlockVersionState = Partial<BlockVersion>;
@@ -95,7 +99,10 @@ function createDraftAwareBlocksService() {
       }
       return value;
     },
-    findOne: async (entity: unknown, options: { where?: Record<string, unknown>; select?: string[] }) => {
+    findOne: async (
+      entity: unknown,
+      options: { where?: Record<string, unknown>; select?: string[] },
+    ) => {
       const where = options.where ?? {};
       if (entity === Document && where.docId === document.docId) {
         return document;
@@ -164,9 +171,7 @@ function createDraftAwareBlocksService() {
     findOne: jest.fn().mockImplementation(async ({ where }) => {
       return (
         versions.find((item) =>
-          Object.entries(where).every(
-            ([key, value]) => item[key as keyof BlockVersion] === value,
-          ),
+          Object.entries(where).every(([key, value]) => item[key as keyof BlockVersion] === value),
         ) ?? null
       );
     }),
@@ -182,21 +187,24 @@ function createDraftAwareBlocksService() {
 
   const dataSource = {
     options: { type: "better-sqlite3" },
-    transaction: async <T>(callback: (txManager: typeof manager) => Promise<T>) => callback(manager),
+    transaction: async <T>(callback: (txManager: typeof manager) => Promise<T>) =>
+      callback(manager),
   };
 
   const service = new BlocksService(
-    blockRepository as any,
-    blockVersionRepository as any,
-    { createSnapshotForRevision: jest.fn() } as any,
-    documentRepository as any,
-    dataSource as any,
-    documentsService as any,
+    blockRepository as unknown as Parameters<typeof BlocksService>[0],
+    blockVersionRepository as unknown as Parameters<typeof BlocksService>[1],
+    { createSnapshotForRevision: jest.fn() } as unknown as DocumentSnapshotService,
+    documentRepository as unknown as Parameters<typeof BlocksService>[3],
+    dataSource as unknown as DataSource,
+    documentsService as unknown as Parameters<typeof BlocksService>[5],
     documentDraftService,
-    { record: jest.fn().mockResolvedValue(undefined) } as any,
+    { record: jest.fn().mockResolvedValue(undefined) } as unknown as Parameters<
+      typeof BlocksService
+    >[7],
   );
 
-  return { service, documentDraftService };
+  return { service, documentDraftService, versions };
 }
 
 describe("BlocksService draft writes", () => {
@@ -310,5 +318,63 @@ describe("BlocksService draft writes", () => {
       "user_1",
       expect.any(Object),
     );
+  });
+
+  it("clears deleted marker when a draft-deleted block is updated again", async () => {
+    const { service, documentDraftService, versions } = createDraftAwareBlocksService();
+
+    await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        clientBatchId: "batch_delete_then_update",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.DELETE,
+            blockId: "block_1",
+          },
+        ],
+      },
+      "user_1",
+    );
+
+    await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        clientBatchId: "batch_update_after_delete",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.UPDATE,
+            blockId: "block_1",
+            data: {
+              payload: {
+                type: "paragraph",
+                content: [{ type: "text", text: "revived" }],
+              },
+            },
+          },
+        ],
+      },
+      "user_1",
+    );
+
+    expect(documentDraftService.pointBlockToVersion).toHaveBeenCalledWith(
+      "doc_1",
+      "block_1",
+      3,
+      "user_1",
+      expect.any(Object),
+    );
+
+    const latestVersion = versions.find((item) => item.blockId === "block_1" && item.ver === 3);
+    expect(latestVersion).toBeDefined();
+    expect(
+      (latestVersion?.payload as { attrs?: Record<string, unknown> })?.attrs?.deleted,
+    ).toBeUndefined();
   });
 });
