@@ -1,3 +1,4 @@
+// cspell:words explainability
 import { Injectable } from "@nestjs/common";
 import type {
   BlockVersionGcCandidateAgeBucket,
@@ -299,7 +300,8 @@ export class GcPolicyService {
       riskAssessment,
       plannedAction,
       requiredChecks,
-      readiness: riskAssessment.level === "low" ? "ready_for_manual_review" : "needs_more_validation",
+      readiness:
+        riskAssessment.level === "low" ? "ready_for_manual_review" : "needs_more_validation",
     };
   }
 
@@ -342,7 +344,8 @@ export class GcPolicyService {
     factors: BlockVersionGcRiskFactor[],
   ): BlockVersionGcRiskAssessment {
     return {
-      level: score <= LOW_RISK_THRESHOLD ? "low" : score <= MEDIUM_RISK_THRESHOLD ? "medium" : "high",
+      level:
+        score <= LOW_RISK_THRESHOLD ? "low" : score <= MEDIUM_RISK_THRESHOLD ? "medium" : "high",
       score,
       reasons:
         reasons.length > 0

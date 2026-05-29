@@ -149,18 +149,16 @@ describe("BlockVersionGcCollector", () => {
         find: jest.fn().mockResolvedValue([{ blockId: "b_1", docId: "doc_1", latestVer: 4 }]),
       }),
       repository<BlockVersion>({
-        find: jest
-          .fn()
-          .mockResolvedValue([
-            {
-              id: 4,
-              docId: "doc_1",
-              blockId: "b_1",
-              ver: 4,
-              createdAt: old,
-              payload: { attrs: { deleted: true } },
-            },
-          ]),
+        find: jest.fn().mockResolvedValue([
+          {
+            id: 4,
+            docId: "doc_1",
+            blockId: "b_1",
+            ver: 4,
+            createdAt: old,
+            payload: { attrs: { deleted: true } },
+          },
+        ]),
       }),
       repository<DocSnapshot>({
         find: jest.fn().mockResolvedValue([{ docId: "doc_1", blockVersionMap: { b_1: 4 } }]),

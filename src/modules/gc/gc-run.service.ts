@@ -6,7 +6,11 @@ import { GcRunCandidate } from "../../entities/gc-run-candidate.entity";
 import { BlockVersionGcCollector } from "./block-version-gc.collector";
 import { GcHealthService } from "./gc-health.service";
 import { GcPolicyService } from "./gc-policy.service";
-import type { BlockVersionGcPersistedCandidate, BlockVersionGcPolicy, BlockVersionGcScope } from "./gc.types";
+import type {
+  BlockVersionGcPersistedCandidate,
+  BlockVersionGcPolicy,
+  BlockVersionGcScope,
+} from "./gc.types";
 
 export type CreateBlockVersionGcRunInput = BlockVersionGcScope & {
   includeCandidates?: boolean;

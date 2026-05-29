@@ -109,9 +109,11 @@ describe("GcHealthService", () => {
         find: jest.fn().mockResolvedValue([{ docId: "doc_1", docVer: 1 }]),
       }),
       repository<DocSnapshot>({
-        find: jest.fn().mockResolvedValue([
-          { docId: "doc_1", docVer: 1, snapshotId: "doc_1@snap@1", blockVersionMap: { b_1: 1 } },
-        ]),
+        find: jest
+          .fn()
+          .mockResolvedValue([
+            { docId: "doc_1", docVer: 1, snapshotId: "doc_1@snap@1", blockVersionMap: { b_1: 1 } },
+          ]),
       }),
       repository<DocDraft>({ find: jest.fn().mockResolvedValue([]) }),
       repository<BlockVersion>({

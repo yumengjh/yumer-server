@@ -1,3 +1,4 @@
+// cspell:words explainability
 import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, Repository } from "typeorm";
@@ -151,9 +152,13 @@ export class BlockVersionGcCollector {
           hardRooted: true,
           retainedByPolicy: retained.has(resourceKey),
           ageMs: nowMs - Number(version.createdAt),
-          ageBucket: this.deriveAgeBucket(nowMs - Number(version.createdAt), policy.tombstoneGracePeriodMs),
+          ageBucket: this.deriveAgeBucket(
+            nowMs - Number(version.createdAt),
+            policy.tombstoneGracePeriodMs,
+          ),
           rootSourceCount: rootEntries.length,
-          distanceFromLatestVer: (latestVerByBlock.get(version.blockId) ?? version.ver) - version.ver,
+          distanceFromLatestVer:
+            (latestVerByBlock.get(version.blockId) ?? version.ver) - version.ver,
           gracePeriodMs: policy.gracePeriodMs,
           tombstoneGracePeriodMs: policy.tombstoneGracePeriodMs,
           keepLatestPerBlock: policy.keepLatestPerBlock,
@@ -365,7 +370,9 @@ export class BlockVersionGcCollector {
     return Number(createdAt) < Date.now() - gracePeriodMs;
   }
 
-  private buildReasonDetail(input: BlockVersionGcCandidateReasonDetail): BlockVersionGcCandidateReasonDetail {
+  private buildReasonDetail(
+    input: BlockVersionGcCandidateReasonDetail,
+  ): BlockVersionGcCandidateReasonDetail {
     return input;
   }
 
