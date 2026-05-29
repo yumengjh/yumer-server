@@ -417,7 +417,7 @@ export class BlocksService {
   ): Record<string, unknown> {
     const previousAttrs = (previousPayload?.attrs as Record<string, unknown> | undefined) ?? {};
     const incomingAttrs = (incomingPayload.attrs as Record<string, unknown> | undefined) ?? {};
-    const attrs = {
+    const attrs: Record<string, unknown> = {
       ...previousAttrs,
       ...incomingAttrs,
       ...(previousAttrs.clientId && incomingAttrs.clientId == null
