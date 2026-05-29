@@ -6,7 +6,7 @@ import { GcRunCandidate } from "../../entities/gc-run-candidate.entity";
 import { BlockVersionGcCollector } from "./block-version-gc.collector";
 import { GcHealthService } from "./gc-health.service";
 import { GcPolicyService } from "./gc-policy.service";
-import type { BlockVersionGcScope } from "./gc.types";
+import type { BlockVersionGcPersistedCandidate, BlockVersionGcPolicy, BlockVersionGcScope } from "./gc.types";
 
 export type CreateBlockVersionGcRunInput = BlockVersionGcScope & {
   includeCandidates?: boolean;
@@ -136,7 +136,7 @@ export class GcRunService {
   }
 
   async findCandidates(runId: string, query: { page?: number; pageSize?: number }) {
-    await this.findRun(runId);
+    const run = await this.findRun(runId);
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 20;
     const [items, total] = await this.gcRunCandidateRepository.findAndCount({
@@ -145,7 +145,19 @@ export class GcRunService {
       skip: (page - 1) * pageSize,
       take: pageSize,
     });
-    return { items, total, page, pageSize };
+    const policy = this.normalizePolicySnapshot(run.policySnapshot);
+    return {
+      items: items.map((candidate) => ({
+        ...candidate,
+        ...this.gcPolicyService.explainPersistedBlockVersionCandidate(
+          candidate as unknown as BlockVersionGcPersistedCandidate,
+          policy,
+        ),
+      })),
+      total,
+      page,
+      pageSize,
+    };
   }
 
   private normalizeScope(input: BlockVersionGcScope): Record<string, unknown> {
@@ -175,5 +187,13 @@ export class GcRunService {
 
   private generateRunId(): string {
     return `gc_run_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  private normalizePolicySnapshot(snapshot: Record<string, unknown>): BlockVersionGcPolicy {
+    const defaults = this.gcPolicyService.getBlockVersionPolicy();
+    return {
+      ...defaults,
+      ...snapshot,
+    } as BlockVersionGcPolicy;
   }
 }

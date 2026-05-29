@@ -1,13 +1,16 @@
-import type { Repository } from "typeorm";
+import type { ObjectLiteral, Repository } from "typeorm";
 import { Block } from "../../entities/block.entity";
 import { BlockVersion } from "../../entities/block-version.entity";
 import { DocDraft } from "../../entities/doc-draft.entity";
 import { DocSnapshot } from "../../entities/doc-snapshot.entity";
 import { Document } from "../../entities/document.entity";
 import { BlockVersionGcCollector } from "./block-version-gc.collector";
+import { GcPolicyService } from "./gc-policy.service";
 import type { BlockVersionGcPolicy } from "./gc.types";
 
-function repository<T>(overrides: Partial<Record<keyof Repository<T>, jest.Mock>>) {
+function repository<T extends ObjectLiteral>(
+  overrides: Partial<Record<keyof Repository<T>, jest.Mock>>,
+) {
   return overrides as unknown as Repository<T>;
 }
 
@@ -44,6 +47,7 @@ describe("BlockVersionGcCollector", () => {
       repository<DocDraft>({
         find: jest.fn().mockResolvedValue([{ docId: "doc_1", blockVersionMap: { b_1: 2 } }]),
       }),
+      new GcPolicyService(),
     );
 
     const result = await collector.preview({ docId: "doc_1" }, policy);
@@ -78,6 +82,7 @@ describe("BlockVersionGcCollector", () => {
         find: jest.fn().mockResolvedValue([{ docId: "doc_1", blockVersionMap: { b_1: 1 } }]),
       }),
       repository<DocDraft>({ find: jest.fn().mockResolvedValue([]) }),
+      new GcPolicyService(),
     );
 
     const result = await collector.preview({ docId: "doc_1" }, policy);
@@ -116,6 +121,7 @@ describe("BlockVersionGcCollector", () => {
         find: jest.fn().mockResolvedValue([{ docId: "doc_1", blockVersionMap: { b_1: 4 } }]),
       }),
       repository<DocDraft>({ find: jest.fn().mockResolvedValue([]) }),
+      new GcPolicyService(),
     );
 
     const result = await collector.preview(
@@ -160,6 +166,7 @@ describe("BlockVersionGcCollector", () => {
         find: jest.fn().mockResolvedValue([{ docId: "doc_1", blockVersionMap: { b_1: 4 } }]),
       }),
       repository<DocDraft>({ find: jest.fn().mockResolvedValue([]) }),
+      new GcPolicyService(),
     );
 
     const result = await collector.preview(
@@ -177,6 +184,8 @@ describe("BlockVersionGcCollector", () => {
       resourceKey: "b_1@4",
       reasonCode: "deleted_tombstone_map_entry",
       riskLevel: "low",
+      plannedAction: "compact_map_entry",
+      readiness: "ready_for_manual_review",
       reasonDetail: {
         rootKind: "tombstone",
         deleted: true,
@@ -184,5 +193,11 @@ describe("BlockVersionGcCollector", () => {
         action: "compact_map_entry",
       },
     });
+    expect(result.candidates[0].requiredChecks).toEqual(
+      expect.arrayContaining(["verify_root_stability", "verify_policy_overlap"]),
+    );
+    expect(result.candidates[0].riskAssessment.reasons).toContain(
+      "tombstone root is old enough to compact",
+    );
   });
 });

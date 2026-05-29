@@ -9,10 +9,13 @@ import { Document } from "../../entities/document.entity";
 import { blockVersionResourceKey, snapshotMapToResourceKeys } from "./gc-resource-key.util";
 import type {
   BlockVersionGcCandidate,
+  BlockVersionGcCandidateAgeBucket,
   BlockVersionGcCollectorResult,
+  BlockVersionGcCandidateReasonDetail,
   BlockVersionGcPolicy,
   BlockVersionGcScope,
 } from "./gc.types";
+import { GcPolicyService } from "./gc-policy.service";
 
 type RootSource = "doc_snapshots" | "document_drafts";
 type RootKind = "live" | "tombstone";
@@ -35,6 +38,7 @@ export class BlockVersionGcCollector {
     private readonly docSnapshotRepository: Repository<DocSnapshot>,
     @InjectRepository(DocDraft)
     private readonly docDraftRepository: Repository<DocDraft>,
+    private readonly gcPolicyService: GcPolicyService,
   ) {}
 
   async preview(
@@ -115,6 +119,8 @@ export class BlockVersionGcCollector {
     }
 
     const retained = this.calculatePolicyRetained(blockVersions, blocks, policy);
+    const latestVerByBlock = new Map(blocks.map((block) => [block.blockId, block.latestVer]));
+    const nowMs = Date.now();
     const candidates: BlockVersionGcCandidate[] = [];
     const candidateReasons: Record<string, number> = {};
     let candidateBlockVersions = 0;
@@ -137,6 +143,41 @@ export class BlockVersionGcCollector {
         if (!this.isOlderThan(version.createdAt, policy.tombstoneGracePeriodMs)) continue;
 
         const reasonCode = "deleted_tombstone_map_entry";
+        const reasonDetail = this.buildReasonDetail({
+          rootKind,
+          deleted,
+          source: primarySource,
+          action: "compact_map_entry",
+          hardRooted: true,
+          retainedByPolicy: retained.has(resourceKey),
+          ageMs: nowMs - Number(version.createdAt),
+          ageBucket: this.deriveAgeBucket(nowMs - Number(version.createdAt), policy.tombstoneGracePeriodMs),
+          rootSourceCount: rootEntries.length,
+          distanceFromLatestVer: (latestVerByBlock.get(version.blockId) ?? version.ver) - version.ver,
+          gracePeriodMs: policy.gracePeriodMs,
+          tombstoneGracePeriodMs: policy.tombstoneGracePeriodMs,
+          keepLatestPerBlock: policy.keepLatestPerBlock,
+          decisionPath: ["tombstone_root", "old_enough_for_compaction"],
+        });
+        const explainability = this.gcPolicyService.assessBlockVersionCandidate({
+          reasonCode,
+          rootKind: reasonDetail.rootKind,
+          deleted: reasonDetail.deleted,
+          source: reasonDetail.source,
+          action: reasonDetail.action,
+          hardRooted: reasonDetail.hardRooted,
+          retainedByPolicy: reasonDetail.retainedByPolicy,
+          versionCreatedAt: Number(version.createdAt),
+          ageMs: reasonDetail.ageMs,
+          ageBucket: reasonDetail.ageBucket,
+          rootSourceCount: reasonDetail.rootSourceCount,
+          distanceFromLatestVer: reasonDetail.distanceFromLatestVer,
+          gracePeriodMs: reasonDetail.gracePeriodMs ?? policy.gracePeriodMs,
+          tombstoneGracePeriodMs:
+            reasonDetail.tombstoneGracePeriodMs ?? policy.tombstoneGracePeriodMs,
+          keepLatestPerBlock: reasonDetail.keepLatestPerBlock ?? policy.keepLatestPerBlock,
+          decisionPath: reasonDetail.decisionPath,
+        });
         candidateReasons[reasonCode] = (candidateReasons[reasonCode] ?? 0) + 1;
         tombstoneCompactionCandidates += 1;
         candidates.push({
@@ -148,16 +189,9 @@ export class BlockVersionGcCollector {
           blockVer: version.ver,
           versionCreatedAt: Number(version.createdAt),
           reasonCode,
-          reasonDetail: {
-            rootKind,
-            deleted,
-            source: primarySource,
-            action: "compact_map_entry",
-            hardRooted: true,
-            retainedByPolicy: retained.has(resourceKey),
-            tombstoneGracePeriodMs: policy.tombstoneGracePeriodMs,
-          },
-          riskLevel: "low",
+          reasonDetail,
+          riskLevel: explainability.riskAssessment.level,
+          ...explainability,
         });
         continue;
       }
@@ -165,6 +199,41 @@ export class BlockVersionGcCollector {
       if (retained.has(resourceKey)) continue;
 
       const reasonCode = "unreferenced_older_than_policy";
+      const reasonDetail = this.buildReasonDetail({
+        rootKind,
+        deleted,
+        source: primarySource,
+        action: "candidate_block_version",
+        hardRooted: false,
+        retainedByPolicy: false,
+        ageMs: nowMs - Number(version.createdAt),
+        ageBucket: this.deriveAgeBucket(nowMs - Number(version.createdAt), policy.gracePeriodMs),
+        rootSourceCount: rootEntries.length,
+        distanceFromLatestVer: (latestVerByBlock.get(version.blockId) ?? version.ver) - version.ver,
+        gracePeriodMs: policy.gracePeriodMs,
+        tombstoneGracePeriodMs: policy.tombstoneGracePeriodMs,
+        keepLatestPerBlock: policy.keepLatestPerBlock,
+        decisionPath: ["unreferenced", "older_than_policy"],
+      });
+      const explainability = this.gcPolicyService.assessBlockVersionCandidate({
+        reasonCode,
+        rootKind: reasonDetail.rootKind,
+        deleted: reasonDetail.deleted,
+        source: reasonDetail.source,
+        action: reasonDetail.action,
+        hardRooted: reasonDetail.hardRooted,
+        retainedByPolicy: reasonDetail.retainedByPolicy,
+        versionCreatedAt: Number(version.createdAt),
+        ageMs: reasonDetail.ageMs,
+        ageBucket: reasonDetail.ageBucket,
+        rootSourceCount: reasonDetail.rootSourceCount,
+        distanceFromLatestVer: reasonDetail.distanceFromLatestVer,
+        gracePeriodMs: reasonDetail.gracePeriodMs ?? policy.gracePeriodMs,
+        tombstoneGracePeriodMs:
+          reasonDetail.tombstoneGracePeriodMs ?? policy.tombstoneGracePeriodMs,
+        keepLatestPerBlock: reasonDetail.keepLatestPerBlock ?? policy.keepLatestPerBlock,
+        decisionPath: reasonDetail.decisionPath,
+      });
       candidateReasons[reasonCode] = (candidateReasons[reasonCode] ?? 0) + 1;
       candidateBlockVersions += 1;
       candidates.push({
@@ -176,17 +245,9 @@ export class BlockVersionGcCollector {
         blockVer: version.ver,
         versionCreatedAt: Number(version.createdAt),
         reasonCode,
-        reasonDetail: {
-          rootKind,
-          deleted,
-          source: primarySource,
-          action: "candidate_block_version",
-          hardRooted: false,
-          retainedByPolicy: false,
-          gracePeriodMs: policy.gracePeriodMs,
-          keepLatestPerBlock: policy.keepLatestPerBlock,
-        },
-        riskLevel: "medium",
+        reasonDetail,
+        riskLevel: explainability.riskAssessment.level,
+        ...explainability,
       });
     }
 
@@ -225,6 +286,7 @@ export class BlockVersionGcCollector {
     }
 
     for (const block of blocks) {
+      // `latestVer` 是块级别的单独保留，不走 keepLatestPerBlock 的候选逻辑。
       retained.add(blockVersionResourceKey(block.blockId, block.latestVer));
     }
 
@@ -301,5 +363,15 @@ export class BlockVersionGcCollector {
 
   private isOlderThan(createdAt: number, gracePeriodMs: number): boolean {
     return Number(createdAt) < Date.now() - gracePeriodMs;
+  }
+
+  private buildReasonDetail(input: BlockVersionGcCandidateReasonDetail): BlockVersionGcCandidateReasonDetail {
+    return input;
+  }
+
+  private deriveAgeBucket(ageMs: number, graceWindowMs: number): BlockVersionGcCandidateAgeBucket {
+    if (ageMs < graceWindowMs * 2) return "fresh";
+    if (ageMs < graceWindowMs * 8) return "recent";
+    return "stable";
   }
 }

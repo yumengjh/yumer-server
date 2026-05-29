@@ -1,4 +1,4 @@
-import type { Repository } from "typeorm";
+import type { ObjectLiteral, Repository } from "typeorm";
 import { BlockVersion } from "../../entities/block-version.entity";
 import { DocDraft } from "../../entities/doc-draft.entity";
 import { DocRevision } from "../../entities/doc-revision.entity";
@@ -6,7 +6,9 @@ import { DocSnapshot } from "../../entities/doc-snapshot.entity";
 import { Document } from "../../entities/document.entity";
 import { GcHealthService } from "./gc-health.service";
 
-function repository<T>(overrides: Partial<Record<keyof Repository<T>, jest.Mock>>) {
+function repository<T extends ObjectLiteral>(
+  overrides: Partial<Record<keyof Repository<T>, jest.Mock>>,
+) {
   return overrides as unknown as Repository<T>;
 }
 
