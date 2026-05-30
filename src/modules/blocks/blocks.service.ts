@@ -82,9 +82,20 @@ export class BlocksService {
     const result = await this.dataSource.transaction(async (manager) => {
       const now = Date.now();
       const blockId = generateBlockId();
-      const sortKey =
-        createBlockDto.sortKey ||
-        (await this.generateSortKey(createBlockDto.docId, parentId, manager));
+      const sortKey = createBlockDto.sortKey
+        ? await this.reserveUniqueSortKey({
+            docId: createBlockDto.docId,
+            parentId,
+            requestedSortKey: createBlockDto.sortKey,
+            manager,
+            reservedByParent: new Map(),
+          })
+        : await this.generateSortKey(createBlockDto.docId, parentId, manager);
+      const payload = this.mergePayloadPreservingSyncAttrs(
+        createBlockDto.payload as Record<string, unknown>,
+        undefined,
+        sortKey,
+      );
 
       // 创建块
       const block = manager.create(Block, {
@@ -102,7 +113,7 @@ export class BlocksService {
       await manager.save(Block, block);
 
       // 创建初始版本
-      const hash = this.calculateHash(createBlockDto.payload);
+      const hash = this.calculateHash(payload);
       const blockVersion = manager.create(BlockVersion, {
         versionId: generateVersionId(blockId, 1),
         docId: createBlockDto.docId,
@@ -114,9 +125,9 @@ export class BlocksService {
         sortKey,
         indent: createBlockDto.indent || 0,
         collapsed: createBlockDto.collapsed || false,
-        payload: createBlockDto.payload,
+        payload,
         hash,
-        plainText: this.extractPlainText(createBlockDto.payload),
+        plainText: this.extractPlainText(payload),
         refs: [],
       });
 
@@ -146,7 +157,8 @@ export class BlocksService {
         docId: createBlockDto.docId,
         type: createBlockDto.type,
         version: 1,
-        payload: createBlockDto.payload,
+        sortKey,
+        payload,
       };
     });
 
@@ -461,6 +473,10 @@ export class BlocksService {
 
     return siblings
       .filter((sibling) => sibling.blockId !== excludeBlockId)
+      .filter((sibling) => {
+        const attrs = (sibling.payload as { attrs?: Record<string, unknown> } | undefined)?.attrs;
+        return attrs?.deleted !== true;
+      })
       .map((sibling) => sibling.sortKey)
       .filter((sortKey): sortKey is string => typeof sortKey === "string" && sortKey.trim() !== "")
       .sort((left, right) => this.compareSortKeys(left, right));
@@ -639,6 +655,16 @@ export class BlocksService {
         throw new NotFoundException("块版本不存在");
       }
 
+      const resolvedParentId = moveBlockDto.parentId || latestVersion.parentId || "";
+      const resolvedSortKey = await this.reserveUniqueSortKey({
+        docId: block.docId,
+        parentId: resolvedParentId,
+        requestedSortKey: moveBlockDto.sortKey,
+        manager,
+        reservedByParent: new Map(),
+        excludeBlockId: blockId,
+      });
+
       // 创建新版本（移动操作会创建新版本）
       const newVer = block.latestVer + 1;
       const blockVersion = manager.create(BlockVersion, {
@@ -648,8 +674,8 @@ export class BlocksService {
         ver: newVer,
         createdAt: now,
         createdBy: userId,
-        parentId: moveBlockDto.parentId || "",
-        sortKey: moveBlockDto.sortKey,
+        parentId: resolvedParentId,
+        sortKey: resolvedSortKey,
         indent: moveBlockDto.indent || 0,
         collapsed: latestVersion.collapsed,
         payload: latestVersion.payload,
@@ -684,8 +710,8 @@ export class BlocksService {
       return {
         blockId,
         version: newVer,
-        parentId: moveBlockDto.parentId,
-        sortKey: moveBlockDto.sortKey,
+        parentId: resolvedParentId,
+        sortKey: resolvedSortKey,
       };
     });
 
@@ -1162,18 +1188,6 @@ export class BlocksService {
       return { blockId: existing.blockId, version: existing.ver, sortKey: existing.sortKey };
     }
 
-    const payload = {
-      ...(operation.data.payload as Record<string, unknown>),
-      attrs: {
-        ...(((operation.data.payload as Record<string, unknown>).attrs as
-          | Record<string, unknown>
-          | undefined) ?? {}),
-        clientBatchId,
-        ...(operation.clientId ? { clientId: operation.clientId } : {}),
-        ...(operation.syncCreateId ? { syncCreateId: operation.syncCreateId } : {}),
-      },
-    };
-
     const blockId = generateBlockId();
     const sortKey = await this.reserveUniqueSortKey({
       docId,
@@ -1182,6 +1196,21 @@ export class BlocksService {
       manager,
       reservedByParent: reservedSortKeysByParent,
     });
+    const payload = this.mergePayloadPreservingSyncAttrs(
+      {
+        ...(operation.data.payload as Record<string, unknown>),
+        attrs: {
+          ...(((operation.data.payload as Record<string, unknown>).attrs as
+            | Record<string, unknown>
+            | undefined) ?? {}),
+          clientBatchId,
+          ...(operation.clientId ? { clientId: operation.clientId } : {}),
+          ...(operation.syncCreateId ? { syncCreateId: operation.syncCreateId } : {}),
+        },
+      },
+      undefined,
+      sortKey,
+    );
 
     const block = manager.create(Block, {
       blockId,
