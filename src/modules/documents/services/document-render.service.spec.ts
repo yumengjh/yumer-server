@@ -22,7 +22,7 @@ describe("DocumentRenderService", () => {
   });
 
   it("使用新的渲染版本以失效旧的 task/list HTML 缓存", () => {
-    expect(DOCUMENT_RENDER_VERSION).toBe("tiptap-static-v4");
+    expect(DOCUMENT_RENDER_VERSION).toBe("tiptap-static-v5");
   });
 
   it("命中块版本渲染缓存时直接附加 html 且不重新渲染", async () => {

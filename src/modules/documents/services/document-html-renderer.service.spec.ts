@@ -63,6 +63,32 @@ describe("DocumentHtmlRendererService", () => {
     );
   });
 
+  it("渲染未勾选 taskItem 时不输出 checked 属性", () => {
+    const html = service.sanitize(
+      service.renderBlock({
+        payload: {
+          type: "taskList",
+          content: [
+            {
+              type: "taskItem",
+              attrs: { checked: false },
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "未勾选代办" }],
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(html).toContain('data-checked="false"');
+    expect(html).toContain('class="check task-item-checkbox-input"');
+    expect(html).not.toMatch(/<input[^>]*\schecked=/);
+  });
+
   it("渲染普通列表项时给 li 注入字号变量用于 marker 跟随缩放", () => {
     const html = service.sanitize(
       service.renderBlock({

@@ -4,7 +4,7 @@ import { In, Repository } from "typeorm";
 import { BlockRenderCache } from "../../../entities/block-render-cache.entity";
 import { DocumentHtmlRendererService } from "./document-html-renderer.service";
 
-export const DOCUMENT_RENDER_VERSION = "tiptap-static-v4";
+export const DOCUMENT_RENDER_VERSION = "tiptap-static-v5";
 
 export const CLIENT_RENDERED_BLOCK_TYPES: Record<string, true> = {
   codeBlock: true,

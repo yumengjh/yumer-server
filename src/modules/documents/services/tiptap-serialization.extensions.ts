@@ -210,8 +210,8 @@ const SerializedTaskItem = TaskItem.configure({ nested: true }).extend({
           "input",
           {
             type: "checkbox",
-            checked: node.attrs.checked ? "checked" : null,
             class: "check task-item-checkbox-input",
+            ...(node.attrs.checked ? { checked: "checked" } : {}),
           },
         ],
         [
