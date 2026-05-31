@@ -3,12 +3,14 @@ import { ApiHeader, ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { SkipThrottle } from "@nestjs/throttler";
 import type { Request } from "express";
 import { SystemAdminTokenGuard } from "../../common/guards/system-admin-token.guard";
+import { CreateBlockVersionGcSweepDto } from "./dto/create-block-version-gc-sweep.dto";
 import { CreateBlockVersionGcRunDto } from "./dto/create-block-version-gc-run.dto";
 import { QueryGcCandidatesDto } from "./dto/query-gc-candidates.dto";
 import { QueryGcPoolDto } from "./dto/query-gc-pool.dto";
 import { QueryGcRunsDto } from "./dto/query-gc-runs.dto";
 import { GcHealthService } from "./gc-health.service";
 import { GcRunService } from "./gc-run.service";
+import { GcSweepService } from "./gc-sweep.service";
 
 @ApiTags("gc")
 @ApiHeader({
@@ -23,6 +25,7 @@ export class GcController {
   constructor(
     private readonly gcRunService: GcRunService,
     private readonly gcHealthService: GcHealthService,
+    private readonly gcSweepService: GcSweepService,
   ) {}
 
   @Post("runs")
@@ -54,6 +57,13 @@ export class GcController {
   @ApiOperation({ summary: "List current block version GC candidate pool entries" })
   findBlockVersionCandidatePool(@Query() query: QueryGcPoolDto) {
     return this.gcRunService.findPool(query);
+  }
+
+  @Post("sweeps/draft-tombstones")
+  @ApiOperation({ summary: "Sweep eligible document draft tombstone map entries" })
+  @ApiResponse({ status: 201, description: "Draft tombstone sweep executed" })
+  sweepDraftTombstones(@Body() body: CreateBlockVersionGcSweepDto, @Req() request: Request) {
+    return this.gcSweepService.sweepDraftTombstones(body, this.resolveOperator(request));
   }
 
   @Get("health")

@@ -1,8 +1,9 @@
+// cspell:words timestamptz
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from "typeorm";
 import { isSqlite } from "../common/db-type";
 
 export type GcResourceType = "block_version";
-export type GcRunMode = "preview";
+export type GcRunMode = "preview" | "sweep";
 export type GcRunStatus = "running" | "completed" | "blocked" | "failed";
 
 @Entity("gc_runs")

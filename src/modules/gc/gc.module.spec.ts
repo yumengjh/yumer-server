@@ -17,6 +17,7 @@ import { GcHealthService } from "./gc-health.service";
 import { GcModule } from "./gc.module";
 import { GcPolicyService } from "./gc-policy.service";
 import { GcRunService } from "./gc-run.service";
+import { GcSweepService } from "./gc-sweep.service";
 
 function createRepositoryMock() {
   return {
@@ -51,6 +52,8 @@ describe("GcModule", () => {
       .useValue(createRepositoryMock())
       .overrideProvider(getRepositoryToken(GcCandidatePool))
       .useValue(createRepositoryMock())
+      .overrideProvider(GcSweepService)
+      .useValue({ sweepDraftTombstones: jest.fn() })
       .overrideProvider(SystemAdminTokenGuard)
       .useValue({ canActivate: jest.fn().mockReturnValue(true) })
       .compile();
@@ -60,5 +63,6 @@ describe("GcModule", () => {
     expect(moduleRef.get(GcHealthService)).toBeInstanceOf(GcHealthService);
     expect(moduleRef.get(BlockVersionGcCollector)).toBeInstanceOf(BlockVersionGcCollector);
     expect(moduleRef.get(GcRunService)).toBeInstanceOf(GcRunService);
+    expect(moduleRef.get(GcSweepService)).toBeDefined();
   });
 });

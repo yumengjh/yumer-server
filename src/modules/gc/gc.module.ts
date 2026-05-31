@@ -15,6 +15,7 @@ import { GcController } from "./gc.controller";
 import { GcHealthService } from "./gc-health.service";
 import { GcPolicyService } from "./gc-policy.service";
 import { GcRunService } from "./gc-run.service";
+import { GcSweepService } from "./gc-sweep.service";
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { GcRunService } from "./gc-run.service";
     GcHealthService,
     BlockVersionGcCollector,
     GcRunService,
+    GcSweepService,
   ],
 })
 export class GcModule {}
