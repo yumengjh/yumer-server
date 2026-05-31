@@ -32,6 +32,8 @@ import { TableRow } from "@tiptap/extension-table-row";
 import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 
+const DEFAULT_LIST_FONT_SIZE_PX = 15;
+
 const BLOCK_IDENTITY_NODE_TYPES = [
   "paragraph",
   "heading",
@@ -76,6 +78,178 @@ const createFontSizeExtension = () =>
       ];
     },
   });
+
+export type TiptapJsonNode = {
+  type: string;
+  attrs?: Record<string, unknown>;
+  marks?: Array<{ type: string; attrs?: Record<string, unknown> }>;
+  content?: TiptapJsonNode[];
+};
+
+function normalizeFontSize(value: unknown): string | null {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return null;
+  }
+
+  const text = `${value}`.trim();
+  if (!text) return null;
+  if (text.endsWith("px")) return text;
+  return /^\d+(\.\d+)?$/.test(text) ? `${text}px` : null;
+}
+
+function findListContentFontSizeFromJson(node: TiptapJsonNode): string | null {
+  if (Array.isArray(node.content)) {
+    for (const child of node.content) {
+      const nested = findListContentFontSizeFromJson(child);
+      if (nested) return nested;
+    }
+  }
+
+  if (!Array.isArray(node.marks)) return null;
+
+  for (const mark of node.marks) {
+    if (mark.type !== "textStyle") continue;
+    const normalized = normalizeFontSize(mark.attrs?.fontSize);
+    if (normalized) return normalized;
+  }
+
+  return null;
+}
+
+function buildListTypographyVars(fontSize: string): Record<string, string> {
+  const fontSizeNumber = Number.parseFloat(fontSize);
+  const scale = Number.isFinite(fontSizeNumber)
+    ? Math.max(1, fontSizeNumber / DEFAULT_LIST_FONT_SIZE_PX)
+    : 1;
+
+  return {
+    "--list-font-size": fontSize,
+    "--task-checkbox-size": `${Math.round(16 * scale * 100) / 100}px`,
+    "--task-checkbox-offset": `${Math.round(fontSizeNumber * 1.74 * 100) / 100}px`,
+    "--task-checkbox-gap": `${Math.round(12 * scale * 100) / 100}px`,
+    "--task-checkmark-width": `${Math.round(4 * scale * 100) / 100}px`,
+    "--task-checkmark-height": `${Math.round(8 * scale * 100) / 100}px`,
+    "--task-checkmark-left": `${Math.round(4.5 * scale * 100) / 100}px`,
+    "--task-checkmark-top": `${Math.round(1 * scale * 100) / 100}px`,
+    "--task-checkmark-border": `${Math.round(2 * scale * 100) / 100}px`,
+    "--task-checkbox-radius": `${Math.round(6 * scale * 100) / 100}px`,
+    "--task-check-stroke": `${Math.round(4 * scale * 100) / 100}px`,
+    "--task-check-length": `${Math.round(100 * scale * 100) / 100}`,
+  };
+}
+
+function serializeVars(vars: Record<string, string>): string {
+  return Object.entries(vars)
+    .map(([key, value]) => `${key}:${value}`)
+    .join(";");
+}
+
+export function attachListTypographyAttrs<T extends TiptapJsonNode>(node: T): T {
+  const content = Array.isArray(node.content)
+    ? node.content.map((child) => attachListTypographyAttrs(child))
+    : node.content;
+
+  let attrs = node.attrs;
+  if (node.type === "listItem" || node.type === "taskItem") {
+    const fontSize = findListContentFontSizeFromJson({ ...node, content });
+    if (fontSize) {
+      const vars = buildListTypographyVars(fontSize);
+      attrs = {
+        ...(attrs ?? {}),
+        dataListFontSize: fontSize,
+        listTypographyStyle: serializeVars(vars),
+      };
+    }
+  }
+
+  return {
+    ...node,
+    ...(content ? { content } : {}),
+    ...(attrs ? { attrs } : {}),
+  };
+}
+
+const DisplayListTypography = Extension.create({
+  name: "displayListTypography",
+  addGlobalAttributes() {
+    return [
+      {
+        types: ["listItem", "taskItem"],
+        attributes: {
+          dataListFontSize: {
+            default: null,
+            renderHTML: (attributes: Record<string, unknown>) =>
+              attributes.dataListFontSize
+                ? { "data-list-font-size": attributes.dataListFontSize }
+                : {},
+          },
+          listTypographyStyle: {
+            default: null,
+            renderHTML: (attributes: Record<string, unknown>) =>
+              attributes.listTypographyStyle
+                ? { style: attributes.listTypographyStyle }
+                : {},
+          },
+        },
+      },
+    ];
+  },
+});
+
+const SerializedTaskItem = TaskItem.configure({ nested: true }).extend({
+  renderHTML({ node, HTMLAttributes }) {
+    return [
+      "li",
+      mergeAttributes(this.options.HTMLAttributes, HTMLAttributes, {
+        "data-type": this.name,
+      }),
+      [
+        "div",
+        { class: "checkbox-wrapper" },
+        [
+          "input",
+          {
+            type: "checkbox",
+            checked: node.attrs.checked ? "checked" : null,
+            class: "check task-item-checkbox-input",
+          },
+        ],
+        [
+          "label",
+          { class: "label task-item-checkbox" },
+          [
+            "svg",
+            { class: "task-item-checkbox-svg", viewBox: "0 0 95 95", "aria-hidden": "true" },
+            [
+              "rect",
+              {
+                x: "30",
+                y: "20",
+                width: "50",
+                height: "50",
+                fill: "none",
+                class: "task-item-checkbox-box",
+              },
+            ],
+            [
+              "g",
+              { transform: "translate(0,-952.36222)" },
+              [
+                "path",
+                {
+                  d: "m 56,963 c -102,122 6,9 7,9 17,-5 -66,69 -38,52 122,-77 -7,14 18,4 29,-11 45,-43 23,-4",
+                  fill: "none",
+                  class: "path1 task-item-check-path",
+                },
+              ],
+            ],
+          ],
+        ],
+      ],
+      ["div", 0],
+    ];
+  },
+});
 
 const OrderedListStyle = Node.create({
   name: "orderedListStyle",
@@ -263,9 +437,10 @@ export const tiptapSerializationExtensions = [
   HorizontalRule,
   Underline,
   TaskList,
-  TaskItem.configure({ nested: true }),
+  SerializedTaskItem,
   Link.configure({ openOnClick: false }),
   TextStyle,
+  DisplayListTypography,
   Color,
   Highlight.configure({ multicolor: true }),
   TextAlign.configure({ types: ["heading", "paragraph"] }),

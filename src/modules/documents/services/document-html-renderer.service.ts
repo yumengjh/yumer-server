@@ -1,7 +1,11 @@
 import { Injectable } from "@nestjs/common";
 import { renderToHTMLString } from "@tiptap/static-renderer/pm/html-string";
 import sanitizeHtml from "sanitize-html";
-import { tiptapSerializationExtensions } from "./tiptap-serialization.extensions";
+import {
+  attachListTypographyAttrs,
+  type TiptapJsonNode,
+  tiptapSerializationExtensions,
+} from "./tiptap-serialization.extensions";
 
 @Injectable()
 export class DocumentHtmlRendererService {
@@ -14,13 +18,16 @@ export class DocumentHtmlRendererService {
       extensions: tiptapSerializationExtensions,
       content: {
         type: "doc",
-        content: [block.payload],
+        content: [attachListTypographyAttrs(block.payload as TiptapJsonNode)],
       },
     });
   }
 
   sanitize(html: string): string {
     return sanitizeHtml(html, {
+      parser: {
+        lowerCaseAttributeNames: false,
+      },
       allowedTags: [
         ...sanitizeHtml.defaults.allowedTags,
         "img",
@@ -39,6 +46,10 @@ export class DocumentHtmlRendererService {
         "td",
         "label",
         "input",
+        "svg",
+        "rect",
+        "g",
+        "path",
       ],
       allowedAttributes: {
         "*": [
@@ -54,6 +65,10 @@ export class DocumentHtmlRendererService {
         a: ["href", "name", "target", "rel", "title"],
         img: ["src", "alt", "title", "width", "height", "loading"],
         input: ["type", "checked", "disabled"],
+        svg: ["viewBox", "aria-hidden"],
+        rect: ["x", "y", "width", "height", "fill"],
+        g: ["transform"],
+        path: ["d", "fill"],
         th: ["colspan", "rowspan"],
         td: ["colspan", "rowspan"],
         h1: ["id"],
@@ -73,6 +88,18 @@ export class DocumentHtmlRendererService {
           "padding-left": [/^\d+(\.\d+)?(px|em|rem|%)$/],
           "list-style-type": [/^[a-zA-Z-]+$/],
           "text-align": [/^(left|right|center|justify)$/],
+          "--list-font-size": [/^\d+(\.\d+)?px$/],
+          "--task-checkbox-size": [/^\d+(\.\d+)?px$/],
+          "--task-checkbox-offset": [/^\d+(\.\d+)?px$/],
+          "--task-checkbox-gap": [/^\d+(\.\d+)?px$/],
+          "--task-checkmark-width": [/^\d+(\.\d+)?px$/],
+          "--task-checkmark-height": [/^\d+(\.\d+)?px$/],
+          "--task-checkmark-left": [/^\d+(\.\d+)?px$/],
+          "--task-checkmark-top": [/^\d+(\.\d+)?px$/],
+          "--task-checkmark-border": [/^\d+(\.\d+)?px$/],
+          "--task-checkbox-radius": [/^\d+(\.\d+)?px$/],
+          "--task-check-stroke": [/^\d+(\.\d+)?px$/],
+          "--task-check-length": [/^\d+(\.\d+)?$/],
         },
       },
     });
