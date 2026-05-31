@@ -63,6 +63,16 @@ const BLOCK_VERSION_GC_POLICY: BlockVersionGcPolicy = {
   keepLatestPerBlock: 0,
 
   /**
+   * Candidate first appears in preview before it can be promoted into the executable pool.
+   */
+  promotionDelayMs: 10 * SECOND,
+
+  /**
+   * A candidate must be seen in consecutive preview observations at least this many times.
+   */
+  stableSeenThreshold: 2,
+
+  /**
    * 单次 preview 最多把多少条 candidate 明细写入 `gc_run_candidates`。
    *
    * 作用：
@@ -70,6 +80,16 @@ const BLOCK_VERSION_GC_POLICY: BlockVersionGcPolicy = {
    * - 这里只限制“明细落库和面板展示”的最大条数
    */
   maxCandidatesToStore: 1000,
+
+  /**
+   * Reserved for future sweep batch selection.
+   */
+  maxSweepBatchSize: 100,
+
+  /**
+   * Reserved for future pool pruning.
+   */
+  poolEntryExpireMs: 7 * 24 * 60 * 60 * SECOND,
 
   /**
    * 哪些显式引用源会把块版本标记为存活。

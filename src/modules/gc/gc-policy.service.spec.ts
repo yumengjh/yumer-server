@@ -8,7 +8,11 @@ describe("GcPolicyService", () => {
       gracePeriodMs: 10_000,
       tombstoneGracePeriodMs: 10_000,
       keepLatestPerBlock: 0,
+      promotionDelayMs: 10_000,
+      stableSeenThreshold: 2,
       maxCandidatesToStore: 1000,
+      maxSweepBatchSize: 100,
+      poolEntryExpireMs: 604_800_000,
       rootSources: ["doc_snapshots", "document_drafts"],
     });
   });

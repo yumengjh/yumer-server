@@ -1,4 +1,6 @@
+// cspell:words Explainability
 import type { GcCandidateRiskLevel } from "../../entities/gc-run-candidate.entity";
+import type { GcCandidatePoolState } from "../../entities/gc-candidate-pool.entity";
 import type { GcRunStatus } from "../../entities/gc-run.entity";
 
 export type BlockVersionGcScope = {
@@ -76,7 +78,11 @@ export type BlockVersionGcPolicy = {
   gracePeriodMs: number;
   tombstoneGracePeriodMs: number;
   keepLatestPerBlock: number;
+  promotionDelayMs: number;
+  stableSeenThreshold: number;
   maxCandidatesToStore: number;
+  maxSweepBatchSize: number;
+  poolEntryExpireMs: number;
   rootSources: Array<"doc_snapshots" | "document_drafts">;
 };
 
@@ -148,4 +154,25 @@ export type GcRunListItem = {
   summary: Record<string, unknown>;
   startedAt: Date;
   finishedAt: Date | null;
+};
+
+export type BlockVersionGcCandidatePoolEntry = BlockVersionGcPersistedCandidate & {
+  id: number;
+  candidateKey: string;
+  action: BlockVersionGcCandidateAction;
+  source: "doc_snapshots" | "document_drafts" | null;
+  firstSeenRunId: string;
+  lastSeenRunId: string;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+  seenCount: number;
+  stableSeenCount: number;
+  state: GcCandidatePoolState;
+  eligibleAfter: Date | null;
+  lastSweepAt: Date | null;
+  lastValidationAt: Date | null;
+  policySnapshot: Record<string, unknown>;
+  lastBlockers: string[];
+  createdAt: Date;
+  updatedAt: Date;
 };

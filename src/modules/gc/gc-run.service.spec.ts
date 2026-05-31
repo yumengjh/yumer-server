@@ -1,4 +1,6 @@
+// cspell:words explainability
 import type { ObjectLiteral, Repository } from "typeorm";
+import { GcCandidatePool } from "../../entities/gc-candidate-pool.entity";
 import { GcRun } from "../../entities/gc-run.entity";
 import { GcRunCandidate } from "../../entities/gc-run-candidate.entity";
 import type { BlockVersionGcCollector } from "./block-version-gc.collector";
@@ -19,15 +21,25 @@ describe("GcRunService", () => {
       save: jest.fn().mockImplementation(async (value) => value),
     });
     const candidateRepo = repository<GcRunCandidate>({ create: jest.fn(), save: jest.fn() });
+    const poolRepo = repository<GcCandidatePool>({
+      find: jest.fn().mockResolvedValue([]),
+      save: jest.fn(),
+      create: jest.fn((value) => value),
+    });
     const service = new GcRunService(
       runRepo,
       candidateRepo,
+      poolRepo,
       {
         getBlockVersionPolicy: jest.fn().mockReturnValue({
           gracePeriodMs: 60_000,
           tombstoneGracePeriodMs: 60_000,
           keepLatestPerBlock: 5,
+          promotionDelayMs: 60_000,
+          stableSeenThreshold: 2,
           maxCandidatesToStore: 1000,
+          maxSweepBatchSize: 100,
+          poolEntryExpireMs: 604_800_000,
           rootSources: ["doc_snapshots", "document_drafts"],
         }),
       } as unknown as GcPolicyService,
@@ -65,15 +77,25 @@ describe("GcRunService", () => {
       create: jest.fn((value) => value),
       save: jest.fn().mockImplementation(async (value) => value),
     });
+    const poolRepo = repository<GcCandidatePool>({
+      create: jest.fn((value) => value),
+      find: jest.fn().mockResolvedValue([]),
+      save: jest.fn().mockImplementation(async (value) => value),
+    });
     const service = new GcRunService(
       runRepo,
       candidateRepo,
+      poolRepo,
       {
         getBlockVersionPolicy: jest.fn().mockReturnValue({
           gracePeriodMs: 60_000,
           tombstoneGracePeriodMs: 60_000,
           keepLatestPerBlock: 5,
+          promotionDelayMs: 60_000,
+          stableSeenThreshold: 2,
           maxCandidatesToStore: 1,
+          maxSweepBatchSize: 100,
+          poolEntryExpireMs: 604_800_000,
           rootSources: ["doc_snapshots", "document_drafts"],
         }),
       } as unknown as GcPolicyService,
@@ -143,6 +165,7 @@ describe("GcRunService", () => {
     expect(result.candidateDetailsStored).toBe(true);
     expect(result.candidateDetailsTruncated).toBe(true);
     expect(candidateRepo.save).toHaveBeenCalledTimes(1);
+    expect(poolRepo.save).toHaveBeenCalledTimes(1);
   });
 
   it("projects explainability fields when listing saved candidates", async () => {
@@ -154,7 +177,11 @@ describe("GcRunService", () => {
           gracePeriodMs: 60_000,
           tombstoneGracePeriodMs: 60_000,
           keepLatestPerBlock: 1,
+          promotionDelayMs: 60_000,
+          stableSeenThreshold: 2,
           maxCandidatesToStore: 1000,
+          maxSweepBatchSize: 100,
+          poolEntryExpireMs: 604_800_000,
           rootSources: ["doc_snapshots", "document_drafts"],
         },
       }),
@@ -201,7 +228,11 @@ describe("GcRunService", () => {
         gracePeriodMs: 60_000,
         tombstoneGracePeriodMs: 60_000,
         keepLatestPerBlock: 1,
+        promotionDelayMs: 60_000,
+        stableSeenThreshold: 2,
         maxCandidatesToStore: 1000,
+        maxSweepBatchSize: 100,
+        poolEntryExpireMs: 604_800_000,
         rootSources: ["doc_snapshots", "document_drafts"],
       }),
       explainPersistedBlockVersionCandidate: jest.fn().mockReturnValue({
@@ -219,6 +250,7 @@ describe("GcRunService", () => {
     const service = new GcRunService(
       runRepo,
       candidateRepo,
+      repository<GcCandidatePool>({}),
       policyService,
       {} as GcHealthService,
       {} as BlockVersionGcCollector,
@@ -238,6 +270,152 @@ describe("GcRunService", () => {
         score: 12,
         reasons: ["version is far beyond the grace window"],
       },
+    });
+  });
+
+  it("promotes recurring preview candidates into the pool after the observation threshold", async () => {
+    const savedPoolEntries: Array<Record<string, unknown>> = [];
+    const runRepo = repository<GcRun>({
+      create: jest.fn((value) => value),
+      save: jest.fn().mockImplementation(async (value) => {
+        if (value.finishedAt == null) {
+          return value;
+        }
+
+        value.finishedAt = new Date("2026-05-31T00:01:00.000Z");
+        return value;
+      }),
+    });
+    const candidateRepo = repository<GcRunCandidate>({
+      create: jest.fn((value) => value),
+      save: jest.fn().mockImplementation(async (value) => value),
+    });
+    const poolRepo = repository<GcCandidatePool>({
+      create: jest.fn((value) => value),
+      find: jest.fn().mockImplementation(async () =>
+        savedPoolEntries.map((entry) => ({
+          ...entry,
+          firstSeenAt: new Date(entry.firstSeenAt as string),
+          lastSeenAt: new Date(entry.lastSeenAt as string),
+          eligibleAfter: new Date(entry.eligibleAfter as string),
+        })),
+      ),
+      save: jest.fn().mockImplementation(async (value: Array<Record<string, unknown>>) => {
+        savedPoolEntries.splice(
+          0,
+          savedPoolEntries.length,
+          ...value.map((item) => ({
+            ...item,
+            firstSeenAt: (item.firstSeenAt as Date).toISOString(),
+            lastSeenAt: (item.lastSeenAt as Date).toISOString(),
+            eligibleAfter: (item.eligibleAfter as Date).toISOString(),
+          })),
+        );
+        return value;
+      }),
+    });
+    let runCounter = 0;
+    const service = new GcRunService(
+      runRepo,
+      candidateRepo,
+      poolRepo,
+      {
+        getBlockVersionPolicy: jest.fn().mockReturnValue({
+          gracePeriodMs: 60_000,
+          tombstoneGracePeriodMs: 60_000,
+          keepLatestPerBlock: 0,
+          promotionDelayMs: 0,
+          stableSeenThreshold: 2,
+          maxCandidatesToStore: 1000,
+          maxSweepBatchSize: 100,
+          poolEntryExpireMs: 604_800_000,
+          rootSources: ["doc_snapshots", "document_drafts"],
+        }),
+      } as unknown as GcPolicyService,
+      {
+        checkBlockVersionGcHealth: jest.fn().mockResolvedValue({
+          status: "ok",
+          missingRevisionSnapshots: 0,
+          missingPublishedSnapshots: 0,
+          missingRootBlockVersions: 0,
+          samples: {
+            missingRevisionSnapshots: [],
+            missingPublishedSnapshots: [],
+            missingRootBlockVersions: [],
+          },
+        }),
+      } as unknown as GcHealthService,
+      {
+        preview: jest.fn().mockImplementation(async () => ({
+          summary: {
+            blockVersionsScanned: 1,
+            hardRootedBlockVersions: 0,
+            liveRootedBlockVersions: 0,
+            tombstoneRootedBlockVersions: 0,
+            policyRetainedBlockVersions: 0,
+            softDeletedMapEntries: 0,
+            candidateBlockVersions: 1,
+            tombstoneCompactionCandidates: 0,
+            rootSources: { docSnapshots: 0, documentDrafts: 0 },
+            candidateReasons: { unreferenced_older_than_policy: 1 },
+          },
+          candidates: [
+            {
+              resourceKey: "b_1@1",
+              resourceRowId: 1,
+              docId: "doc_1",
+              workspaceId: "ws_1",
+              blockId: "b_1",
+              blockVer: 1,
+              versionCreatedAt: 1,
+              reasonCode: "unreferenced_older_than_policy",
+              reasonDetail: {
+                rootKind: "none",
+                deleted: false,
+                source: null,
+                action: "candidate_block_version",
+                hardRooted: false,
+                retainedByPolicy: false,
+                gracePeriodMs: 60_000,
+                tombstoneGracePeriodMs: 60_000,
+                keepLatestPerBlock: 0,
+                ageMs: 3_600_000,
+                ageBucket: "stable",
+                rootSourceCount: 0,
+                distanceFromLatestVer: 3,
+                decisionPath: ["unreferenced", "older_than_policy"],
+              },
+              riskLevel: "low",
+              plannedAction: "candidate_block_version",
+              requiredChecks: ["verify_root_stability"],
+              readiness: "ready_for_manual_review",
+              riskAssessment: {
+                level: "low",
+                score: 12,
+                reasons: ["version is far beyond the grace window"],
+                factors: [],
+              },
+            },
+          ],
+          runCounter: ++runCounter,
+        })),
+      } as unknown as BlockVersionGcCollector,
+    );
+
+    await service.previewBlockVersions({ docId: "doc_1", includeCandidates: false }, "tester");
+    expect(savedPoolEntries[0]).toMatchObject({
+      candidateKey: "block_version:b_1@1:candidate_block_version",
+      seenCount: 1,
+      stableSeenCount: 1,
+      state: "pending",
+    });
+
+    await service.previewBlockVersions({ docId: "doc_1", includeCandidates: false }, "tester");
+    expect(savedPoolEntries[0]).toMatchObject({
+      candidateKey: "block_version:b_1@1:candidate_block_version",
+      seenCount: 2,
+      stableSeenCount: 2,
+      state: "eligible",
     });
   });
 });

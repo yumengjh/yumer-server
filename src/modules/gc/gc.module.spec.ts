@@ -8,6 +8,7 @@ import { DocDraft } from "../../entities/doc-draft.entity";
 import { DocRevision } from "../../entities/doc-revision.entity";
 import { DocSnapshot } from "../../entities/doc-snapshot.entity";
 import { Document } from "../../entities/document.entity";
+import { GcCandidatePool } from "../../entities/gc-candidate-pool.entity";
 import { GcRunCandidate } from "../../entities/gc-run-candidate.entity";
 import { GcRun } from "../../entities/gc-run.entity";
 import { BlockVersionGcCollector } from "./block-version-gc.collector";
@@ -47,6 +48,8 @@ describe("GcModule", () => {
       .overrideProvider(getRepositoryToken(GcRun))
       .useValue(createRepositoryMock())
       .overrideProvider(getRepositoryToken(GcRunCandidate))
+      .useValue(createRepositoryMock())
+      .overrideProvider(getRepositoryToken(GcCandidatePool))
       .useValue(createRepositoryMock())
       .overrideProvider(SystemAdminTokenGuard)
       .useValue({ canActivate: jest.fn().mockReturnValue(true) })

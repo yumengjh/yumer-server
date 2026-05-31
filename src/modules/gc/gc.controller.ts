@@ -5,6 +5,7 @@ import type { Request } from "express";
 import { SystemAdminTokenGuard } from "../../common/guards/system-admin-token.guard";
 import { CreateBlockVersionGcRunDto } from "./dto/create-block-version-gc-run.dto";
 import { QueryGcCandidatesDto } from "./dto/query-gc-candidates.dto";
+import { QueryGcPoolDto } from "./dto/query-gc-pool.dto";
 import { QueryGcRunsDto } from "./dto/query-gc-runs.dto";
 import { GcHealthService } from "./gc-health.service";
 import { GcRunService } from "./gc-run.service";
@@ -45,11 +46,14 @@ export class GcController {
 
   @Get("runs/:runId/candidates")
   @ApiOperation({ summary: "List candidates saved for a preview run" })
-  findBlockVersionCandidates(
-    @Param("runId") runId: string,
-    @Query() query: QueryGcCandidatesDto,
-  ) {
+  findBlockVersionCandidates(@Param("runId") runId: string, @Query() query: QueryGcCandidatesDto) {
     return this.gcRunService.findCandidates(runId, query);
+  }
+
+  @Get("pool")
+  @ApiOperation({ summary: "List current block version GC candidate pool entries" })
+  findBlockVersionCandidatePool(@Query() query: QueryGcPoolDto) {
+    return this.gcRunService.findPool(query);
   }
 
   @Get("health")

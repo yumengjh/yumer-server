@@ -18,7 +18,11 @@ const policy: BlockVersionGcPolicy = {
   gracePeriodMs: 60_000,
   tombstoneGracePeriodMs: 60_000,
   keepLatestPerBlock: 1,
+  promotionDelayMs: 60_000,
+  stableSeenThreshold: 2,
   maxCandidatesToStore: 1000,
+  maxSweepBatchSize: 100,
+  poolEntryExpireMs: 604_800_000,
   rootSources: ["doc_snapshots", "document_drafts"],
 };
 

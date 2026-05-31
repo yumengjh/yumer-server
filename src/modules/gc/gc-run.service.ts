@@ -1,12 +1,15 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { FindOptionsWhere, Repository } from "typeorm";
+import { FindOptionsWhere, In, Repository } from "typeorm";
+import { GcCandidatePool } from "../../entities/gc-candidate-pool.entity";
 import { GcRun } from "../../entities/gc-run.entity";
 import { GcRunCandidate } from "../../entities/gc-run-candidate.entity";
 import { BlockVersionGcCollector } from "./block-version-gc.collector";
 import { GcHealthService } from "./gc-health.service";
 import { GcPolicyService } from "./gc-policy.service";
 import type {
+  BlockVersionGcCandidate,
+  BlockVersionGcCandidatePoolEntry,
   BlockVersionGcPersistedCandidate,
   BlockVersionGcPolicy,
   BlockVersionGcScope,
@@ -23,6 +26,8 @@ export class GcRunService {
     private readonly gcRunRepository: Repository<GcRun>,
     @InjectRepository(GcRunCandidate)
     private readonly gcRunCandidateRepository: Repository<GcRunCandidate>,
+    @InjectRepository(GcCandidatePool)
+    private readonly gcCandidatePoolRepository: Repository<GcCandidatePool>,
     private readonly gcPolicyService: GcPolicyService,
     private readonly gcHealthService: GcHealthService,
     private readonly blockVersionGcCollector: BlockVersionGcCollector,
@@ -62,6 +67,7 @@ export class GcRunService {
 
       const collectorResult = await this.blockVersionGcCollector.preview(input, policy);
       run.summary = collectorResult.summary as unknown as Record<string, unknown>;
+      await this.syncCandidatePool(run, collectorResult.candidates, policy);
 
       if (input.includeCandidates === true) {
         const candidatesToStore = collectorResult.candidates.slice(0, policy.maxCandidatesToStore);
@@ -164,6 +170,51 @@ export class GcRunService {
     };
   }
 
+  async findPool(query: {
+    page?: number;
+    pageSize?: number;
+    state?: string;
+    action?: string;
+    workspaceId?: string;
+    docId?: string;
+  }) {
+    const page = query.page ?? 1;
+    const pageSize = query.pageSize ?? 20;
+    const where: FindOptionsWhere<GcCandidatePool> = {
+      resourceType: "block_version",
+    };
+
+    if (query.state) where.state = query.state as GcCandidatePool["state"];
+    if (query.action) where.action = query.action;
+    if (query.workspaceId) where.workspaceId = query.workspaceId;
+    if (query.docId) where.docId = query.docId;
+
+    const [items, total] = await this.gcCandidatePoolRepository.findAndCount({
+      where,
+      order: {
+        state: "ASC",
+        eligibleAfter: "ASC",
+        firstSeenAt: "ASC",
+        versionCreatedAt: "ASC",
+      },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    });
+
+    return {
+      items: items.map((candidate) => ({
+        ...candidate,
+        ...this.gcPolicyService.explainPersistedBlockVersionCandidate(
+          candidate as unknown as BlockVersionGcPersistedCandidate,
+          this.normalizePolicySnapshot(candidate.policySnapshot),
+        ),
+      })),
+      total,
+      page,
+      pageSize,
+    };
+  }
+
   private normalizeScope(input: BlockVersionGcScope): Record<string, unknown> {
     return {
       workspaceId: input.workspaceId ?? null,
@@ -199,5 +250,83 @@ export class GcRunService {
       ...defaults,
       ...snapshot,
     } as BlockVersionGcPolicy;
+  }
+
+  private async syncCandidatePool(
+    run: GcRun,
+    candidates: BlockVersionGcCandidate[],
+    policy: BlockVersionGcPolicy,
+  ): Promise<void> {
+    if (candidates.length === 0) {
+      return;
+    }
+
+    const seenAt = run.finishedAt ?? new Date();
+    const candidateKeys = candidates.map((candidate) => this.buildCandidateKey(candidate));
+    const existingItems = await this.gcCandidatePoolRepository.find({
+      where: { candidateKey: In(candidateKeys) },
+    });
+    const existingByKey = new Map(existingItems.map((item) => [item.candidateKey, item]));
+
+    const entities = candidates.map((candidate) => {
+      const candidateKey = this.buildCandidateKey(candidate);
+      const existing = existingByKey.get(candidateKey);
+      const stableSeenCount =
+        existing &&
+        existing.reasonCode === candidate.reasonCode &&
+        existing.resourceRowId === candidate.resourceRowId
+          ? existing.stableSeenCount + 1
+          : 1;
+      const seenCount = existing ? existing.seenCount + 1 : 1;
+      const firstSeenAt = existing?.firstSeenAt ?? seenAt;
+      const eligibleAfter =
+        existing?.eligibleAfter ?? new Date(firstSeenAt.getTime() + policy.promotionDelayMs);
+      const shouldBeEligible =
+        stableSeenCount >= policy.stableSeenThreshold &&
+        seenAt.getTime() >= eligibleAfter.getTime();
+      const nextState =
+        existing?.state === "swept" ? "resurrected" : shouldBeEligible ? "eligible" : "pending";
+
+      const entity = this.gcCandidatePoolRepository.create({
+        id: existing?.id,
+        candidateKey,
+        resourceType: "block_version",
+        action: candidate.reasonDetail.action,
+        source: candidate.reasonDetail.source,
+        resourceKey: candidate.resourceKey,
+        resourceRowId: candidate.resourceRowId,
+        docId: candidate.docId,
+        workspaceId: candidate.workspaceId,
+        blockId: candidate.blockId,
+        blockVer: candidate.blockVer,
+        versionCreatedAt: candidate.versionCreatedAt,
+        firstSeenRunId: existing?.firstSeenRunId ?? run.runId,
+        lastSeenRunId: run.runId,
+        firstSeenAt,
+        lastSeenAt: seenAt,
+        seenCount,
+        stableSeenCount,
+        state: nextState,
+        eligibleAfter,
+        lastSweepAt: existing?.lastSweepAt ?? null,
+        lastValidationAt: seenAt,
+        reasonCode: candidate.reasonCode,
+        reasonDetail: candidate.reasonDetail,
+        riskLevel: candidate.riskLevel,
+        policySnapshot: policy as unknown as Record<string, unknown>,
+        lastBlockers: existing?.lastBlockers ?? [],
+      });
+
+      return entity;
+    });
+
+    if (entities.length > 0) {
+      await this.gcCandidatePoolRepository.save(entities);
+    }
+  }
+
+  private buildCandidateKey(candidate: BlockVersionGcCandidate | BlockVersionGcCandidatePoolEntry) {
+    const action = "action" in candidate ? candidate.action : candidate.reasonDetail.action;
+    return `block_version:${candidate.resourceKey}:${action}`;
   }
 }

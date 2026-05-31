@@ -7,6 +7,7 @@ import { DocDraft } from "../../entities/doc-draft.entity";
 import { DocRevision } from "../../entities/doc-revision.entity";
 import { DocSnapshot } from "../../entities/doc-snapshot.entity";
 import { Document } from "../../entities/document.entity";
+import { GcCandidatePool } from "../../entities/gc-candidate-pool.entity";
 import { GcRun } from "../../entities/gc-run.entity";
 import { GcRunCandidate } from "../../entities/gc-run-candidate.entity";
 import { BlockVersionGcCollector } from "./block-version-gc.collector";
@@ -26,6 +27,7 @@ import { GcRunService } from "./gc-run.service";
       DocDraft,
       GcRun,
       GcRunCandidate,
+      GcCandidatePool,
     ]),
   ],
   controllers: [GcController],
