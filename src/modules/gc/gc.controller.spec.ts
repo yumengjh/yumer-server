@@ -1,6 +1,7 @@
 import type { Request } from "express";
 import { GcController } from "./gc.controller";
 import type { GcHealthService } from "./gc-health.service";
+import type { GcPolicyService } from "./gc-policy.service";
 import type { GcRunService } from "./gc-run.service";
 import type { GcSweepService } from "./gc-sweep.service";
 
@@ -18,6 +19,7 @@ describe("GcController", () => {
         sweepDraftTombstones: jest.fn(),
         sweepRevisionTombstones: jest.fn(),
       } as unknown as GcSweepService,
+      { getBlockVersionPolicy: jest.fn() } as unknown as GcPolicyService,
     );
 
     await expect(
@@ -44,9 +46,71 @@ describe("GcController", () => {
         sweepDraftTombstones: jest.fn(),
         sweepRevisionTombstones: jest.fn(),
       } as unknown as GcSweepService,
+      { getBlockVersionPolicy: jest.fn() } as unknown as GcPolicyService,
     );
 
     await expect(controller.getBlockVersionHealth({ docId: "doc_1" })).resolves.toBe(health);
+  });
+
+  it("lists runs with mode and scope filters", async () => {
+    const gcRunService = {
+      previewBlockVersions: jest.fn(),
+      findRuns: jest.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 }),
+    } as unknown as GcRunService;
+    const controller = new GcController(
+      gcRunService,
+      {
+        checkBlockVersionGcHealth: jest.fn(),
+      } as unknown as GcHealthService,
+      {
+        sweepDraftTombstones: jest.fn(),
+        sweepRevisionTombstones: jest.fn(),
+      } as unknown as GcSweepService,
+      { getBlockVersionPolicy: jest.fn() } as unknown as GcPolicyService,
+    );
+
+    await expect(
+      controller.findBlockVersionRuns({
+        mode: "sweep",
+        workspaceId: "ws_1",
+        page: 1,
+        pageSize: 20,
+      }),
+    ).resolves.toEqual({ items: [], total: 0, page: 1, pageSize: 20 });
+
+    expect(gcRunService.findRuns).toHaveBeenCalledWith({
+      mode: "sweep",
+      workspaceId: "ws_1",
+      page: 1,
+      pageSize: 20,
+    });
+  });
+
+  it("exposes the current block version GC policy", () => {
+    const policy = {
+      gracePeriodMs: 10_000,
+      tombstoneGracePeriodMs: 10_000,
+      promotionDelayMs: 10_000,
+      stableSeenThreshold: 2,
+      maxSweepBatchSize: 100,
+    };
+    const gcPolicyService = {
+      getBlockVersionPolicy: jest.fn().mockReturnValue(policy),
+    } as unknown as GcPolicyService;
+    const controller = new GcController(
+      { previewBlockVersions: jest.fn(), findPool: jest.fn() } as unknown as GcRunService,
+      {
+        checkBlockVersionGcHealth: jest.fn(),
+      } as unknown as GcHealthService,
+      {
+        sweepDraftTombstones: jest.fn(),
+        sweepRevisionTombstones: jest.fn(),
+      } as unknown as GcSweepService,
+      gcPolicyService,
+    );
+
+    expect(controller.findBlockVersionPolicy()).toBe(policy);
+    expect(gcPolicyService.getBlockVersionPolicy).toHaveBeenCalledTimes(1);
   });
 
   it("lists candidate pool entries", async () => {
@@ -63,6 +127,7 @@ describe("GcController", () => {
         sweepDraftTombstones: jest.fn(),
         sweepRevisionTombstones: jest.fn(),
       } as unknown as GcSweepService,
+      { getBlockVersionPolicy: jest.fn() } as unknown as GcPolicyService,
     );
 
     await expect(
@@ -84,6 +149,7 @@ describe("GcController", () => {
       { previewBlockVersions: jest.fn(), findPool: jest.fn() } as unknown as GcRunService,
       { checkBlockVersionGcHealth: jest.fn() } as unknown as GcHealthService,
       gcSweepService,
+      { getBlockVersionPolicy: jest.fn() } as unknown as GcPolicyService,
     );
 
     await expect(
@@ -108,6 +174,7 @@ describe("GcController", () => {
       { previewBlockVersions: jest.fn(), findPool: jest.fn() } as unknown as GcRunService,
       { checkBlockVersionGcHealth: jest.fn() } as unknown as GcHealthService,
       gcSweepService,
+      { getBlockVersionPolicy: jest.fn() } as unknown as GcPolicyService,
     );
 
     await expect(

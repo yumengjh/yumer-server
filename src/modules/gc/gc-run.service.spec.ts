@@ -273,6 +273,75 @@ describe("GcRunService", () => {
     });
   });
 
+  it("filters runs by mode and scope before pagination", async () => {
+    const runRepo = repository<GcRun>({
+      find: jest.fn().mockResolvedValue([
+        {
+          runId: "gc_sweep_2",
+          resourceType: "block_version",
+          mode: "sweep",
+          status: "completed",
+          scope: { workspaceId: "ws_1", docId: "doc_1" },
+          createdAt: new Date("2026-05-31T00:04:00.000Z"),
+        },
+        {
+          runId: "gc_sweep_1",
+          resourceType: "block_version",
+          mode: "sweep",
+          status: "completed",
+          scope: { workspaceId: "ws_1", docId: "doc_1" },
+          createdAt: new Date("2026-05-31T00:03:00.000Z"),
+        },
+        {
+          runId: "gc_sweep_other_doc",
+          resourceType: "block_version",
+          mode: "sweep",
+          status: "completed",
+          scope: { workspaceId: "ws_1", docId: "doc_2" },
+          createdAt: new Date("2026-05-31T00:02:00.000Z"),
+        },
+        {
+          runId: "gc_preview_1",
+          resourceType: "block_version",
+          mode: "preview",
+          status: "completed",
+          scope: { workspaceId: "ws_1", docId: "doc_1" },
+          createdAt: new Date("2026-05-31T00:01:00.000Z"),
+        },
+      ]),
+    });
+    const service = new GcRunService(
+      runRepo,
+      repository<GcRunCandidate>({}),
+      repository<GcCandidatePool>({}),
+      {} as GcPolicyService,
+      {} as GcHealthService,
+      {} as BlockVersionGcCollector,
+    );
+
+    const result = await service.findRuns({
+      mode: "sweep",
+      workspaceId: "ws_1",
+      docId: "doc_1",
+      page: 2,
+      pageSize: 1,
+    });
+
+    expect(runRepo.find).toHaveBeenCalledWith({
+      where: {
+        resourceType: "block_version",
+        mode: "sweep",
+      },
+      order: { createdAt: "DESC" },
+    });
+    expect(result).toMatchObject({
+      total: 2,
+      page: 2,
+      pageSize: 1,
+      items: [{ runId: "gc_sweep_1" }],
+    });
+  });
+
   it("promotes recurring preview candidates into the pool after the observation threshold", async () => {
     const savedPoolEntries: Array<Record<string, unknown>> = [];
     const runRepo = repository<GcRun>({

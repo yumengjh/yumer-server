@@ -110,6 +110,7 @@ export class GcRunService {
   async findRuns(query: {
     page?: number;
     pageSize?: number;
+    mode?: string;
     status?: string;
     workspaceId?: string;
     docId?: string;
@@ -117,23 +118,36 @@ export class GcRunService {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 20;
     const where: FindOptionsWhere<GcRun> = { resourceType: "block_version" };
+    if (query.mode) where.mode = query.mode as GcRun["mode"];
     if (query.status) where.status = query.status as GcRun["status"];
 
-    const [items, total] = await this.gcRunRepository.findAndCount({
+    if (!query.workspaceId && !query.docId) {
+      const [items, total] = await this.gcRunRepository.findAndCount({
+        where,
+        order: { createdAt: "DESC" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      });
+      return { items, total, page, pageSize };
+    }
+
+    const runs = await this.gcRunRepository.find({
       where,
       order: { createdAt: "DESC" },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
     });
 
-    const filtered = items.filter((run) => {
+    const filtered = runs.filter((run) => {
+      if (query.mode && run.mode !== query.mode) return false;
+      if (query.status && run.status !== query.status) return false;
       const scope = run.scope as { workspaceId?: string | null; docId?: string | null };
       if (query.workspaceId && scope.workspaceId !== query.workspaceId) return false;
       if (query.docId && scope.docId !== query.docId) return false;
       return true;
     });
+    const total = filtered.length;
+    const items = filtered.slice((page - 1) * pageSize, page * pageSize);
 
-    return { items: filtered, total, page, pageSize };
+    return { items, total, page, pageSize };
   }
 
   async findRun(runId: string) {

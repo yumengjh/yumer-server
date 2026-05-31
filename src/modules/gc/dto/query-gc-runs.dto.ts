@@ -3,6 +3,11 @@ import { IsIn, IsOptional, IsString } from "class-validator";
 import { PaginationDto } from "../../../common/dto/pagination.dto";
 
 export class QueryGcRunsDto extends PaginationDto {
+  @ApiPropertyOptional({ enum: ["preview", "sweep"] })
+  @IsOptional()
+  @IsIn(["preview", "sweep"])
+  mode?: string;
+
   @ApiPropertyOptional({ enum: ["running", "completed", "blocked", "failed"] })
   @IsOptional()
   @IsIn(["running", "completed", "blocked", "failed"])

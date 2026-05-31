@@ -9,6 +9,7 @@ import { QueryGcCandidatesDto } from "./dto/query-gc-candidates.dto";
 import { QueryGcPoolDto } from "./dto/query-gc-pool.dto";
 import { QueryGcRunsDto } from "./dto/query-gc-runs.dto";
 import { GcHealthService } from "./gc-health.service";
+import { GcPolicyService } from "./gc-policy.service";
 import { GcRunService } from "./gc-run.service";
 import { GcSweepService } from "./gc-sweep.service";
 
@@ -26,6 +27,7 @@ export class GcController {
     private readonly gcRunService: GcRunService,
     private readonly gcHealthService: GcHealthService,
     private readonly gcSweepService: GcSweepService,
+    private readonly gcPolicyService: GcPolicyService,
   ) {}
 
   @Post("runs")
@@ -57,6 +59,12 @@ export class GcController {
   @ApiOperation({ summary: "List current block version GC candidate pool entries" })
   findBlockVersionCandidatePool(@Query() query: QueryGcPoolDto) {
     return this.gcRunService.findPool(query);
+  }
+
+  @Get("policy")
+  @ApiOperation({ summary: "Get current block version GC runtime policy" })
+  findBlockVersionPolicy() {
+    return this.gcPolicyService.getBlockVersionPolicy();
   }
 
   @Post("sweeps/draft-tombstones")

@@ -40,7 +40,7 @@
 数据源：
 
 ```http
-GET /admin/gc/block-versions/runs
+GET /admin/gc/block-versions/runs?page=1&pageSize=20&mode=sweep
 ```
 
 列表列建议：
@@ -58,6 +58,8 @@ GET /admin/gc/block-versions/runs
 
 - 这里现在会混有 `preview` 和 `sweep`
 - 前端不要把 run 列表写死成 preview 历史
+- 需要分栏或分 Tab 展示时，可以用 `mode=preview` / `mode=sweep` 分别拉取
+- `workspaceId` / `docId` 过滤会先于分页生效，`total` 可直接用于分页器
 
 ### 2.3 Run Detail + Candidates
 
@@ -124,8 +126,9 @@ GET /admin/gc/block-versions/pool
 ### 3.1 页面初始化
 
 1. 拉一次 `/runs?page=1&pageSize=20`
-2. 用户填写 scope
-3. 点击“检查健康”时调用 `/health`
+2. 拉一次 `/policy`，用于初始化 sweep limit、TTL 和二次生命筛选展示
+3. 用户填写 scope
+4. 点击“检查健康”时调用 `/health`
 
 ### 3.2 用户触发 preview
 

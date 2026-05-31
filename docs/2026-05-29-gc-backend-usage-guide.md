@@ -129,7 +129,21 @@ GET /admin/gc/block-versions/health?workspaceId=ws_1&docId=doc_1
 - 进入页面先看 scope 是否允许 preview
 - 显示 blocker 样本
 
-### 5.2 创建 preview run
+### 5.2 查询当前 policy
+
+```http
+GET /admin/gc/block-versions/policy
+```
+
+用途：
+
+- 查看当前 GC policy 默认值
+- 给前端 sweep 表单提供默认 `limit`
+- 展示二次生命筛选参数，例如 `promotionDelayMs`、`stableSeenThreshold`
+
+当前接口只读。真实 sweep 仍使用服务端当前 policy，不接受请求体覆盖 TTL。
+
+### 5.3 创建 preview run
 
 ```http
 POST /admin/gc/block-versions/runs
@@ -153,26 +167,27 @@ Content-Type: application/json
 - 可选保存 run candidate 明细
 - 同步刷新 candidate pool
 
-### 5.3 查询 run 列表
+### 5.4 查询 run 列表
 
 ```http
-GET /admin/gc/block-versions/runs?page=1&pageSize=20&workspaceId=ws_1&docId=doc_1
+GET /admin/gc/block-versions/runs?page=1&pageSize=20&mode=sweep&workspaceId=ws_1&docId=doc_1
 ```
 
 支持参数：
 
 - `page`
 - `pageSize`
+- `mode`: `preview` / `sweep`
 - `status`
 - `workspaceId`
 - `docId`
 
-返回项里包含 `mode`，前端应区分：
+scope 过滤会先于分页生效，返回的 `total` 是当前过滤条件下的总数。返回项里包含 `mode`，前端应区分：
 
 - `preview`
 - `sweep`
 
-### 5.4 查询单个 run
+### 5.5 查询单个 run
 
 ```http
 GET /admin/gc/block-versions/runs/:runId
@@ -186,7 +201,7 @@ GET /admin/gc/block-versions/runs/:runId
 - 判断 `candidateDetailsStored`
 - 判断 `candidateDetailsTruncated`
 
-### 5.5 查询某次 run 的 candidates
+### 5.6 查询某次 run 的 candidates
 
 ```http
 GET /admin/gc/block-versions/runs/:runId/candidates?page=1&pageSize=100
@@ -197,7 +212,7 @@ GET /admin/gc/block-versions/runs/:runId/candidates?page=1&pageSize=100
 - 查看这次 preview 持久化的候选列表
 - 查看 explainability 字段
 
-### 5.6 查询 candidate pool
+### 5.7 查询 candidate pool
 
 ```http
 GET /admin/gc/block-versions/pool?page=1&pageSize=100&state=eligible&action=compact_map_entry
@@ -226,7 +241,7 @@ GET /admin/gc/block-versions/pool?page=1&pageSize=100&state=eligible&action=comp
 - `candidate_block_version`
 - `compact_map_entry`
 
-### 5.7 执行 draft tombstone sweep
+### 5.8 执行 draft tombstone sweep
 
 ```http
 POST /admin/gc/block-versions/sweeps/draft-tombstones
@@ -250,7 +265,7 @@ Content-Type: application/json
 - 只处理 `action = compact_map_entry`
 - 先 fresh revalidation，再决定是否真的改写 `document_drafts.blockVersionMap`
 
-### 5.8 执行 revision tombstone sweep
+### 5.9 执行 revision tombstone sweep
 
 ```http
 POST /admin/gc/block-versions/sweeps/revision-tombstones

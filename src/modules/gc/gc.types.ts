@@ -1,7 +1,7 @@
 // cspell:words Explainability
 import type { GcCandidateRiskLevel } from "../../entities/gc-run-candidate.entity";
 import type { GcCandidatePoolState } from "../../entities/gc-candidate-pool.entity";
-import type { GcRunStatus } from "../../entities/gc-run.entity";
+import type { GcRunMode, GcRunStatus } from "../../entities/gc-run.entity";
 
 export type BlockVersionGcScope = {
   workspaceId?: string;
@@ -152,7 +152,7 @@ export type BlockVersionGcPersistedCandidate = {
 export type GcRunListItem = {
   runId: string;
   resourceType: "block_version";
-  mode: "preview";
+  mode: GcRunMode;
   status: GcRunStatus;
   scope: Record<string, unknown>;
   summary: Record<string, unknown>;
