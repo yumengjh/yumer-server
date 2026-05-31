@@ -418,4 +418,175 @@ describe("GcRunService", () => {
       state: "eligible",
     });
   });
+
+  it("keeps tombstone compaction pool entries split by root ref", async () => {
+    const savedPoolEntries: Array<Record<string, unknown>> = [];
+    const runRepo = repository<GcRun>({
+      create: jest.fn((value) => value),
+      save: jest.fn().mockImplementation(async (value) => {
+        if (value.finishedAt == null) {
+          return value;
+        }
+
+        value.finishedAt = new Date("2026-05-31T00:01:00.000Z");
+        return value;
+      }),
+    });
+    const service = new GcRunService(
+      runRepo,
+      repository<GcRunCandidate>({
+        create: jest.fn((value) => value),
+        save: jest.fn().mockImplementation(async (value) => value),
+      }),
+      repository<GcCandidatePool>({
+        create: jest.fn((value) => value),
+        find: jest.fn().mockResolvedValue([]),
+        save: jest.fn().mockImplementation(async (value: Array<Record<string, unknown>>) => {
+          savedPoolEntries.splice(0, savedPoolEntries.length, ...value);
+          return value;
+        }),
+      }),
+      {
+        getBlockVersionPolicy: jest.fn().mockReturnValue({
+          gracePeriodMs: 60_000,
+          tombstoneGracePeriodMs: 60_000,
+          keepLatestPerBlock: 0,
+          promotionDelayMs: 0,
+          stableSeenThreshold: 2,
+          maxCandidatesToStore: 1000,
+          maxSweepBatchSize: 100,
+          poolEntryExpireMs: 604_800_000,
+          rootSources: ["doc_snapshots", "document_drafts"],
+        }),
+      } as unknown as GcPolicyService,
+      {
+        checkBlockVersionGcHealth: jest.fn().mockResolvedValue({
+          status: "ok",
+          missingRevisionSnapshots: 0,
+          missingPublishedSnapshots: 0,
+          missingRootBlockVersions: 0,
+          samples: {
+            missingRevisionSnapshots: [],
+            missingPublishedSnapshots: [],
+            missingRootBlockVersions: [],
+          },
+        }),
+      } as unknown as GcHealthService,
+      {
+        preview: jest.fn().mockResolvedValue({
+          summary: {
+            blockVersionsScanned: 1,
+            hardRootedBlockVersions: 1,
+            liveRootedBlockVersions: 0,
+            tombstoneRootedBlockVersions: 1,
+            policyRetainedBlockVersions: 0,
+            softDeletedMapEntries: 2,
+            candidateBlockVersions: 0,
+            tombstoneCompactionCandidates: 2,
+            rootSources: { docSnapshots: 1, documentDrafts: 1 },
+            candidateReasons: { deleted_tombstone_map_entry: 2 },
+          },
+          candidates: [
+            {
+              resourceKey: "b_1@4",
+              resourceRowId: 4,
+              docId: "doc_1",
+              workspaceId: "ws_1",
+              blockId: "b_1",
+              blockVer: 4,
+              versionCreatedAt: 1,
+              reasonCode: "deleted_tombstone_map_entry",
+              reasonDetail: {
+                rootKind: "tombstone",
+                deleted: true,
+                source: "doc_snapshots",
+                action: "compact_map_entry",
+                rootRefType: "snapshot",
+                rootRefId: "doc_1@snap@4",
+                rootRefKey: "snapshot:doc_1@snap@4:b_1@4",
+                hardRooted: true,
+                retainedByPolicy: false,
+                ageMs: 3_600_000,
+                ageBucket: "stable",
+                rootSourceCount: 2,
+                distanceFromLatestVer: 0,
+                gracePeriodMs: 60_000,
+                tombstoneGracePeriodMs: 60_000,
+                keepLatestPerBlock: 0,
+                decisionPath: ["tombstone_root", "old_enough_for_compaction"],
+              },
+              riskLevel: "low",
+              plannedAction: "compact_map_entry",
+              requiredChecks: ["verify_root_stability"],
+              readiness: "ready_for_manual_review",
+              riskAssessment: {
+                level: "low",
+                score: 12,
+                reasons: ["tombstone root is old enough to compact"],
+                factors: [],
+              },
+            },
+            {
+              resourceKey: "b_1@4",
+              resourceRowId: 4,
+              docId: "doc_1",
+              workspaceId: "ws_1",
+              blockId: "b_1",
+              blockVer: 4,
+              versionCreatedAt: 1,
+              reasonCode: "deleted_tombstone_map_entry",
+              reasonDetail: {
+                rootKind: "tombstone",
+                deleted: true,
+                source: "document_drafts",
+                action: "compact_map_entry",
+                rootRefType: "draft",
+                rootRefId: "draft_1",
+                rootRefKey: "draft:draft_1:b_1@4",
+                hardRooted: true,
+                retainedByPolicy: false,
+                ageMs: 3_600_000,
+                ageBucket: "stable",
+                rootSourceCount: 2,
+                distanceFromLatestVer: 0,
+                gracePeriodMs: 60_000,
+                tombstoneGracePeriodMs: 60_000,
+                keepLatestPerBlock: 0,
+                decisionPath: ["tombstone_root", "old_enough_for_compaction"],
+              },
+              riskLevel: "low",
+              plannedAction: "compact_map_entry",
+              requiredChecks: ["verify_root_stability"],
+              readiness: "ready_for_manual_review",
+              riskAssessment: {
+                level: "low",
+                score: 12,
+                reasons: ["tombstone root is old enough to compact"],
+                factors: [],
+              },
+            },
+          ],
+        }),
+      } as unknown as BlockVersionGcCollector,
+    );
+
+    await service.previewBlockVersions({ docId: "doc_1", includeCandidates: false }, "tester");
+
+    expect(savedPoolEntries).toHaveLength(2);
+    expect(savedPoolEntries[0]?.candidateKey).not.toBe(savedPoolEntries[1]?.candidateKey);
+    expect(savedPoolEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "compact_map_entry",
+          source: "doc_snapshots",
+          resourceKey: "b_1@4",
+        }),
+        expect.objectContaining({
+          action: "compact_map_entry",
+          source: "document_drafts",
+          resourceKey: "b_1@4",
+        }),
+      ]),
+    );
+  });
 });

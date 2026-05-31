@@ -20,6 +20,7 @@ export type CreateDraftTombstoneSweepInput = {
 export type CreateRevisionTombstoneSweepInput = CreateDraftTombstoneSweepInput;
 
 type DraftSweepBlocker =
+  | "draft_root_ref_invalid"
   | "draft_missing"
   | "draft_workspace_mismatch"
   | "draft_map_entry_missing"
@@ -28,12 +29,12 @@ type DraftSweepBlocker =
   | "block_version_not_tombstone";
 
 type RevisionSweepBlocker =
+  | "snapshot_root_ref_invalid"
   | "snapshot_document_missing"
   | "snapshot_workspace_mismatch"
   | "snapshot_ref_missing"
   | "snapshot_non_revision_ref_present"
   | "snapshot_pinned_ref_present"
-  | "draft_ref_present"
   | "block_version_missing"
   | "block_version_not_tombstone";
 
@@ -209,7 +210,7 @@ export class GcSweepService {
         if (input.dryRun === true) {
           summary.processedCandidates += 1;
           summary.wouldCompactCandidates += 1;
-          summary.wouldCompactSnapshots += validation.matchingSnapshots.length;
+          summary.wouldCompactSnapshots += 1;
           await this.gcCandidatePoolRepository.save({
             ...candidate,
             lastValidationAt: now,
@@ -267,8 +268,15 @@ export class GcSweepService {
     workspaceId?: string,
   ): Promise<DraftSweepBlocker[]> {
     const blockers: DraftSweepBlocker[] = [];
+    const rootRef = this.readRootRef(candidate);
+
+    if (rootRef.rootRefType !== "draft" || !rootRef.rootRefId) {
+      blockers.push("draft_root_ref_invalid");
+      return blockers;
+    }
+
     const draft = await this.docDraftRepository.findOne({
-      where: { docId: candidate.docId ?? "" },
+      where: { draftId: rootRef.rootRefId },
     });
 
     if (!draft) {
@@ -315,16 +323,32 @@ export class GcSweepService {
     workspaceId?: string,
   ): Promise<{
     blockers: RevisionSweepBlocker[];
-    matchingSnapshots: DocSnapshot[];
+    matchingSnapshot: DocSnapshot | null;
   }> {
     const blockers: RevisionSweepBlocker[] = [];
+    const rootRef = this.readRootRef(candidate);
+
+    if (rootRef.rootRefType !== "snapshot" || !rootRef.rootRefId) {
+      blockers.push("snapshot_root_ref_invalid");
+      return { blockers, matchingSnapshot: null };
+    }
+
+    const snapshot = await this.docSnapshotRepository.findOne({
+      where: { snapshotId: rootRef.rootRefId },
+    });
+
+    if (!snapshot) {
+      blockers.push("snapshot_ref_missing");
+      return { blockers, matchingSnapshot: null };
+    }
+
     const document = await this.documentRepository.findOne({
-      where: { docId: candidate.docId ?? "" },
+      where: { docId: snapshot.docId },
     });
 
     if (!document) {
       blockers.push("snapshot_document_missing");
-      return { blockers, matchingSnapshots: [] };
+      return { blockers, matchingSnapshot: snapshot };
     }
 
     if (
@@ -334,39 +358,24 @@ export class GcSweepService {
       blockers.push("snapshot_workspace_mismatch");
     }
 
-    const snapshots = await this.docSnapshotRepository.find({
-      where: { docId: candidate.docId ?? "" },
-    });
-    const matchingSnapshots = snapshots.filter((snapshot) =>
-      this.hasCandidateMapEntry(snapshot.blockVersionMap, candidate.blockId, candidate.blockVer),
-    );
-
-    if (matchingSnapshots.length === 0) {
+    if (
+      !this.hasCandidateMapEntry(snapshot.blockVersionMap, candidate.blockId, candidate.blockVer)
+    ) {
       blockers.push("snapshot_ref_missing");
     }
 
-    if (matchingSnapshots.some((snapshot) => snapshot.kind !== "revision")) {
+    if (snapshot.kind !== "revision") {
       blockers.push("snapshot_non_revision_ref_present");
     }
 
-    if (matchingSnapshots.some((snapshot) => snapshot.pinned === true)) {
+    if (snapshot.pinned === true) {
       blockers.push("snapshot_pinned_ref_present");
-    }
-
-    const draft = await this.docDraftRepository.findOne({
-      where: { docId: candidate.docId ?? "" },
-    });
-    if (
-      draft &&
-      this.hasCandidateMapEntry(draft.blockVersionMap, candidate.blockId, candidate.blockVer)
-    ) {
-      blockers.push("draft_ref_present");
     }
 
     const version = await this.blockVersionRepository.findOne({
       where: {
         id: candidate.resourceRowId,
-        docId: candidate.docId ?? "",
+        docId: snapshot.docId,
         blockId: candidate.blockId,
         ver: candidate.blockVer,
       },
@@ -374,7 +383,7 @@ export class GcSweepService {
 
     if (!version) {
       blockers.push("block_version_missing");
-      return { blockers, matchingSnapshots };
+      return { blockers, matchingSnapshot: snapshot };
     }
 
     if (!this.isDeletedTombstone(version)) {
@@ -383,9 +392,7 @@ export class GcSweepService {
 
     return {
       blockers,
-      matchingSnapshots: matchingSnapshots.filter(
-        (snapshot) => snapshot.kind === "revision" && snapshot.pinned !== true,
-      ),
+      matchingSnapshot: snapshot,
     };
   }
 
@@ -398,18 +405,23 @@ export class GcSweepService {
       const draftRepository = manager.getRepository(DocDraft);
       const snapshotRepository = manager.getRepository(DocSnapshot);
       const poolRepository = manager.getRepository(GcCandidatePool);
+      const rootRef = this.readRootRef(candidate);
+
+      if (rootRef.rootRefType !== "draft" || !rootRef.rootRefId) {
+        throw new Error(`Draft root ref is missing for ${candidate.candidateKey}`);
+      }
 
       const draft = await draftRepository.findOne({
-        where: { docId: candidate.docId ?? "" },
+        where: { draftId: rootRef.rootRefId },
       });
 
       if (!draft) {
-        throw new Error(`Draft ${candidate.docId} disappeared before compaction`);
+        throw new Error(`Draft ${rootRef.rootRefId} disappeared before compaction`);
       }
 
       const currentVer = draft.blockVersionMap?.[candidate.blockId];
       if (currentVer !== candidate.blockVer) {
-        throw new Error(`Draft ${candidate.docId} map moved before compaction`);
+        throw new Error(`Draft ${rootRef.rootRefId} map moved before compaction`);
       }
 
       const nextMap = { ...(draft.blockVersionMap ?? {}) };
@@ -442,37 +454,40 @@ export class GcSweepService {
     return this.dataSource.transaction(async (manager) => {
       const snapshotRepository = manager.getRepository(DocSnapshot);
       const poolRepository = manager.getRepository(GcCandidatePool);
-      const snapshots = await snapshotRepository.find({
-        where: { docId: candidate.docId ?? "" },
+      const rootRef = this.readRootRef(candidate);
+
+      if (rootRef.rootRefType !== "snapshot" || !rootRef.rootRefId) {
+        throw new Error(`Snapshot root ref is missing for ${candidate.candidateKey}`);
+      }
+
+      const snapshot = await snapshotRepository.findOne({
+        where: { snapshotId: rootRef.rootRefId },
       });
-      const matchingSnapshots = snapshots.filter((snapshot) =>
-        this.hasCandidateMapEntry(snapshot.blockVersionMap, candidate.blockId, candidate.blockVer),
-      );
 
-      if (matchingSnapshots.length === 0) {
-        throw new Error(
-          `Snapshot refs for ${candidate.candidateKey} disappeared before compaction`,
-        );
+      if (!snapshot) {
+        throw new Error(`Snapshot ${rootRef.rootRefId} disappeared before compaction`);
       }
 
-      if (matchingSnapshots.some((snapshot) => snapshot.kind !== "revision")) {
-        throw new Error(`Snapshot refs for ${candidate.candidateKey} are no longer revision-only`);
+      if (
+        !this.hasCandidateMapEntry(snapshot.blockVersionMap, candidate.blockId, candidate.blockVer)
+      ) {
+        throw new Error(`Snapshot ${rootRef.rootRefId} map moved before compaction`);
       }
 
-      if (matchingSnapshots.some((snapshot) => snapshot.pinned === true)) {
-        throw new Error(
-          `Snapshot refs for ${candidate.candidateKey} became pinned before compaction`,
-        );
+      if (snapshot.kind !== "revision") {
+        throw new Error(`Snapshot ${rootRef.rootRefId} is no longer a revision snapshot`);
       }
 
-      for (const snapshot of matchingSnapshots) {
-        const nextMap = {
-          ...((snapshot.blockVersionMap ?? {}) as Record<string, number>),
-        };
-        delete nextMap[candidate.blockId];
-        snapshot.blockVersionMap = nextMap;
-        await snapshotRepository.save(snapshot);
+      if (snapshot.pinned === true) {
+        throw new Error(`Snapshot ${rootRef.rootRefId} became pinned before compaction`);
       }
+
+      const nextMap = {
+        ...((snapshot.blockVersionMap ?? {}) as Record<string, number>),
+      };
+      delete nextMap[candidate.blockId];
+      snapshot.blockVersionMap = nextMap;
+      await snapshotRepository.save(snapshot);
 
       await poolRepository.save({
         ...candidate,
@@ -483,8 +498,8 @@ export class GcSweepService {
       });
 
       return {
-        compactedSnapshots: matchingSnapshots.length,
-        compactedEntries: matchingSnapshots.length,
+        compactedSnapshots: 1,
+        compactedEntries: 1,
       };
     });
   }
@@ -528,5 +543,19 @@ export class GcSweepService {
     const payload = (version.payload ?? {}) as Record<string, unknown>;
     const attrs = (payload.attrs ?? {}) as Record<string, unknown>;
     return attrs.deleted === true;
+  }
+
+  private readRootRef(candidate: GcCandidatePool): {
+    rootRefType: string | null;
+    rootRefId: string | null;
+    rootRefKey: string | null;
+  } {
+    const reasonDetail = (candidate.reasonDetail ?? {}) as Record<string, unknown>;
+
+    return {
+      rootRefType: typeof reasonDetail.rootRefType === "string" ? reasonDetail.rootRefType : null,
+      rootRefId: typeof reasonDetail.rootRefId === "string" ? reasonDetail.rootRefId : null,
+      rootRefKey: typeof reasonDetail.rootRefKey === "string" ? reasonDetail.rootRefKey : null,
+    };
   }
 }

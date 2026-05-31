@@ -122,9 +122,17 @@ describe("BlockVersionGcCollector", () => {
         ]),
       }),
       repository<DocSnapshot>({
-        find: jest.fn().mockResolvedValue([{ docId: "doc_1", blockVersionMap: { b_1: 4 } }]),
+        find: jest
+          .fn()
+          .mockResolvedValue([
+            { snapshotId: "doc_1@snap@4", docId: "doc_1", blockVersionMap: { b_1: 4 } },
+          ]),
       }),
-      repository<DocDraft>({ find: jest.fn().mockResolvedValue([]) }),
+      repository<DocDraft>({
+        find: jest
+          .fn()
+          .mockResolvedValue([{ draftId: "draft_1", docId: "doc_1", blockVersionMap: { b_1: 4 } }]),
+      }),
       new GcPolicyService(),
     );
 
@@ -137,7 +145,7 @@ describe("BlockVersionGcCollector", () => {
     expect(result.summary.hardRootedBlockVersions).toBe(1);
     expect(result.summary.liveRootedBlockVersions).toBe(0);
     expect(result.summary.tombstoneRootedBlockVersions).toBe(1);
-    expect(result.summary.softDeletedMapEntries).toBe(1);
+    expect(result.summary.softDeletedMapEntries).toBe(2);
     expect(result.summary.candidateBlockVersions).toBe(1);
     expect(result.summary.tombstoneCompactionCandidates).toBe(0);
   });
@@ -165,9 +173,17 @@ describe("BlockVersionGcCollector", () => {
         ]),
       }),
       repository<DocSnapshot>({
-        find: jest.fn().mockResolvedValue([{ docId: "doc_1", blockVersionMap: { b_1: 4 } }]),
+        find: jest
+          .fn()
+          .mockResolvedValue([
+            { snapshotId: "doc_1@snap@4", docId: "doc_1", blockVersionMap: { b_1: 4 } },
+          ]),
       }),
-      repository<DocDraft>({ find: jest.fn().mockResolvedValue([]) }),
+      repository<DocDraft>({
+        find: jest
+          .fn()
+          .mockResolvedValue([{ draftId: "draft_1", docId: "doc_1", blockVersionMap: { b_1: 4 } }]),
+      }),
       new GcPolicyService(),
     );
 
@@ -177,24 +193,45 @@ describe("BlockVersionGcCollector", () => {
     );
 
     expect(result.summary.candidateReasons).toEqual({
-      deleted_tombstone_map_entry: 1,
+      deleted_tombstone_map_entry: 2,
     });
     expect(result.summary.candidateBlockVersions).toBe(0);
-    expect(result.summary.tombstoneCompactionCandidates).toBe(1);
-    expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0]).toMatchObject({
-      resourceKey: "b_1@4",
-      reasonCode: "deleted_tombstone_map_entry",
-      riskLevel: "low",
-      plannedAction: "compact_map_entry",
-      readiness: "ready_for_manual_review",
-      reasonDetail: {
-        rootKind: "tombstone",
-        deleted: true,
-        source: "doc_snapshots",
-        action: "compact_map_entry",
-      },
-    });
+    expect(result.summary.tombstoneCompactionCandidates).toBe(2);
+    expect(result.candidates).toHaveLength(2);
+    expect(result.candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          resourceKey: "b_1@4",
+          reasonCode: "deleted_tombstone_map_entry",
+          riskLevel: "low",
+          plannedAction: "compact_map_entry",
+          readiness: "ready_for_manual_review",
+          reasonDetail: expect.objectContaining({
+            rootKind: "tombstone",
+            deleted: true,
+            source: "doc_snapshots",
+            action: "compact_map_entry",
+            rootRefType: "snapshot",
+            rootRefId: "doc_1@snap@4",
+          }),
+        }),
+        expect.objectContaining({
+          resourceKey: "b_1@4",
+          reasonCode: "deleted_tombstone_map_entry",
+          riskLevel: "low",
+          plannedAction: "compact_map_entry",
+          readiness: "ready_for_manual_review",
+          reasonDetail: expect.objectContaining({
+            rootKind: "tombstone",
+            deleted: true,
+            source: "document_drafts",
+            action: "compact_map_entry",
+            rootRefType: "draft",
+            rootRefId: "draft_1",
+          }),
+        }),
+      ]),
+    );
     expect(result.candidates[0].requiredChecks).toEqual(
       expect.arrayContaining(["verify_root_stability", "verify_policy_overlap"]),
     );

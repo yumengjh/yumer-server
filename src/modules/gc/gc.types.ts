@@ -13,6 +13,7 @@ export type BlockVersionGcReasonCode =
   | "deleted_tombstone_map_entry";
 
 export type BlockVersionGcCandidateAction = "candidate_block_version" | "compact_map_entry";
+export type BlockVersionGcRootRefType = "snapshot" | "draft";
 
 export type BlockVersionGcCandidateAgeBucket = "fresh" | "recent" | "stable";
 
@@ -43,6 +44,9 @@ export type BlockVersionGcCandidateReasonDetail = {
   deleted: boolean;
   source: "doc_snapshots" | "document_drafts" | null;
   action: BlockVersionGcCandidateAction;
+  rootRefType?: BlockVersionGcRootRefType | null;
+  rootRefId?: string | null;
+  rootRefKey?: string | null;
   hardRooted: boolean;
   retainedByPolicy: boolean;
   gracePeriodMs?: number;

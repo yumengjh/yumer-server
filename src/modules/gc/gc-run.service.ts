@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { FindOptionsWhere, In, Repository } from "typeorm";
@@ -326,7 +327,15 @@ export class GcRunService {
   }
 
   private buildCandidateKey(candidate: BlockVersionGcCandidate | BlockVersionGcCandidatePoolEntry) {
-    const action = "action" in candidate ? candidate.action : candidate.reasonDetail.action;
+    const reasonDetail = candidate.reasonDetail;
+    const action = "action" in candidate ? candidate.action : reasonDetail.action;
+    const rootRefKey = reasonDetail.rootRefKey;
+
+    if (action === "compact_map_entry" && typeof rootRefKey === "string" && rootRefKey.length > 0) {
+      const digest = createHash("sha1").update(rootRefKey).digest("hex").slice(0, 16);
+      return `block_version:${candidate.resourceRowId}:${action}:${digest}`;
+    }
+
     return `block_version:${candidate.resourceKey}:${action}`;
   }
 }

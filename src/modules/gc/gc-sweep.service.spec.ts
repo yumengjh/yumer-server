@@ -49,6 +49,9 @@ describe("GcSweepService", () => {
         deleted: true,
         source: "document_drafts",
         action: "compact_map_entry",
+        rootRefType: "draft",
+        rootRefId: "draft_1",
+        rootRefKey: "draft:draft_1:b_1@4",
         hardRooted: true,
         retainedByPolicy: false,
         ageMs: 1000,
@@ -69,6 +72,7 @@ describe("GcSweepService", () => {
     });
     const draft = {
       id: 1,
+      draftId: "draft_1",
       docId: "doc_1",
       workspaceId: "ws_1",
       baseDocVer: 3,
@@ -228,6 +232,9 @@ describe("GcSweepService", () => {
         deleted: true,
         source: "document_drafts",
         action: "compact_map_entry",
+        rootRefType: "draft",
+        rootRefId: "draft_1",
+        rootRefKey: "draft:draft_1:b_1@4",
         hardRooted: true,
         retainedByPolicy: false,
         ageMs: 1000,
@@ -248,6 +255,7 @@ describe("GcSweepService", () => {
     });
     const draftRepo = repository<DocDraft>({
       findOne: jest.fn().mockResolvedValue({
+        draftId: "draft_1",
         docId: "doc_1",
         workspaceId: "ws_1",
         blockVersionMap: { root_1: 1, b_1: 5 },
@@ -351,6 +359,9 @@ describe("GcSweepService", () => {
         deleted: true,
         source: "doc_snapshots",
         action: "compact_map_entry",
+        rootRefType: "snapshot",
+        rootRefId: "doc_2@snap@5",
+        rootRefKey: "snapshot:doc_2@snap@5:b_2@6",
         hardRooted: true,
         retainedByPolicy: false,
         ageMs: 1000,
@@ -376,30 +387,24 @@ describe("GcSweepService", () => {
       }),
     });
     const draftRepo = repository<DocDraft>({
-      findOne: jest.fn().mockResolvedValue(null),
-    });
-    const snapshots = [
-      {
-        id: 10,
-        snapshotId: "doc_2@snap@5",
+      findOne: jest.fn().mockResolvedValue({
+        draftId: "draft_2",
         docId: "doc_2",
-        docVer: 5,
-        kind: "revision",
-        pinned: false,
+        workspaceId: "ws_2",
         blockVersionMap: { root_2: 1, b_2: 6 },
-      },
-      {
-        id: 11,
-        snapshotId: "doc_2@snap@6",
-        docId: "doc_2",
-        docVer: 6,
-        kind: "revision",
-        pinned: false,
-        blockVersionMap: { root_2: 1, b_2: 6, b_3: 7 },
-      },
-    ] as DocSnapshot[];
+      }),
+    });
+    const snapshot = {
+      id: 10,
+      snapshotId: "doc_2@snap@5",
+      docId: "doc_2",
+      docVer: 5,
+      kind: "revision",
+      pinned: false,
+      blockVersionMap: { root_2: 1, b_2: 6 },
+    } as DocSnapshot;
     const snapshotRepo = repository<DocSnapshot>({
-      find: jest.fn().mockResolvedValue(snapshots),
+      findOne: jest.fn().mockResolvedValue(snapshot),
     });
     const blockVersionRepo = repository<BlockVersion>({
       findOne: jest.fn().mockResolvedValue({
@@ -416,7 +421,7 @@ describe("GcSweepService", () => {
       getRepository: jest.fn((entity: unknown) => {
         if (entity === DocSnapshot) {
           return {
-            find: jest.fn().mockResolvedValue(snapshots),
+            findOne: jest.fn().mockResolvedValue(snapshot),
             save: jest.fn().mockImplementation(async (value: DocSnapshot) => {
               savedSnapshots.push(value);
               return value;
@@ -474,13 +479,12 @@ describe("GcSweepService", () => {
     expect(result.summary).toMatchObject({
       selectedCandidates: 1,
       processedCandidates: 1,
-      compactedSnapshots: 2,
-      compactedSnapshotEntries: 2,
+      compactedSnapshots: 1,
+      compactedSnapshotEntries: 1,
       blockedCandidates: 0,
     });
-    expect(savedSnapshots).toHaveLength(2);
+    expect(savedSnapshots).toHaveLength(1);
     expect(savedSnapshots[0]?.blockVersionMap).toEqual({ root_2: 1 });
-    expect(savedSnapshots[1]?.blockVersionMap).toEqual({ root_2: 1, b_3: 7 });
     expect(savedPoolEntries[0]).toMatchObject({
       candidateKey: "block_version:b_2@6:compact_map_entry",
       state: "swept",
@@ -488,7 +492,7 @@ describe("GcSweepService", () => {
     });
   });
 
-  it("blocks revision sweep when pinned snapshot refs are still present", async () => {
+  it("blocks revision sweep when the target snapshot is pinned", async () => {
     const runRepo = repository<GcRun>({
       create: jest.fn((value) => value),
       save: jest.fn().mockImplementation(async (value) => value),
@@ -522,6 +526,9 @@ describe("GcSweepService", () => {
         deleted: true,
         source: "doc_snapshots",
         action: "compact_map_entry",
+        rootRefType: "snapshot",
+        rootRefId: "doc_2@snap@9",
+        rootRefKey: "snapshot:doc_2@snap@9:b_2@6",
         hardRooted: true,
         retainedByPolicy: false,
         ageMs: 1000,
@@ -550,16 +557,14 @@ describe("GcSweepService", () => {
       findOne: jest.fn().mockResolvedValue(null),
     });
     const snapshotRepo = repository<DocSnapshot>({
-      find: jest.fn().mockResolvedValue([
-        {
-          snapshotId: "doc_2@snap@9",
-          docId: "doc_2",
-          docVer: 9,
-          kind: "revision",
-          pinned: true,
-          blockVersionMap: { root_2: 1, b_2: 6 },
-        },
-      ]),
+      findOne: jest.fn().mockResolvedValue({
+        snapshotId: "doc_2@snap@9",
+        docId: "doc_2",
+        docVer: 9,
+        kind: "revision",
+        pinned: true,
+        blockVersionMap: { root_2: 1, b_2: 6 },
+      }),
     });
     const blockVersionRepo = repository<BlockVersion>({
       findOne: jest.fn().mockResolvedValue({
