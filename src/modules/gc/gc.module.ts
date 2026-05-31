@@ -11,6 +11,8 @@ import { GcCandidatePool } from "../../entities/gc-candidate-pool.entity";
 import { GcRun } from "../../entities/gc-run.entity";
 import { GcRunCandidate } from "../../entities/gc-run-candidate.entity";
 import { BlockVersionGcCollector } from "./block-version-gc.collector";
+import { GcStorageController } from "./gc-storage.controller";
+import { GcStorageMaintenanceService } from "./gc-storage-maintenance.service";
 import { GcController } from "./gc.controller";
 import { GcHealthService } from "./gc-health.service";
 import { GcPolicyService } from "./gc-policy.service";
@@ -31,7 +33,7 @@ import { GcSweepService } from "./gc-sweep.service";
       GcCandidatePool,
     ]),
   ],
-  controllers: [GcController],
+  controllers: [GcController, GcStorageController],
   providers: [
     SystemAdminTokenGuard,
     GcPolicyService,
@@ -39,6 +41,7 @@ import { GcSweepService } from "./gc-sweep.service";
     BlockVersionGcCollector,
     GcRunService,
     GcSweepService,
+    GcStorageMaintenanceService,
   ],
 })
 export class GcModule {}

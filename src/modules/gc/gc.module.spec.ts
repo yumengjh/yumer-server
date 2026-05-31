@@ -12,6 +12,8 @@ import { GcCandidatePool } from "../../entities/gc-candidate-pool.entity";
 import { GcRunCandidate } from "../../entities/gc-run-candidate.entity";
 import { GcRun } from "../../entities/gc-run.entity";
 import { BlockVersionGcCollector } from "./block-version-gc.collector";
+import { GcStorageController } from "./gc-storage.controller";
+import { GcStorageMaintenanceService } from "./gc-storage-maintenance.service";
 import { GcController } from "./gc.controller";
 import { GcHealthService } from "./gc-health.service";
 import { GcModule } from "./gc.module";
@@ -56,16 +58,23 @@ describe("GcModule", () => {
       .useValue({
         sweepDraftTombstones: jest.fn(),
         sweepRevisionTombstones: jest.fn(),
+        sweepBlockVersions: jest.fn(),
+      })
+      .overrideProvider(GcStorageMaintenanceService)
+      .useValue({
+        compact: jest.fn(),
       })
       .overrideProvider(SystemAdminTokenGuard)
       .useValue({ canActivate: jest.fn().mockReturnValue(true) })
       .compile();
 
     expect(moduleRef.get(GcController)).toBeInstanceOf(GcController);
+    expect(moduleRef.get(GcStorageController)).toBeInstanceOf(GcStorageController);
     expect(moduleRef.get(GcPolicyService)).toBeInstanceOf(GcPolicyService);
     expect(moduleRef.get(GcHealthService)).toBeInstanceOf(GcHealthService);
     expect(moduleRef.get(BlockVersionGcCollector)).toBeInstanceOf(BlockVersionGcCollector);
     expect(moduleRef.get(GcRunService)).toBeInstanceOf(GcRunService);
     expect(moduleRef.get(GcSweepService)).toBeDefined();
+    expect(moduleRef.get(GcStorageMaintenanceService)).toBeDefined();
   });
 });

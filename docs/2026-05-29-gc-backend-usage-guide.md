@@ -1,4 +1,4 @@
-<!-- cspell:words explainability -->
+<!-- cspell:words autovacuum explainability freelist -->
 
 # GC 后端使用说明
 
@@ -326,6 +326,45 @@ fresh revalidation 会检查：
 - workspace / doc scope 仍一致
 
 注意：这个接口只表示逻辑删除版本行，不表示 SQLite 数据库文件会立即变小。
+
+### 5.11 执行 SQLite storage compact
+
+```http
+POST /admin/gc/storage/compact
+Content-Type: application/json
+```
+
+dry-run 请求体：
+
+```json
+{
+  "dryRun": true,
+  "mode": "vacuum"
+}
+```
+
+真实执行请求体：
+
+```json
+{
+  "dryRun": false,
+  "mode": "vacuum",
+  "confirm": "VACUUM_SQLITE_DATABASE"
+}
+```
+
+用途：
+
+- SQLite 下执行或预演 `VACUUM`
+- 返回执行前后的数据库文件大小、`page_count`、`freelist_count`、估算空闲字节数
+- Postgres 下直接返回 unsupported，由数据库 autovacuum / DBA 维护
+
+注意：
+
+- 这个接口不会被 GC sweep 自动调用
+- `dryRun` 默认等同于 `true`
+- 真实执行必须带 `confirm = VACUUM_SQLITE_DATABASE`
+- `VACUUM` 可能阻塞写入，应只在维护窗口触发
 
 ## 6. 前端最该关注的返回字段
 
