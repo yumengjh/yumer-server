@@ -2,6 +2,7 @@
 import { Injectable } from "@nestjs/common";
 import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
 import { DataSource, FindOptionsWhere, Repository } from "typeorm";
+import { Block } from "../../entities/block.entity";
 import { BlockVersion } from "../../entities/block-version.entity";
 import { DocDraft } from "../../entities/doc-draft.entity";
 import { DocSnapshot } from "../../entities/doc-snapshot.entity";
@@ -18,6 +19,7 @@ export type CreateDraftTombstoneSweepInput = {
 };
 
 export type CreateRevisionTombstoneSweepInput = CreateDraftTombstoneSweepInput;
+export type CreateBlockVersionSweepInput = CreateDraftTombstoneSweepInput;
 
 type DraftSweepBlocker =
   | "draft_root_ref_invalid"
@@ -37,6 +39,18 @@ type RevisionSweepBlocker =
   | "snapshot_pinned_ref_present"
   | "block_version_missing"
   | "block_version_not_tombstone";
+
+type BlockVersionSweepBlocker =
+  | "candidate_action_invalid"
+  | "document_missing"
+  | "document_workspace_mismatch"
+  | "block_missing"
+  | "block_version_missing"
+  | "block_latest_version"
+  | "block_version_too_recent"
+  | "block_version_policy_retained"
+  | "snapshot_root_present"
+  | "draft_root_present";
 
 @Injectable()
 export class GcSweepService {
@@ -237,6 +251,100 @@ export class GcSweepService {
     }
   }
 
+  async sweepBlockVersions(input: CreateBlockVersionSweepInput, triggeredBy: string) {
+    const run = this.gcRunRepository.create({
+      runId: this.generateRunId("gc_sweep"),
+      resourceType: "block_version",
+      mode: "sweep",
+      status: "running",
+      scope: {
+        workspaceId: input.workspaceId ?? null,
+        docId: input.docId ?? null,
+        action: "candidate_block_version",
+        dryRun: input.dryRun !== false,
+      },
+      policySnapshot: {},
+      health: {},
+      summary: {},
+      candidateDetailsStored: false,
+      candidateDetailsTruncated: false,
+      triggeredBy,
+      startedAt: new Date(),
+      finishedAt: null,
+      errorMessage: null,
+    });
+    await this.gcRunRepository.save(run);
+
+    try {
+      const policy = this.gcPolicyService.getBlockVersionPolicy();
+      run.policySnapshot = policy;
+
+      const limit = Math.min(input.limit ?? policy.maxSweepBatchSize, policy.maxSweepBatchSize);
+      const candidates = await this.findEligibleBlockVersionCandidates(input, limit);
+      const dryRun = input.dryRun !== false;
+      const summary = {
+        dryRun,
+        selectedCandidates: candidates.length,
+        processedCandidates: 0,
+        deletedBlockVersions: 0,
+        blockedCandidates: 0,
+        wouldDeleteCandidates: 0,
+      };
+
+      for (const candidate of candidates) {
+        const blockers = await this.validateBlockVersionCandidate(candidate, input, policy);
+        const now = new Date();
+
+        if (blockers.length > 0) {
+          summary.processedCandidates += 1;
+          summary.blockedCandidates += 1;
+          await this.gcCandidatePoolRepository.save({
+            ...candidate,
+            state: "blocked",
+            lastValidationAt: now,
+            lastBlockers: blockers,
+          });
+          continue;
+        }
+
+        if (dryRun) {
+          summary.processedCandidates += 1;
+          summary.wouldDeleteCandidates += 1;
+          await this.gcCandidatePoolRepository.save({
+            ...candidate,
+            lastValidationAt: now,
+            lastBlockers: [],
+          });
+          continue;
+        }
+
+        const result = await this.deleteBlockVersionCandidate(
+          candidate,
+          input,
+          policy,
+          triggeredBy,
+          now,
+        );
+        summary.processedCandidates += 1;
+        if (result === "deleted") {
+          summary.deletedBlockVersions += 1;
+        } else {
+          summary.blockedCandidates += 1;
+        }
+      }
+
+      run.status = "completed";
+      run.summary = summary;
+      run.finishedAt = new Date();
+      return this.gcRunRepository.save(run);
+    } catch (error) {
+      run.status = "failed";
+      run.errorMessage = error instanceof Error ? error.message : String(error);
+      run.finishedAt = new Date();
+      return this.gcRunRepository.save(run);
+    }
+  }
+
   private async findEligibleTombstoneCandidates(
     input: CreateDraftTombstoneSweepInput,
     limit: number,
@@ -247,6 +355,30 @@ export class GcSweepService {
       state: "eligible",
       action: "compact_map_entry",
       source,
+    };
+
+    if (input.workspaceId) where.workspaceId = input.workspaceId;
+    if (input.docId) where.docId = input.docId;
+
+    return this.gcCandidatePoolRepository.find({
+      where,
+      order: {
+        eligibleAfter: "ASC",
+        firstSeenAt: "ASC",
+        versionCreatedAt: "ASC",
+      },
+      take: limit,
+    });
+  }
+
+  private async findEligibleBlockVersionCandidates(
+    input: CreateBlockVersionSweepInput,
+    limit: number,
+  ) {
+    const where: FindOptionsWhere<GcCandidatePool> = {
+      resourceType: "block_version",
+      state: "eligible",
+      action: "candidate_block_version",
     };
 
     if (input.workspaceId) where.workspaceId = input.workspaceId;
@@ -396,6 +528,112 @@ export class GcSweepService {
     };
   }
 
+  private async validateBlockVersionCandidate(
+    candidate: GcCandidatePool,
+    input: CreateBlockVersionSweepInput,
+    policy: ReturnType<GcPolicyService["getBlockVersionPolicy"]>,
+  ): Promise<BlockVersionSweepBlocker[]> {
+    return this.validateBlockVersionCandidateWithRepositories(candidate, input, policy, {
+      documentRepository: this.documentRepository,
+      blockRepository: this.dataSource.getRepository(Block),
+      blockVersionRepository: this.blockVersionRepository,
+      docSnapshotRepository: this.docSnapshotRepository,
+      docDraftRepository: this.docDraftRepository,
+    });
+  }
+
+  private async validateBlockVersionCandidateWithRepositories(
+    candidate: GcCandidatePool,
+    input: CreateBlockVersionSweepInput,
+    policy: ReturnType<GcPolicyService["getBlockVersionPolicy"]>,
+    repositories: {
+      documentRepository: Repository<Document>;
+      blockRepository: Repository<Block>;
+      blockVersionRepository: Repository<BlockVersion>;
+      docSnapshotRepository: Repository<DocSnapshot>;
+      docDraftRepository: Repository<DocDraft>;
+    },
+  ): Promise<BlockVersionSweepBlocker[]> {
+    const blockers: BlockVersionSweepBlocker[] = [];
+
+    if (candidate.action !== "candidate_block_version") {
+      blockers.push("candidate_action_invalid");
+      return blockers;
+    }
+
+    const document = await repositories.documentRepository.findOne({
+      where: { docId: candidate.docId ?? "" },
+    });
+
+    if (!document) {
+      blockers.push("document_missing");
+      return blockers;
+    }
+
+    if (
+      (input.workspaceId && document.workspaceId !== input.workspaceId) ||
+      (candidate.workspaceId && document.workspaceId !== candidate.workspaceId)
+    ) {
+      blockers.push("document_workspace_mismatch");
+    }
+
+    const version = await repositories.blockVersionRepository.findOne({
+      where: {
+        id: candidate.resourceRowId,
+        docId: candidate.docId ?? "",
+        blockId: candidate.blockId,
+        ver: candidate.blockVer,
+      },
+    });
+
+    if (!version) {
+      blockers.push("block_version_missing");
+      return blockers;
+    }
+
+    const block = await repositories.blockRepository.findOne({
+      where: { blockId: candidate.blockId, docId: candidate.docId ?? "" },
+    });
+
+    if (!block) {
+      blockers.push("block_missing");
+    } else if (block.latestVer === candidate.blockVer) {
+      blockers.push("block_latest_version");
+    }
+
+    if (Date.now() - Number(version.createdAt) < policy.gracePeriodMs) {
+      blockers.push("block_version_too_recent");
+    }
+
+    if (await this.isRetainedByKeepLatest(candidate, policy, repositories.blockVersionRepository)) {
+      blockers.push("block_version_policy_retained");
+    }
+
+    const snapshots = await repositories.docSnapshotRepository.find({
+      where: { docId: candidate.docId ?? "" },
+    });
+    if (
+      snapshots.some((snapshot) =>
+        this.hasCandidateMapEntry(snapshot.blockVersionMap, candidate.blockId, candidate.blockVer),
+      )
+    ) {
+      blockers.push("snapshot_root_present");
+    }
+
+    const drafts = await repositories.docDraftRepository.find({
+      where: { docId: candidate.docId ?? "" },
+    });
+    if (
+      drafts.some((draft) =>
+        this.hasCandidateMapEntry(draft.blockVersionMap, candidate.blockId, candidate.blockVer),
+      )
+    ) {
+      blockers.push("draft_root_present");
+    }
+
+    return blockers;
+  }
+
   private async compactDraftCandidate(
     candidate: GcCandidatePool,
     triggeredBy: string,
@@ -504,6 +742,65 @@ export class GcSweepService {
     });
   }
 
+  private async deleteBlockVersionCandidate(
+    candidate: GcCandidatePool,
+    input: CreateBlockVersionSweepInput,
+    policy: ReturnType<GcPolicyService["getBlockVersionPolicy"]>,
+    triggeredBy: string,
+    now: Date,
+  ): Promise<"deleted" | "blocked"> {
+    return this.dataSource.transaction(async (manager) => {
+      const documentRepository = manager.getRepository(Document);
+      const blockRepository = manager.getRepository(Block);
+      const blockVersionRepository = manager.getRepository(BlockVersion);
+      const snapshotRepository = manager.getRepository(DocSnapshot);
+      const draftRepository = manager.getRepository(DocDraft);
+      const poolRepository = manager.getRepository(GcCandidatePool);
+
+      const blockers = await this.validateBlockVersionCandidateWithRepositories(
+        candidate,
+        input,
+        policy,
+        {
+          documentRepository,
+          blockRepository,
+          blockVersionRepository,
+          docSnapshotRepository: snapshotRepository,
+          docDraftRepository: draftRepository,
+        },
+      );
+
+      if (blockers.length > 0) {
+        await poolRepository.save({
+          ...candidate,
+          state: "blocked",
+          lastValidationAt: now,
+          lastBlockers: blockers,
+        });
+        return "blocked";
+      }
+
+      await blockVersionRepository.delete({
+        id: candidate.resourceRowId,
+        docId: candidate.docId ?? "",
+        blockId: candidate.blockId,
+        ver: candidate.blockVer,
+      });
+      await poolRepository.save({
+        ...candidate,
+        state: "swept",
+        lastSweepAt: now,
+        lastValidationAt: now,
+        lastBlockers: [],
+        policySnapshot: {
+          ...candidate.policySnapshot,
+          lastSweptBy: triggeredBy,
+        },
+      });
+      return "deleted";
+    });
+  }
+
   private async calculateChangedBlocksCount(
     draft: DocDraft,
     currentMap: Record<string, number>,
@@ -529,6 +826,27 @@ export class GcSweepService {
     }
 
     return changed;
+  }
+
+  private async isRetainedByKeepLatest(
+    candidate: GcCandidatePool,
+    policy: ReturnType<GcPolicyService["getBlockVersionPolicy"]>,
+    blockVersionRepository: Repository<BlockVersion>,
+  ): Promise<boolean> {
+    if (policy.keepLatestPerBlock <= 0) {
+      return false;
+    }
+
+    const versions = await blockVersionRepository.find({
+      where: {
+        docId: candidate.docId ?? "",
+        blockId: candidate.blockId,
+      },
+      order: { ver: "DESC" },
+      take: policy.keepLatestPerBlock,
+    });
+
+    return versions.some((version) => version.ver === candidate.blockVer);
   }
 
   private generateRunId(prefix: string): string {

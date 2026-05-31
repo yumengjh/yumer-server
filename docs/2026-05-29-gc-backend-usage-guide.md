@@ -19,10 +19,11 @@
 
 - `document_drafts` tombstone map compaction
 - `doc_snapshots(kind=revision, pinned=false)` tombstone map compaction
+- `candidate_block_version` 的 `block_versions` 物理删除
 
 当前还没有做的真实删除：
 
-- `candidate_block_version` 的 `block_versions` 物理删除
+- SQLite / Postgres 的物理存储文件收缩
 
 ## 2. 这套接口主要服务什么场景
 
@@ -288,6 +289,43 @@ Content-Type: application/json
 - 只处理 `source = doc_snapshots`
 - 只处理 `kind = revision && pinned = false`
 - 按 root-entry 精确定位目标 snapshot entry
+
+### 5.10 执行 block version sweep
+
+```http
+POST /admin/gc/block-versions/sweeps/block-versions
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "workspaceId": "ws_1",
+  "docId": "doc_1",
+  "limit": 100,
+  "dryRun": true
+}
+```
+
+用途：
+
+- 从 `gc_candidate_pool` 里选择 `state = eligible` 且 `action = candidate_block_version` 的候选
+- 按 `eligibleAfter ASC, firstSeenAt ASC, versionCreatedAt ASC` oldest-first 处理
+- `dryRun = true` 时只做 fresh revalidation，不删除 `block_versions`
+- `dryRun = false` 时在事务内再次 revalidation，然后删除对应 `block_versions` 行
+
+fresh revalidation 会检查：
+
+- `block_versions` 行仍存在
+- 不是 `blocks.latestVer`
+- 未命中 `keepLatestPerBlock`
+- 仍然超过 `gracePeriodMs`
+- 没有任何 `doc_snapshots.blockVersionMap` 指向它
+- 没有任何 `document_drafts.blockVersionMap` 指向它
+- workspace / doc scope 仍一致
+
+注意：这个接口只表示逻辑删除版本行，不表示 SQLite 数据库文件会立即变小。
 
 ## 6. 前端最该关注的返回字段
 

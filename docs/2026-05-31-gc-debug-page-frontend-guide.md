@@ -115,11 +115,14 @@ GET /admin/gc/block-versions/pool
 - `Run Draft Tombstones`
 - `Dry-run Revision Tombstones`
 - `Run Revision Tombstones`
+- `Dry-run Block Versions`
+- `Run Block Versions`
 
 分别对应：
 
 - `POST /admin/gc/block-versions/sweeps/draft-tombstones`
 - `POST /admin/gc/block-versions/sweeps/revision-tombstones`
+- `POST /admin/gc/block-versions/sweeps/block-versions`
 
 ## 3. 推荐调用顺序
 
@@ -141,7 +144,7 @@ GET /admin/gc/block-versions/pool
 
 ### 3.3 用户触发 sweep
 
-1. 先在 `/pool?state=eligible&action=compact_map_entry` 上确认候选
+1. 先在 `/pool?state=eligible&action=compact_map_entry` 或 `/pool?state=eligible&action=candidate_block_version` 上确认候选
 2. 先点 `dryRun`
 3. 看 sweep run 的 `summary`
 4. 再点真实执行
@@ -259,7 +262,7 @@ GET /admin/gc/block-versions/pool
 
 即使 sweep 成功，页面也不要展示“磁盘已回收”。
 
-当前 sweep 只表示逻辑清理完成，不表示数据库文件立刻变小。
+当前 sweep 只表示逻辑清理完成。即使 `sweeps/block-versions` 真实删除了 `block_versions` 行，也不表示数据库文件立刻变小。
 
 ## 7. 最小可用版本建议
 

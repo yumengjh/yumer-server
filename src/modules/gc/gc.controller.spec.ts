@@ -189,4 +189,28 @@ describe("GcController", () => {
       "admin_3",
     );
   });
+
+  it("sweeps eligible block versions with operator from header", async () => {
+    const gcSweepService = {
+      sweepBlockVersions: jest.fn().mockResolvedValue({ runId: "gc_sweep_3" }),
+    } as unknown as GcSweepService;
+    const controller = new GcController(
+      { previewBlockVersions: jest.fn(), findPool: jest.fn() } as unknown as GcRunService,
+      { checkBlockVersionGcHealth: jest.fn() } as unknown as GcHealthService,
+      gcSweepService,
+      { getBlockVersionPolicy: jest.fn() } as unknown as GcPolicyService,
+    );
+
+    await expect(
+      controller.sweepBlockVersions({ docId: "doc_3", dryRun: true }, {
+        headers: { "x-operator-id": "admin_4" },
+        ip: "127.0.0.1",
+      } as unknown as Request),
+    ).resolves.toEqual({ runId: "gc_sweep_3" });
+
+    expect(gcSweepService.sweepBlockVersions).toHaveBeenCalledWith(
+      { docId: "doc_3", dryRun: true },
+      "admin_4",
+    );
+  });
 });

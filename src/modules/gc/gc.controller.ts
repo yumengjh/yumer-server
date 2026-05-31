@@ -81,6 +81,13 @@ export class GcController {
     return this.gcSweepService.sweepRevisionTombstones(body, this.resolveOperator(request));
   }
 
+  @Post("sweeps/block-versions")
+  @ApiOperation({ summary: "Sweep eligible unreferenced block versions" })
+  @ApiResponse({ status: 201, description: "Block version sweep executed" })
+  sweepBlockVersions(@Body() body: CreateBlockVersionGcSweepDto, @Req() request: Request) {
+    return this.gcSweepService.sweepBlockVersions(body, this.resolveOperator(request));
+  }
+
   @Get("health")
   @ApiOperation({ summary: "Check block version GC health for a scope" })
   getBlockVersionHealth(@Query() query: QueryGcRunsDto) {

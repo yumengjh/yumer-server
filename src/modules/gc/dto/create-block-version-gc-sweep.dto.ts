@@ -21,7 +21,7 @@ export class CreateBlockVersionGcSweepDto {
   @Max(500)
   limit?: number;
 
-  @ApiPropertyOptional({ description: "Validate and plan only, without mutating draft maps" })
+  @ApiPropertyOptional({ description: "Validate and plan only, without mutating GC targets" })
   @IsOptional()
   @IsBoolean()
   dryRun?: boolean;
