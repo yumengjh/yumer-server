@@ -53,7 +53,10 @@ describe("GcModule", () => {
       .overrideProvider(getRepositoryToken(GcCandidatePool))
       .useValue(createRepositoryMock())
       .overrideProvider(GcSweepService)
-      .useValue({ sweepDraftTombstones: jest.fn() })
+      .useValue({
+        sweepDraftTombstones: jest.fn(),
+        sweepRevisionTombstones: jest.fn(),
+      })
       .overrideProvider(SystemAdminTokenGuard)
       .useValue({ canActivate: jest.fn().mockReturnValue(true) })
       .compile();

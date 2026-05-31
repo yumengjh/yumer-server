@@ -14,7 +14,10 @@ describe("GcController", () => {
       {
         checkBlockVersionGcHealth: jest.fn(),
       } as unknown as GcHealthService,
-      { sweepDraftTombstones: jest.fn() } as unknown as GcSweepService,
+      {
+        sweepDraftTombstones: jest.fn(),
+        sweepRevisionTombstones: jest.fn(),
+      } as unknown as GcSweepService,
     );
 
     await expect(
@@ -37,7 +40,10 @@ describe("GcController", () => {
       {
         checkBlockVersionGcHealth: jest.fn().mockResolvedValue(health),
       } as unknown as GcHealthService,
-      { sweepDraftTombstones: jest.fn() } as unknown as GcSweepService,
+      {
+        sweepDraftTombstones: jest.fn(),
+        sweepRevisionTombstones: jest.fn(),
+      } as unknown as GcSweepService,
     );
 
     await expect(controller.getBlockVersionHealth({ docId: "doc_1" })).resolves.toBe(health);
@@ -53,7 +59,10 @@ describe("GcController", () => {
       {
         checkBlockVersionGcHealth: jest.fn(),
       } as unknown as GcHealthService,
-      { sweepDraftTombstones: jest.fn() } as unknown as GcSweepService,
+      {
+        sweepDraftTombstones: jest.fn(),
+        sweepRevisionTombstones: jest.fn(),
+      } as unknown as GcSweepService,
     );
 
     await expect(
@@ -87,6 +96,30 @@ describe("GcController", () => {
     expect(gcSweepService.sweepDraftTombstones).toHaveBeenCalledWith(
       { workspaceId: "ws_1", dryRun: true },
       "admin_2",
+    );
+  });
+
+  it("sweeps eligible revision tombstone entries with operator from header", async () => {
+    const gcSweepService = {
+      sweepDraftTombstones: jest.fn(),
+      sweepRevisionTombstones: jest.fn().mockResolvedValue({ runId: "gc_sweep_2" }),
+    } as unknown as GcSweepService;
+    const controller = new GcController(
+      { previewBlockVersions: jest.fn(), findPool: jest.fn() } as unknown as GcRunService,
+      { checkBlockVersionGcHealth: jest.fn() } as unknown as GcHealthService,
+      gcSweepService,
+    );
+
+    await expect(
+      controller.sweepRevisionTombstones({ docId: "doc_2", dryRun: true }, {
+        headers: { "x-operator-id": "admin_3" },
+        ip: "127.0.0.1",
+      } as unknown as Request),
+    ).resolves.toEqual({ runId: "gc_sweep_2" });
+
+    expect(gcSweepService.sweepRevisionTombstones).toHaveBeenCalledWith(
+      { docId: "doc_2", dryRun: true },
+      "admin_3",
     );
   });
 });

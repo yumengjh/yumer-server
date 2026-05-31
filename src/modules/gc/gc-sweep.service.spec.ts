@@ -2,6 +2,7 @@ import type { ObjectLiteral, Repository } from "typeorm";
 import { BlockVersion } from "../../entities/block-version.entity";
 import { DocDraft } from "../../entities/doc-draft.entity";
 import { DocSnapshot } from "../../entities/doc-snapshot.entity";
+import { Document } from "../../entities/document.entity";
 import { GcCandidatePool } from "../../entities/gc-candidate-pool.entity";
 import { GcRun } from "../../entities/gc-run.entity";
 import type { GcPolicyService } from "./gc-policy.service";
@@ -80,6 +81,12 @@ describe("GcSweepService", () => {
     const draftRepo = repository<DocDraft>({
       findOne: jest.fn().mockResolvedValue(draft),
     });
+    const documentRepo = repository<Document>({
+      findOne: jest.fn().mockResolvedValue({
+        docId: "doc_1",
+        workspaceId: "ws_1",
+      }),
+    });
     const snapshotRepo = repository<DocSnapshot>({
       findOne: jest.fn().mockResolvedValue({
         snapshotId: "doc_1@snap@3",
@@ -140,6 +147,7 @@ describe("GcSweepService", () => {
     const service = new GcSweepService(
       runRepo,
       poolRepo,
+      documentRepo,
       draftRepo,
       snapshotRepo,
       blockVersionRepo,
@@ -245,6 +253,12 @@ describe("GcSweepService", () => {
         blockVersionMap: { root_1: 1, b_1: 5 },
       }),
     });
+    const documentRepo = repository<Document>({
+      findOne: jest.fn().mockResolvedValue({
+        docId: "doc_1",
+        workspaceId: "ws_1",
+      }),
+    });
     const snapshotRepo = repository<DocSnapshot>({});
     const blockVersionRepo = repository<BlockVersion>({
       findOne: jest.fn().mockResolvedValue({
@@ -262,6 +276,7 @@ describe("GcSweepService", () => {
     const service = new GcSweepService(
       runRepo,
       poolRepo,
+      documentRepo,
       draftRepo,
       snapshotRepo,
       blockVersionRepo,
@@ -297,6 +312,308 @@ describe("GcSweepService", () => {
         candidateKey: "block_version:b_1@4:compact_map_entry",
         state: "blocked",
         lastBlockers: ["draft_map_entry_changed"],
+      }),
+    );
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it("compacts eligible revision tombstone entries across revision snapshots", async () => {
+    const runRepo = repository<GcRun>({
+      create: jest.fn((value) => value),
+      save: jest.fn().mockImplementation(async (value) => value),
+    });
+    const poolCandidate = {
+      id: 2,
+      candidateKey: "block_version:b_2@6:compact_map_entry",
+      resourceType: "block_version",
+      action: "compact_map_entry",
+      source: "doc_snapshots",
+      resourceKey: "b_2@6",
+      resourceRowId: 6,
+      docId: "doc_2",
+      workspaceId: "ws_2",
+      blockId: "b_2",
+      blockVer: 6,
+      versionCreatedAt: 1,
+      firstSeenRunId: "gc_run_3",
+      lastSeenRunId: "gc_run_4",
+      firstSeenAt: new Date("2026-05-31T00:00:00.000Z"),
+      lastSeenAt: new Date("2026-05-31T00:01:00.000Z"),
+      seenCount: 2,
+      stableSeenCount: 2,
+      state: "eligible",
+      eligibleAfter: new Date("2026-05-31T00:00:30.000Z"),
+      lastSweepAt: null,
+      lastValidationAt: null,
+      reasonCode: "deleted_tombstone_map_entry",
+      reasonDetail: {
+        rootKind: "tombstone",
+        deleted: true,
+        source: "doc_snapshots",
+        action: "compact_map_entry",
+        hardRooted: true,
+        retainedByPolicy: false,
+        ageMs: 1000,
+        ageBucket: "stable",
+        rootSourceCount: 2,
+        distanceFromLatestVer: 0,
+        decisionPath: ["tombstone_root", "old_enough_for_compaction"],
+      },
+      riskLevel: "low",
+      policySnapshot: {},
+      lastBlockers: [],
+      createdAt: new Date("2026-05-31T00:00:00.000Z"),
+      updatedAt: new Date("2026-05-31T00:01:00.000Z"),
+    } as GcCandidatePool;
+    const poolRepo = repository<GcCandidatePool>({
+      find: jest.fn().mockResolvedValue([poolCandidate]),
+      save: jest.fn().mockImplementation(async (value) => value),
+    });
+    const documentRepo = repository<Document>({
+      findOne: jest.fn().mockResolvedValue({
+        docId: "doc_2",
+        workspaceId: "ws_2",
+      }),
+    });
+    const draftRepo = repository<DocDraft>({
+      findOne: jest.fn().mockResolvedValue(null),
+    });
+    const snapshots = [
+      {
+        id: 10,
+        snapshotId: "doc_2@snap@5",
+        docId: "doc_2",
+        docVer: 5,
+        kind: "revision",
+        pinned: false,
+        blockVersionMap: { root_2: 1, b_2: 6 },
+      },
+      {
+        id: 11,
+        snapshotId: "doc_2@snap@6",
+        docId: "doc_2",
+        docVer: 6,
+        kind: "revision",
+        pinned: false,
+        blockVersionMap: { root_2: 1, b_2: 6, b_3: 7 },
+      },
+    ] as DocSnapshot[];
+    const snapshotRepo = repository<DocSnapshot>({
+      find: jest.fn().mockResolvedValue(snapshots),
+    });
+    const blockVersionRepo = repository<BlockVersion>({
+      findOne: jest.fn().mockResolvedValue({
+        id: 6,
+        docId: "doc_2",
+        blockId: "b_2",
+        ver: 6,
+        payload: { attrs: { deleted: true } },
+      }),
+    });
+    const savedSnapshots: DocSnapshot[] = [];
+    const savedPoolEntries: Array<Record<string, unknown>> = [];
+    const manager = {
+      getRepository: jest.fn((entity: unknown) => {
+        if (entity === DocSnapshot) {
+          return {
+            find: jest.fn().mockResolvedValue(snapshots),
+            save: jest.fn().mockImplementation(async (value: DocSnapshot) => {
+              savedSnapshots.push(value);
+              return value;
+            }),
+          };
+        }
+
+        if (entity === GcCandidatePool) {
+          return {
+            save: jest.fn().mockImplementation(async (value: Record<string, unknown>) => {
+              savedPoolEntries.push(value);
+              return value;
+            }),
+          };
+        }
+
+        throw new Error(`Unexpected repository: ${String(entity)}`);
+      }),
+    };
+    const dataSource = {
+      transaction: jest.fn(async (callback: (transactionManager: never) => Promise<unknown>) =>
+        callback(manager as never),
+      ),
+    };
+
+    const service = new GcSweepService(
+      runRepo,
+      poolRepo,
+      documentRepo,
+      draftRepo,
+      snapshotRepo,
+      blockVersionRepo,
+      {
+        getBlockVersionPolicy: jest.fn().mockReturnValue({
+          gracePeriodMs: 60_000,
+          tombstoneGracePeriodMs: 60_000,
+          keepLatestPerBlock: 0,
+          promotionDelayMs: 0,
+          stableSeenThreshold: 2,
+          maxCandidatesToStore: 1000,
+          maxSweepBatchSize: 100,
+          poolEntryExpireMs: 604_800_000,
+          rootSources: ["doc_snapshots", "document_drafts"],
+        }),
+      } as unknown as GcPolicyService,
+      dataSource as never,
+    );
+
+    const result = await service.sweepRevisionTombstones(
+      { workspaceId: "ws_2", dryRun: false },
+      "gc_operator",
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.summary).toMatchObject({
+      selectedCandidates: 1,
+      processedCandidates: 1,
+      compactedSnapshots: 2,
+      compactedSnapshotEntries: 2,
+      blockedCandidates: 0,
+    });
+    expect(savedSnapshots).toHaveLength(2);
+    expect(savedSnapshots[0]?.blockVersionMap).toEqual({ root_2: 1 });
+    expect(savedSnapshots[1]?.blockVersionMap).toEqual({ root_2: 1, b_3: 7 });
+    expect(savedPoolEntries[0]).toMatchObject({
+      candidateKey: "block_version:b_2@6:compact_map_entry",
+      state: "swept",
+      lastBlockers: [],
+    });
+  });
+
+  it("blocks revision sweep when pinned snapshot refs are still present", async () => {
+    const runRepo = repository<GcRun>({
+      create: jest.fn((value) => value),
+      save: jest.fn().mockImplementation(async (value) => value),
+    });
+    const poolCandidate = {
+      id: 2,
+      candidateKey: "block_version:b_2@6:compact_map_entry",
+      resourceType: "block_version",
+      action: "compact_map_entry",
+      source: "doc_snapshots",
+      resourceKey: "b_2@6",
+      resourceRowId: 6,
+      docId: "doc_2",
+      workspaceId: "ws_2",
+      blockId: "b_2",
+      blockVer: 6,
+      versionCreatedAt: 1,
+      firstSeenRunId: "gc_run_3",
+      lastSeenRunId: "gc_run_4",
+      firstSeenAt: new Date("2026-05-31T00:00:00.000Z"),
+      lastSeenAt: new Date("2026-05-31T00:01:00.000Z"),
+      seenCount: 2,
+      stableSeenCount: 2,
+      state: "eligible",
+      eligibleAfter: new Date("2026-05-31T00:00:30.000Z"),
+      lastSweepAt: null,
+      lastValidationAt: null,
+      reasonCode: "deleted_tombstone_map_entry",
+      reasonDetail: {
+        rootKind: "tombstone",
+        deleted: true,
+        source: "doc_snapshots",
+        action: "compact_map_entry",
+        hardRooted: true,
+        retainedByPolicy: false,
+        ageMs: 1000,
+        ageBucket: "stable",
+        rootSourceCount: 1,
+        distanceFromLatestVer: 0,
+        decisionPath: ["tombstone_root", "old_enough_for_compaction"],
+      },
+      riskLevel: "low",
+      policySnapshot: {},
+      lastBlockers: [],
+      createdAt: new Date("2026-05-31T00:00:00.000Z"),
+      updatedAt: new Date("2026-05-31T00:01:00.000Z"),
+    } as GcCandidatePool;
+    const poolRepo = repository<GcCandidatePool>({
+      find: jest.fn().mockResolvedValue([poolCandidate]),
+      save: jest.fn().mockImplementation(async (value) => value),
+    });
+    const documentRepo = repository<Document>({
+      findOne: jest.fn().mockResolvedValue({
+        docId: "doc_2",
+        workspaceId: "ws_2",
+      }),
+    });
+    const draftRepo = repository<DocDraft>({
+      findOne: jest.fn().mockResolvedValue(null),
+    });
+    const snapshotRepo = repository<DocSnapshot>({
+      find: jest.fn().mockResolvedValue([
+        {
+          snapshotId: "doc_2@snap@9",
+          docId: "doc_2",
+          docVer: 9,
+          kind: "revision",
+          pinned: true,
+          blockVersionMap: { root_2: 1, b_2: 6 },
+        },
+      ]),
+    });
+    const blockVersionRepo = repository<BlockVersion>({
+      findOne: jest.fn().mockResolvedValue({
+        id: 6,
+        docId: "doc_2",
+        blockId: "b_2",
+        ver: 6,
+        payload: { attrs: { deleted: true } },
+      }),
+    });
+    const dataSource = {
+      transaction: jest.fn(),
+    };
+
+    const service = new GcSweepService(
+      runRepo,
+      poolRepo,
+      documentRepo,
+      draftRepo,
+      snapshotRepo,
+      blockVersionRepo,
+      {
+        getBlockVersionPolicy: jest.fn().mockReturnValue({
+          gracePeriodMs: 60_000,
+          tombstoneGracePeriodMs: 60_000,
+          keepLatestPerBlock: 0,
+          promotionDelayMs: 0,
+          stableSeenThreshold: 2,
+          maxCandidatesToStore: 1000,
+          maxSweepBatchSize: 100,
+          poolEntryExpireMs: 604_800_000,
+          rootSources: ["doc_snapshots", "document_drafts"],
+        }),
+      } as unknown as GcPolicyService,
+      dataSource as never,
+    );
+
+    const result = await service.sweepRevisionTombstones(
+      { workspaceId: "ws_2", dryRun: false },
+      "gc_operator",
+    );
+
+    expect(result.summary).toMatchObject({
+      selectedCandidates: 1,
+      processedCandidates: 1,
+      compactedSnapshots: 0,
+      compactedSnapshotEntries: 0,
+      blockedCandidates: 1,
+    });
+    expect(poolRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateKey: "block_version:b_2@6:compact_map_entry",
+        state: "blocked",
+        lastBlockers: ["snapshot_pinned_ref_present"],
       }),
     );
     expect(dataSource.transaction).not.toHaveBeenCalled();

@@ -66,6 +66,13 @@ export class GcController {
     return this.gcSweepService.sweepDraftTombstones(body, this.resolveOperator(request));
   }
 
+  @Post("sweeps/revision-tombstones")
+  @ApiOperation({ summary: "Sweep eligible revision snapshot tombstone map entries" })
+  @ApiResponse({ status: 201, description: "Revision tombstone sweep executed" })
+  sweepRevisionTombstones(@Body() body: CreateBlockVersionGcSweepDto, @Req() request: Request) {
+    return this.gcSweepService.sweepRevisionTombstones(body, this.resolveOperator(request));
+  }
+
   @Get("health")
   @ApiOperation({ summary: "Check block version GC health for a scope" })
   getBlockVersionHealth(@Query() query: QueryGcRunsDto) {
