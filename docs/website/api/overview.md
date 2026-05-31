@@ -70,17 +70,30 @@ Authorization: Bearer <your-access-token>
 | GET  | `/workspaces/:workspaceId`          | 获取工作空间公开信息                                 |
 | GET  | `/workspaces/:workspaceId/settings` | 获取工作空间公开设置                                 |
 
-### 内部 GC Preview 接口
+### 内部 GC 接口
 
-块版本 GC 第一版只提供内部 preview/statistics，不执行删除。
+块版本 GC 现在分成四层：
 
-| 方法 | 路径                                              | 说明                      | 认证           |
-| ---- | ------------------------------------------------- | ------------------------- | -------------- |
-| POST | `/admin/gc/block-versions/runs`                   | 创建块版本 GC preview run | 系统管理员令牌 |
-| GET  | `/admin/gc/block-versions/runs`                   | 查询 preview run 列表     | 系统管理员令牌 |
-| GET  | `/admin/gc/block-versions/runs/:runId`            | 查询单个 preview run      | 系统管理员令牌 |
-| GET  | `/admin/gc/block-versions/runs/:runId/candidates` | 查询已保存的候选明细      | 系统管理员令牌 |
-| GET  | `/admin/gc/block-versions/health`                 | 查询当前 GC 健康状态      | 系统管理员令牌 |
+- `health`
+- `preview run`
+- `candidate pool`
+- `sweep`
+
+| 方法 | 路径                                                  | 说明                                 | 认证           |
+| ---- | ----------------------------------------------------- | ------------------------------------ | -------------- |
+| GET  | `/admin/gc/block-versions/health`                     | 查询当前 GC 健康状态                 | 系统管理员令牌 |
+| POST | `/admin/gc/block-versions/runs`                       | 创建块版本 GC preview run            | 系统管理员令牌 |
+| GET  | `/admin/gc/block-versions/runs`                       | 查询 GC run 列表（含 preview/sweep） | 系统管理员令牌 |
+| GET  | `/admin/gc/block-versions/runs/:runId`                | 查询单个 GC run                      | 系统管理员令牌 |
+| GET  | `/admin/gc/block-versions/runs/:runId/candidates`     | 查询已保存的 run candidate 明细      | 系统管理员令牌 |
+| GET  | `/admin/gc/block-versions/pool`                       | 查询当前 candidate pool              | 系统管理员令牌 |
+| POST | `/admin/gc/block-versions/sweeps/draft-tombstones`    | 执行 draft tombstone sweep           | 系统管理员令牌 |
+| POST | `/admin/gc/block-versions/sweeps/revision-tombstones` | 执行 revision tombstone sweep        | 系统管理员令牌 |
+
+相关文档：
+
+- `docs/2026-05-29-gc-backend-usage-guide.md`
+- `docs/2026-05-31-gc-debug-page-frontend-guide.md`
 
 ### 相关环境变量
 

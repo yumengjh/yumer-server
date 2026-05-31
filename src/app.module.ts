@@ -51,6 +51,7 @@ import { SettingsProfile } from "./entities/settings-profile.entity";
 import { RuntimeConfig } from "./entities/runtime-config.entity";
 import { GcRun } from "./entities/gc-run.entity";
 import { GcRunCandidate } from "./entities/gc-run-candidate.entity";
+import { GcCandidatePool } from "./entities/gc-candidate-pool.entity";
 import { Emoji } from "./entities/emoji.entity";
 import { Reaction } from "./entities/reaction.entity";
 import { Guestbook } from "./entities/guestbook.entity";
@@ -81,6 +82,7 @@ export const databaseEntities = [
   RuntimeConfig,
   GcRun,
   GcRunCandidate,
+  GcCandidatePool,
   Emoji,
   Reaction,
   Guestbook,

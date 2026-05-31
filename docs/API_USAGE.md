@@ -907,19 +907,32 @@ http://localhost:5200/api/docs
 `documents.publishedSnapshotId` 记录对应的快照 ID。匿名公开站点读取始终返回已发布快照，
 不会因为传入 `version` 查询参数而读取草稿或任意历史版本。
 
-## 内部 GC Preview API
+## 内部 GC API
 
-块版本 GC 第一版只提供 preview/statistics，不执行删除。
+块版本 GC 现在包含：
 
-| 方法 | 路径                                              | 说明                      | 认证           |
-| ---- | ------------------------------------------------- | ------------------------- | -------------- |
-| POST | `/admin/gc/block-versions/runs`                   | 创建块版本 GC preview run | 系统管理员令牌 |
-| GET  | `/admin/gc/block-versions/runs`                   | 查询 preview run 列表     | 系统管理员令牌 |
-| GET  | `/admin/gc/block-versions/runs/:runId`            | 查询单个 preview run      | 系统管理员令牌 |
-| GET  | `/admin/gc/block-versions/runs/:runId/candidates` | 查询已保存的候选明细      | 系统管理员令牌 |
-| GET  | `/admin/gc/block-versions/health`                 | 查询当前 GC 健康状态      | 系统管理员令牌 |
+- `health`
+- `preview run`
+- `candidate pool`
+- `sweep`
 
-所有接口必须带 `x-system-admin-token`。可选 `x-operator-id` 会被记录为本次 preview 的触发人。
+| 方法 | 路径                                                  | 说明                                 | 认证           |
+| ---- | ----------------------------------------------------- | ------------------------------------ | -------------- |
+| GET  | `/admin/gc/block-versions/health`                     | 查询当前 GC 健康状态                 | 系统管理员令牌 |
+| POST | `/admin/gc/block-versions/runs`                       | 创建块版本 GC preview run            | 系统管理员令牌 |
+| GET  | `/admin/gc/block-versions/runs`                       | 查询 GC run 列表（含 preview/sweep） | 系统管理员令牌 |
+| GET  | `/admin/gc/block-versions/runs/:runId`                | 查询单个 GC run                      | 系统管理员令牌 |
+| GET  | `/admin/gc/block-versions/runs/:runId/candidates`     | 查询已保存的 run candidate 明细      | 系统管理员令牌 |
+| GET  | `/admin/gc/block-versions/pool`                       | 查询当前 candidate pool              | 系统管理员令牌 |
+| POST | `/admin/gc/block-versions/sweeps/draft-tombstones`    | 执行 draft tombstone sweep           | 系统管理员令牌 |
+| POST | `/admin/gc/block-versions/sweeps/revision-tombstones` | 执行 revision tombstone sweep        | 系统管理员令牌 |
+
+所有接口必须带 `x-system-admin-token`。可选 `x-operator-id` 会被记录为本次 preview / sweep 的触发人。
+
+进一步使用说明见：
+
+- `docs/2026-05-29-gc-backend-usage-guide.md`
+- `docs/2026-05-31-gc-debug-page-frontend-guide.md`
 
 当前块版本 GC root 只来自：
 
