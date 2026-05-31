@@ -27,9 +27,27 @@ import { PaginationDto } from "../../common/dto/pagination.dto";
 import { ActivitiesService } from "../activities/activities.service";
 import { BLOCK_ACTIONS } from "../activities/constants/activity-actions";
 
+type SyncCreateDeleteCompensation = {
+  blockId: string;
+  createdAt: number;
+  deletedAt: number;
+  ageMs: number;
+  createClientBatchId?: string;
+  deleteClientBatchId: string;
+  clientId?: string;
+  syncCreateId?: string;
+};
+
+type BatchDeleteResult = {
+  blockId: string;
+  version?: number;
+  createDeleteCompensation?: SyncCreateDeleteCompensation;
+};
+
 @Injectable()
 export class BlocksService {
   private readonly logger = new Logger(BlocksService.name);
+  private readonly createDeleteCompensationWindowMs = 60_000;
 
   constructor(
     @InjectRepository(Block)
@@ -908,6 +926,7 @@ export class BlocksService {
           serverHead: number;
           clientBaseVersion?: number;
         }>;
+        createDeleteCompensations: SyncCreateDeleteCompensation[];
       }> => {
         const docQuery = manager
           .getRepository(Document)
@@ -931,6 +950,7 @@ export class BlocksService {
             serverHead: docInTx.head,
             successCount: 0,
             needsReload: true,
+            createDeleteCompensations: [],
             conflicts: [
               {
                 code: "BASE_VERSION_MISMATCH",
@@ -951,6 +971,7 @@ export class BlocksService {
           blockId: string;
           version: number;
         }> = [];
+        const createDeleteCompensations: SyncCreateDeleteCompensation[] = [];
 
         for (const operation of batchBlockDto.operations) {
           try {
@@ -1001,11 +1022,16 @@ export class BlocksService {
               const removed = await this.handleBatchDelete(
                 operation,
                 batchBlockDto.docId,
+                acceptedBatchId,
                 userId,
                 now,
                 manager,
                 shouldCreateVersion,
               );
+              const { createDeleteCompensation, ...removedAck } = removed;
+              if (createDeleteCompensation) {
+                createDeleteCompensations.push(createDeleteCompensation);
+              }
               if (!shouldCreateVersion && removed.version) {
                 draftMutations.push({
                   type: "deleted",
@@ -1016,7 +1042,7 @@ export class BlocksService {
               results.push({
                 operation: BatchOperationType.DELETE,
                 success: true,
-                ...removed,
+                ...removedAck,
               });
             } else if (operation.type === BatchOperationType.MOVE) {
               const moved = await this.handleBatchMove(
@@ -1100,6 +1126,7 @@ export class BlocksService {
           successCount,
           needsReload: false,
           conflicts: [],
+          createDeleteCompensations,
         };
       },
     );
@@ -1118,6 +1145,18 @@ export class BlocksService {
     this.logger.log(
       `sync batch: docId=${batchBlockDto.docId}, clientBatchId=${acceptedBatchId}, source=${batchBlockDto.source ?? "unknown"}, operations=${batchBlockDto.operations.length}, serverHead=${txResult.serverHead}`,
     );
+    if (txResult.createDeleteCompensations.length > 0) {
+      const examples = txResult.createDeleteCompensations.slice(0, 5).map((item) => ({
+        blockId: item.blockId,
+        clientId: item.clientId,
+        syncCreateId: item.syncCreateId,
+        createClientBatchId: item.createClientBatchId,
+        ageMs: item.ageMs,
+      }));
+      this.logger.warn(
+        `sync create-delete compensation: docId=${batchBlockDto.docId}, deleteClientBatchId=${acceptedBatchId}, count=${txResult.createDeleteCompensations.length}, windowMs=${this.createDeleteCompensationWindowMs}, examples=${JSON.stringify(examples)}`,
+      );
+    }
 
     const doc = await this.documentRepository.findOne({
       where: { docId: batchBlockDto.docId },
@@ -1333,11 +1372,12 @@ export class BlocksService {
   private async handleBatchDelete(
     operation: BatchDeleteOperation,
     docId: string,
+    clientBatchId: string,
     userId: string,
     now: number,
     manager: EntityManager,
     shouldCreateVersion: boolean,
-  ): Promise<{ blockId: string; version?: number }> {
+  ): Promise<BatchDeleteResult> {
     const block = await manager.findOne(Block, {
       where: { blockId: operation.blockId, docId, isDeleted: false },
     });
@@ -1347,11 +1387,23 @@ export class BlocksService {
     }
 
     if (shouldCreateVersion) {
+      const latestVersion = await manager.findOne(BlockVersion, {
+        where: { docId, blockId: operation.blockId, ver: block.latestVer },
+      });
+      if (!latestVersion) {
+        throw new NotFoundException("Block version not found");
+      }
+      const createDeleteCompensation = this.buildCreateDeleteCompensation(
+        block,
+        latestVersion,
+        clientBatchId,
+        now,
+      );
       block.isDeleted = true;
       block.deletedAt = now;
       block.deletedBy = userId;
       await manager.save(Block, block);
-      return { blockId: operation.blockId };
+      return { blockId: operation.blockId, createDeleteCompensation };
     }
 
     const latestVersion = await manager.findOne(BlockVersion, {
@@ -1361,6 +1413,12 @@ export class BlocksService {
     if (!latestVersion) {
       throw new NotFoundException("Block version not found");
     }
+    const createDeleteCompensation = this.buildCreateDeleteCompensation(
+      block,
+      latestVersion,
+      clientBatchId,
+      now,
+    );
 
     const newVer = block.latestVer + 1;
     const deletedPayload = {
@@ -1397,7 +1455,36 @@ export class BlocksService {
     block.latestBy = userId;
     await manager.save(Block, block);
 
-    return { blockId: operation.blockId, version: newVer };
+    return { blockId: operation.blockId, version: newVer, createDeleteCompensation };
+  }
+
+  private buildCreateDeleteCompensation(
+    block: Block,
+    latestVersion: BlockVersion,
+    deleteClientBatchId: string,
+    deletedAt: number,
+  ): SyncCreateDeleteCompensation | undefined {
+    const createdAt = Number(block.createdAt);
+    if (!Number.isFinite(createdAt)) return undefined;
+
+    const ageMs = deletedAt - createdAt;
+    if (ageMs < 0 || ageMs > this.createDeleteCompensationWindowMs) return undefined;
+
+    const attrs = (latestVersion.payload as { attrs?: Record<string, unknown> } | undefined)?.attrs;
+    if (!attrs?.clientBatchId && !attrs?.clientId && !attrs?.syncCreateId) return undefined;
+
+    return {
+      blockId: block.blockId,
+      createdAt,
+      deletedAt,
+      ageMs,
+      deleteClientBatchId,
+      ...(typeof attrs.clientBatchId === "string"
+        ? { createClientBatchId: attrs.clientBatchId }
+        : {}),
+      ...(typeof attrs.clientId === "string" ? { clientId: attrs.clientId } : {}),
+      ...(typeof attrs.syncCreateId === "string" ? { syncCreateId: attrs.syncCreateId } : {}),
+    };
   }
 
   private async handleBatchMove(

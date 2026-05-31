@@ -1,4 +1,5 @@
 /* cspell:words AUTOSYNC */
+import { Logger } from "@nestjs/common";
 import { BlocksService } from "./blocks.service";
 import { BatchCreateOperation, BatchOperationType, BatchSourceType } from "./dto/batch-block.dto";
 import { CreateBlockDto } from "./dto/create-block.dto";
@@ -536,5 +537,67 @@ describe("BlocksService sync idempotency", () => {
     expect((latest?.payload as { attrs?: Record<string, unknown> })?.attrs?.sortKey).toBe(
       serverSortKey,
     );
+  });
+
+  it("logs recent sync create-delete compensation without changing delete ack shape", async () => {
+    const warnSpy = jest.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
+    const { service } = createBlocksServiceWithInMemoryRepositories();
+
+    const created = await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        clientBatchId: "batch_create_orphan",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.CREATE,
+            clientId: "client_orphan",
+            syncCreateId: "sync-create:client_orphan",
+            data: {
+              docId: "doc_1",
+              type: "paragraph",
+              parentId: "root_1",
+              sortKey: "001500",
+              payload: { type: "paragraph", attrs: { clientId: "client_orphan" } },
+            },
+          } satisfies BatchCreateOperation,
+        ],
+      },
+      "user_1",
+    );
+
+    const blockId = created.results[0].blockId!;
+    const deleted = await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        clientBatchId: "batch_delete_orphan",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.DELETE,
+            blockId,
+          },
+        ],
+      },
+      "user_1",
+    );
+
+    expect(deleted.results[0]).toEqual({
+      operation: BatchOperationType.DELETE,
+      success: true,
+      blockId,
+      version: 2,
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("sync create-delete compensation: docId=doc_1"),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("client_orphan"));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("sync-create:client_orphan"));
+
+    warnSpy.mockRestore();
   });
 });
