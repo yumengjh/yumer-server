@@ -74,8 +74,15 @@ describe("GcStorageMaintenanceService", () => {
       status: "completed",
       supported: true,
       triggeredBy: "admin_2",
+      checkpoint: {
+        attempted: true,
+      },
+      delta: {
+        totalFileBytes: 0,
+      },
     });
     expect(query).toHaveBeenCalledWith("VACUUM");
+    expect(query).toHaveBeenCalledWith("PRAGMA wal_checkpoint(TRUNCATE)");
   });
 
   it("rejects SQLite VACUUM without confirmation", async () => {

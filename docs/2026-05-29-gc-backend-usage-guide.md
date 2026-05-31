@@ -357,6 +357,8 @@ dry-run 请求体：
 
 - SQLite 下执行或预演 `VACUUM`
 - 返回执行前后的数据库文件大小、`page_count`、`freelist_count`、估算空闲字节数
+- WAL 模式下真实执行后会尝试 `PRAGMA wal_checkpoint(TRUNCATE)`，并返回 `checkpoint`
+- 返回 `delta` 和 `unchangedReasons`，用于判断为什么文件大小没有变化
 - Postgres 下直接返回 unsupported，由数据库 autovacuum / DBA 维护
 
 注意：
@@ -365,6 +367,7 @@ dry-run 请求体：
 - `dryRun` 默认等同于 `true`
 - 真实执行必须带 `confirm = VACUUM_SQLITE_DATABASE`
 - `VACUUM` 可能阻塞写入，应只在维护窗口触发
+- 如果执行前 `freelist_count = 0`，文件大小不变化是正常结果
 
 ## 6. 前端最该关注的返回字段
 

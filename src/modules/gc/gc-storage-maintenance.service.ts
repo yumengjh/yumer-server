@@ -24,6 +24,7 @@ type SqliteStorageStats = {
   journalMode: string | null;
   autoVacuum: number | string | null;
   busyTimeoutMs: number | null;
+  totalFileBytes: number;
 };
 
 @Injectable()
@@ -76,8 +77,10 @@ export class GcStorageMaintenanceService {
 
     const startedAt = new Date();
     await this.dataSource.query("VACUUM");
+    const checkpoint = await this.truncateWalIfNeeded(before.journalMode);
     const finishedAt = new Date();
     const after = await this.readSqliteStats();
+    const delta = this.buildDelta(before, after);
 
     return {
       driver,
@@ -91,6 +94,9 @@ export class GcStorageMaintenanceService {
       durationMs: finishedAt.getTime() - startedAt.getTime(),
       before,
       after,
+      delta,
+      checkpoint,
+      unchangedReasons: this.describeUnchangedReasons(before, after, checkpoint),
       warnings,
     };
   }
@@ -111,12 +117,15 @@ export class GcStorageMaintenanceService {
     const autoVacuum = this.normalizePragmaScalar(await this.readAnyPragma("auto_vacuum"));
     const busyTimeoutMs = await this.readNumericPragma("busy_timeout");
     const estimatedFreeBytes = pageSize * freelistCount;
+    const databaseFileBytes = await this.statFileBytes(databasePath);
+    const walFileBytes = await this.statFileBytes(databasePath ? `${databasePath}-wal` : null);
+    const shmFileBytes = await this.statFileBytes(databasePath ? `${databasePath}-shm` : null);
 
     return {
       databasePath,
-      databaseFileBytes: await this.statFileBytes(databasePath),
-      walFileBytes: await this.statFileBytes(databasePath ? `${databasePath}-wal` : null),
-      shmFileBytes: await this.statFileBytes(databasePath ? `${databasePath}-shm` : null),
+      databaseFileBytes,
+      walFileBytes,
+      shmFileBytes,
       pageSize,
       pageCount,
       freelistCount,
@@ -125,7 +134,61 @@ export class GcStorageMaintenanceService {
       journalMode,
       autoVacuum,
       busyTimeoutMs,
+      totalFileBytes: databaseFileBytes + walFileBytes + shmFileBytes,
     };
+  }
+
+  private async truncateWalIfNeeded(journalMode: string | null) {
+    if (journalMode?.toLowerCase() !== "wal") {
+      return {
+        attempted: false,
+        reason: "journal_mode_not_wal",
+      };
+    }
+
+    const rows = (await this.dataSource.query("PRAGMA wal_checkpoint(TRUNCATE)")) as Array<
+      Record<string, unknown>
+    >;
+    const first = rows[0] ?? {};
+
+    return {
+      attempted: true,
+      result: first,
+    };
+  }
+
+  private buildDelta(before: SqliteStorageStats, after: SqliteStorageStats) {
+    return {
+      databaseFileBytes: after.databaseFileBytes - before.databaseFileBytes,
+      walFileBytes: after.walFileBytes - before.walFileBytes,
+      shmFileBytes: after.shmFileBytes - before.shmFileBytes,
+      totalFileBytes: after.totalFileBytes - before.totalFileBytes,
+      pageCount: after.pageCount - before.pageCount,
+      freelistCount: after.freelistCount - before.freelistCount,
+      estimatedFreeBytes: after.estimatedFreeBytes - before.estimatedFreeBytes,
+    };
+  }
+
+  private describeUnchangedReasons(
+    before: SqliteStorageStats,
+    after: SqliteStorageStats,
+    checkpoint: { attempted: boolean; reason?: string },
+  ): string[] {
+    if (before.totalFileBytes !== after.totalFileBytes) {
+      return [];
+    }
+
+    const reasons = ["total_file_bytes_unchanged"];
+
+    if (before.freelistCount === 0) {
+      reasons.push("no_freelist_pages_before_vacuum");
+    }
+
+    if (!checkpoint.attempted) {
+      reasons.push(checkpoint.reason ?? "wal_checkpoint_not_attempted");
+    }
+
+    return reasons;
   }
 
   private resolveSqliteDatabasePath(): string | null {
