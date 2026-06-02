@@ -105,6 +105,7 @@ describe("DocumentsController", () => {
       head: 3,
       publishedHead: 2,
       editorState: {
+        mode: "edit",
         lastEditPosition: {
           blockId: "block_b",
           updatedAt: "2026-05-28T12:00:00.000Z",
@@ -123,6 +124,7 @@ describe("DocumentsController", () => {
     ).resolves.toMatchObject({
       source: "draft",
       editorState: {
+        mode: "edit",
         lastEditPosition: {
           blockId: "block_b",
           updatedAt: "2026-05-28T12:00:00.000Z",
@@ -135,6 +137,7 @@ describe("DocumentsController", () => {
     documentsService.updateEditorState.mockResolvedValue({
       docId: "doc_1",
       editorState: {
+        mode: "view",
         lastEditPosition: {
           blockId: "block_c",
           updatedAt: "2026-05-28T12:30:00.000Z",
@@ -147,6 +150,7 @@ describe("DocumentsController", () => {
         "doc_1",
         {
           editorState: {
+            mode: "view",
             lastEditPosition: {
               blockId: "block_c",
               updatedAt: "2026-05-28T12:30:00.000Z",
@@ -158,6 +162,7 @@ describe("DocumentsController", () => {
     ).resolves.toEqual({
       docId: "doc_1",
       editorState: {
+        mode: "view",
         lastEditPosition: {
           blockId: "block_c",
           updatedAt: "2026-05-28T12:30:00.000Z",

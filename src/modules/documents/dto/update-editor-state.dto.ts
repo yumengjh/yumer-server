@@ -1,6 +1,6 @@
 import { Type } from "class-transformer";
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { IsISO8601, IsOptional, IsString, ValidateNested } from "class-validator";
+import { IsISO8601, IsIn, IsOptional, IsString, ValidateNested } from "class-validator";
 
 export class LastEditPositionDto {
   @ApiPropertyOptional()
@@ -28,6 +28,11 @@ class EditorStatePayloadDto {
   @ValidateNested()
   @Type(() => LastEditPositionDto)
   lastEditPosition?: LastEditPositionDto | null;
+
+  @ApiPropertyOptional({ enum: ["view", "edit"] })
+  @IsOptional()
+  @IsIn(["view", "edit"])
+  mode?: "view" | "edit";
 }
 
 export class UpdateEditorStateDto {

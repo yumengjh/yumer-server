@@ -59,6 +59,9 @@ class LastEditPositionDto {
 class EditorStateDto {
   @ApiProperty({ type: LastEditPositionDto, required: false, nullable: true })
   lastEditPosition?: LastEditPositionDto | null;
+
+  @ApiProperty({ enum: ["view", "edit"], required: false, nullable: true })
+  mode?: "view" | "edit";
 }
 
 export class EditContentResponseDto {

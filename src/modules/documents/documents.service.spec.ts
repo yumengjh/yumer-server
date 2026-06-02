@@ -104,6 +104,7 @@ describe("DocumentsService", () => {
       status: "draft",
       viewCount: 0,
       editorState: {
+        mode: "edit",
         lastEditPosition: {
           blockId: "block_b",
           updatedAt: "2026-05-28T12:00:00.000Z",
@@ -147,6 +148,7 @@ describe("DocumentsService", () => {
     ).resolves.toMatchObject({
       source: "draft",
       editorState: {
+        mode: "edit",
         lastEditPosition: {
           blockId: "block_b",
           updatedAt: "2026-05-28T12:00:00.000Z",
@@ -167,7 +169,9 @@ describe("DocumentsService", () => {
       visibility: "workspace",
       status: "draft",
       viewCount: 0,
-      editorState: null,
+      editorState: {
+        mode: "edit",
+      },
     } as Document;
     jest.mocked(documentRepository.findOne).mockResolvedValue(document);
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
@@ -178,6 +182,7 @@ describe("DocumentsService", () => {
       "doc_1",
       {
         editorState: {
+          mode: "view",
           lastEditPosition: {
             blockId: "block_c",
             previousBlockId: "block_b",
@@ -192,6 +197,7 @@ describe("DocumentsService", () => {
       expect.objectContaining({
         docId: "doc_1",
         editorState: {
+          mode: "view",
           lastEditPosition: {
             blockId: "block_c",
             previousBlockId: "block_b",
@@ -205,10 +211,53 @@ describe("DocumentsService", () => {
     expect(result).toEqual({
       docId: "doc_1",
       editorState: {
+        mode: "view",
         lastEditPosition: {
           blockId: "block_c",
           previousBlockId: "block_b",
           updatedAt: "2026-05-28T12:30:00.000Z",
+        },
+      },
+    });
+  });
+
+  it("defaults missing editor mode to view in head-backed edit content", async () => {
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 3,
+      publishedHead: 2,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+      editorState: {
+        lastEditPosition: {
+          blockId: "block_b",
+          updatedAt: "2026-05-28T12:00:00.000Z",
+        },
+      },
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
+    jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
+    jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue(null);
+    jest.spyOn(service as any, "getContentByDocument").mockResolvedValue({
+      tree: { blockId: "root_1", type: "root", children: [] },
+      pagination: { totalBlocks: 1, returnedBlocks: 1, hasMore: false },
+    });
+
+    await expect(
+      (service as any).getEditContent("doc_1", "user_1", undefined, undefined, undefined),
+    ).resolves.toMatchObject({
+      source: "head",
+      editorState: {
+        mode: "view",
+        lastEditPosition: {
+          blockId: "block_b",
+          updatedAt: "2026-05-28T12:00:00.000Z",
         },
       },
     });

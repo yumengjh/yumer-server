@@ -98,6 +98,15 @@ function toSafeISOString(value: unknown): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+function normalizeDocumentEditorState(
+  editorState: Record<string, unknown> | null | undefined,
+): Record<string, unknown> {
+  return {
+    ...(editorState ?? {}),
+    mode: editorState?.mode === "edit" ? "edit" : "view",
+  };
+}
+
 @Injectable()
 export class DocumentsService {
   private readonly logger = new Logger(DocumentsService.name);
@@ -933,7 +942,7 @@ export class DocumentsService {
       source: "draft" as const,
       head: document.head,
       publishedHead: document.publishedHead,
-      editorState: document.editorState ?? null,
+      editorState: normalizeDocumentEditorState(document.editorState),
       draft: {
           exists: true,
           draftId: draft.draftId,
@@ -970,7 +979,7 @@ export class DocumentsService {
       source: "head" as const,
       head: document.head,
       publishedHead: document.publishedHead,
-      editorState: document.editorState ?? null,
+      editorState: normalizeDocumentEditorState(document.editorState),
       draft: {
         exists: false,
         draftId: null,
@@ -1013,6 +1022,7 @@ export class DocumentsService {
       ...(document.editorState ?? {}),
       ...((updateEditorStateDto?.editorState as Record<string, unknown> | undefined) ?? {}),
     };
+    document.editorState = normalizeDocumentEditorState(document.editorState);
     document.updatedBy = userId;
     await this.documentRepository.save(document);
 
