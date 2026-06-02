@@ -31,3 +31,5 @@ FIX_ERROR.md
 # OpenAPI 导出产物
 openapi/
 docs/website/public/openapi/
+
+graphify-out/

@@ -1,268 +1,212 @@
-# 个人知识库系统 - 后端 API
+# Yumer Server — 个人知识库后端
 
-一个基于 NestJS 构建的现代化知识库管理系统后端，提供工作空间、文档、块等核心功能的 RESTful API。
+基于 NestJS 11 的个人知识库系统后端服务，提供文档、块级编辑、版本控制、垃圾回收等核心能力。
 
-## 📋 项目简介
+## 技术栈
 
-本项目是一个个人知识库系统的后端服务，采用模块化设计，支持多工作空间、文档树结构管理、块级版本控制等核心功能。系统使用 TypeScript 编写，提供类型安全的 API 接口。
+| 层 | 技术 |
+|---|---|
+| 框架 | NestJS 11.x + Express |
+| 语言 | TypeScript 5.x + SWC |
+| 数据库 | PostgreSQL（主）/ SQLite（开发） |
+| ORM | TypeORM 0.3.x |
+| 认证 | Passport.js + JWT（双令牌） |
+| 存储 | Local / S3 / OSS / COS |
+| 文档 | Swagger/OpenAPI + VitePress |
 
-### 核心特性
-
-- ✅ **用户认证** - JWT Token 认证，支持刷新令牌机制
-- ✅ **工作空间管理** - 多工作空间支持，成员权限管理
-- ✅ **文档管理** - 文档树结构，支持父子关系、标签分类
-- ✅ **块级编辑** - 块（Block）作为文档内容的基础单元
-- ✅ **版本控制** - 块版本历史，文档版本管理
-- ✅ **全文搜索** - 基于 PostgreSQL tsvector 的全文搜索
-- ✅ **权限控制** - 细粒度的权限管理（owner、admin、editor、viewer）
-- ✅ **API 文档** - 集成 Swagger/OpenAPI 自动生成 API 文档
-
-## 🚀 技术栈
-
-### 核心框架
-
-- **NestJS 11.x** - 企业级 Node.js 框架
-- **TypeScript 5.x** - 类型安全的 JavaScript
-- **SWC** - 快速编译工具（替代 tsc）
-
-### 数据库
-
-- **PostgreSQL** - 关系型数据库
-- **TypeORM 0.3.x** - ORM 框架
-
-### 认证与安全
-
-- **Passport.js** - 认证中间件
-- **JWT** - JSON Web Token 认证
-- **bcryptjs** - 密码加密
-
-### 工具库
-
-- **class-validator** - DTO 验证
-- **class-transformer** - 数据转换
-- **Swagger/OpenAPI** - API 文档生成
-
-## 📦 项目结构
-
-```
-app/
-├── src/
-│   ├── common/              # 公共模块
-│   │   ├── decorators/      # 装饰器（@CurrentUser 等）
-│   │   ├── guards/          # 守卫（JWT 认证等）
-│   │   ├── interceptors/    # 拦截器（响应格式化）
-│   │   ├── filters/         # 过滤器（异常处理）
-│   │   ├── dto/             # 公共 DTO
-│   │   └── utils/           # 工具类
-│   ├── config/              # 配置模块
-│   ├── entities/            # 数据库实体（14个）
-│   ├── modules/             # 业务模块
-│   │   ├── auth/            # 认证模块
-│   │   ├── workspaces/      # 工作空间模块
-│   │   ├── documents/       # 文档模块
-│   │   └── blocks/          # 块模块
-│   ├── app.module.ts        # 主模块
-│   └── main.ts              # 应用入口
-├── docs/                    # 项目文档
-│   ├── API_DESIGN.md        # API 设计文档
-│   ├── CURRENT_PROGRESS.md  # 当前进度
-│   └── SETUP.md             # 设置文档
-└── package.json
-```
-
-## 🛠️ 快速开始
+## 快速开始
 
 ### 环境要求
 
-- Node.js >= 18.x
-- PostgreSQL >= 15
-- pnpm >= 8.x（推荐）或 npm/yarn
+- Node.js >= 18
+- PostgreSQL >= 15（或 SQLite 用于开发）
+- pnpm >= 8
 
-### 安装依赖
+### 安装
 
 ```bash
 pnpm install
 ```
 
-### 环境配置
+### 配置
 
-创建 `.env` 文件（参考 `.env.example`）：
+```bash
+cp .env.example .env
+# 编辑 .env，至少配置数据库和 JWT 密钥
+```
+
+关键配置项：
 
 ```env
-# 应用配置
-APP_PORT=5200
-APP_API_PREFIX=api/v1
-APP_CORS_ORIGIN=http://localhost:3000
-
-# 数据库配置
+PORT=5200
+DB_TYPE=postgres          # 或 sqlite
 DB_HOST=localhost
 DB_PORT=5432
 DB_USERNAME=postgres
 DB_PASSWORD=your_password
-DB_DATABASE=doc_back
-
-# JWT 配置
-JWT_SECRET=your_jwt_secret_key
+DB_DATABASE=yumer
+JWT_SECRET=your_jwt_secret
 JWT_EXPIRES_IN=7d
-JWT_REFRESH_SECRET=your_refresh_secret_key
-JWT_REFRESH_EXPIRES_IN=30d
+REFRESH_TOKEN_SECRET=your_refresh_secret
+REFRESH_TOKEN_EXPIRES_IN=30d
 ```
 
-### 运行项目
+完整配置参考 `.env.example`（294 行）。
+
+### 运行
 
 ```bash
-# 开发模式（支持热重载）
-pnpm run start:dev
+# 开发模式（热重载）
+pnpm dev
 
-# 生产模式
-pnpm run build
-pnpm run start:prod
+# 生产构建
+pnpm build
+pnpm start:prod
 ```
 
-启动成功后：
+启动后：
 
-- API 服务：http://localhost:5200
-- Swagger 文档：http://localhost:5200/api/docs
+- API: http://localhost:5200/api/v1
+- Swagger: http://localhost:5200/api/v1/docs
 
-## 📚 API 文档
+## 项目结构
 
-### Swagger UI
+```
+src/
+├── common/                    # 公共层
+│   ├── decorators/            # @CurrentUser @AuditLog @Roles @Public
+│   ├── guards/                # JWT 守卫、角色守卫
+│   ├── interceptors/          # 响应格式化
+│   ├── filters/               # 异常过滤
+│   ├── dto/                   # 通用 DTO
+│   ├── errors/                # 错误码
+│   ├── exceptions/            # 业务异常
+│   ├── pipes/                 # 验证管道
+│   └── utils/                 # 工具函数
+├── config/                    # 配置模块
+│   ├── app.config.ts
+│   ├── database.config.ts
+│   ├── jwt.config.ts
+│   └── runtime.config.ts
+├── entities/                  # TypeORM 实体（28 个）
+├── database/migrations/       # 数据库迁移
+├── modules/                   # 业务模块（18 个）
+│   ├── auth/                  # 用户认证
+│   ├── admin-auth/            # 管理员认证（独立 JWT）
+│   ├── workspaces/            # 工作空间管理
+│   ├── documents/             # 文档 CRUD + 版本控制
+│   │   └── services/          # 子服务：导出、快照、草稿、渲染、版本控制
+│   ├── blocks/                # 块级编辑 + 批量同步
+│   ├── gc/                    # 垃圾回收（5 阶段管线）
+│   ├── images/                # 图片上传（Local/S3）
+│   ├── search/                # 全文搜索
+│   ├── tags/                  # 标签管理
+│   ├── comments/              # 评论
+│   ├── favorites/             # 收藏
+│   ├── reactions/             # 表情回应
+│   ├── activities/            # 活动日志
+│   ├── assets/                # 资产管理
+│   ├── guestbook/             # 留言板 + 敏感词过滤
+│   ├── settings/              # 用户/工作空间设置
+│   ├── runtime-config/        # 运行时配置中心
+│   └── security/              # 安全审计日志
+├── app.module.ts              # 根模块
+└── main.ts                    # 启动入口
+```
 
-启动项目后，访问 http://localhost:5200/api/docs 查看完整的 API 文档。
+## 核心架构
 
-### API 前缀
+### 三层版本控制
 
-所有 API 接口使用统一前缀：`/api/v1`
+```
+Document → Block → BlockVersion
+```
 
-### 主要接口
+- **Document**: 文档容器，归属工作空间
+- **Block**: 内容基本单元，使用 fractional indexing 排序
+- **BlockVersion**: 块的不可变版本，支持时间旅行回溯
 
-#### 认证模块
+### 垃圾回收（GC）
 
-- `POST /api/v1/auth/register` - 用户注册
-- `POST /api/v1/auth/login` - 用户登录
-- `POST /api/v1/auth/refresh` - 刷新令牌
-- `POST /api/v1/auth/logout` - 用户登出
-- `GET /api/v1/auth/me` - 获取当前用户信息
+5 阶段管线，清理孤立数据：
 
-#### 工作空间模块
+1. **Phase 0** — 候选池构建（candidate pool 状态机）
+2. **Phase 1** — 草稿墓碑清扫
+3. **Phase 2** — 修订快照清扫
+4. **Phase 3** — 根条目粒度裁剪
+5. **Phase 4** — 块版本物理删除
 
-- `POST /api/v1/workspaces` - 创建工作空间
-- `GET /api/v1/workspaces` - 获取工作空间列表
-- `GET /api/v1/workspaces/:workspaceId` - 获取工作空间详情
-- `PATCH /api/v1/workspaces/:workspaceId` - 更新工作空间
-- `DELETE /api/v1/workspaces/:workspaceId` - 删除工作空间
-- `POST /api/v1/workspaces/:workspaceId/members` - 邀请成员
-- `GET /api/v1/workspaces/:workspaceId/members` - 获取成员列表
-- `PATCH /api/v1/workspaces/:workspaceId/members/:userId` - 更新成员角色
-- `DELETE /api/v1/workspaces/:workspaceId/members/:userId` - 移除成员
+### 文档草稿模型
 
-#### 文档模块
+三层数据模型实现编辑态与发布态分离：
 
-- `POST /api/v1/documents` - 创建文档
-- `GET /api/v1/documents` - 获取文档列表
-- `GET /api/v1/documents/:docId` - 获取文档详情
-- `GET /api/v1/documents/:docId/content` - 获取文档内容
-- `PATCH /api/v1/documents/:docId` - 更新文档
-- `POST /api/v1/documents/:docId/publish` - 发布文档
-- `POST /api/v1/documents/:docId/move` - 移动文档
-- `DELETE /api/v1/documents/:docId` - 删除文档
-- `GET /api/v1/documents/search` - 搜索文档
+- `block_versions` — 块版本数据
+- `doc_snapshots` — 文档快照
+- `document_drafts` — 草稿工作副本
 
-#### 块模块
+### 渲染管线
 
-- `POST /api/v1/blocks` - 创建块
-- `PATCH /api/v1/blocks/:blockId/content` - 更新块内容
-- `POST /api/v1/blocks/:blockId/move` - 移动块
-- `DELETE /api/v1/blocks/:blockId` - 删除块
-- `GET /api/v1/blocks/:blockId/versions` - 获取块版本历史
-- `POST /api/v1/blocks/batch` - 批量操作块
+发布态内容通过统一渲染出口生成 HTML：
 
-## 🔧 开发说明
+- 块级 HTML 懒缓存（`BlockRenderCache`）
+- 渲染版本控制（规则变更时自动失效）
+- 支持 Markdown / HTML Zip / PDF 导出
 
-### 编译配置
+## API 概览
 
-项目使用 **SWC** 进行快速编译，配置文件：`.swcrc`
+所有接口前缀：`/api/v1`
 
-- 编译速度比 tsc 快 10-20 倍
-- 支持 TypeScript 装饰器和元数据
-- 已解决循环依赖问题
+| 模块 | 主要端点 |
+|------|---------|
+| 认证 | `POST /auth/login` `POST /auth/register` `POST /auth/refresh` |
+| 工作空间 | `CRUD /workspaces` + 成员管理 |
+| 文档 | `CRUD /documents` + `GET /documents/:id/content` + 版本操作 |
+| 块 | `POST /blocks/batch` + `PATCH /blocks/:id/content` + 移动/删除 |
+| 搜索 | `GET /search` 全文搜索 |
+| 图片 | `POST /images/upload` + 公开访问 |
+| 设置 | `GET/PUT /settings` 用户与工作空间设置 |
+| GC | 管理端 GC 预览、清扫、存储维护 |
 
-### 代码规范
+完整 API 文档启动后访问 Swagger UI。
+
+## 开发命令
 
 ```bash
-# 代码格式化
-pnpm run format
+pnpm dev                    # 开发模式
+pnpm build                  # 生产构建
+pnpm test                   # 单元测试
+pnpm test:cov               # 测试覆盖率
+pnpm test:e2e               # E2E 测试
+pnpm lint                   # 代码检查
+pnpm format                 # 代码格式化
 
-# 代码检查
-pnpm run lint
+# 数据库迁移
+pnpm typeorm:migration:generate -- -n MigrationName
+pnpm typeorm:migration:run
+pnpm typeorm:migration:revert
+
+# 文档站
+pnpm docs:dev               # 开发预览
+pnpm docs:build             # 构建文档站
+
+# 工具脚本
+pnpm openapi:export         # 导出 OpenAPI spec
+pnpm snapshots:backfill     # 回填文档快照
+pnpm batch-insert-blocks    # 批量插入测试块
 ```
 
-### 数据库迁移
+## 文档
 
-```bash
-# 生成迁移文件
-pnpm run typeorm:migration:generate -- -n MigrationName
+| 文档 | 内容 |
+|------|------|
+| [docs/API_DESIGN.md](docs/API_DESIGN.md) | API 接口设计 |
+| [docs/DOCUMENT_WORKFLOW.md](docs/DOCUMENT_WORKFLOW.md) | 文档工作流 |
+| [docs/VERSION_CONTROL_API.md](docs/VERSION_CONTROL_API.md) | 版本控制 API |
+| [docs/SECURITY.md](docs/SECURITY.md) | 安全设计 |
+| [docs/INSTALL.md](docs/INSTALL.md) | 安装指南 |
+| [docs/website/](docs/website/) | VitePress 文档站源码 |
+| [graphify-out/GRAPH_REPORT.md](graphify-out/GRAPH_REPORT.md) | 知识图谱报告 |
 
-# 运行迁移
-pnpm run typeorm:migration:run
+## 许可证
 
-# 回滚迁移
-pnpm run typeorm:migration:revert
-```
-
-### 测试
-
-```bash
-# 单元测试
-pnpm run test
-
-# 测试覆盖率
-pnpm run test:cov
-
-# E2E 测试
-pnpm run test:e2e
-```
-
-## 📊 项目进度
-
-当前完成度：**50%**
-
-### ✅ 已完成
-
-- 基础架构和配置
-- 认证模块（JWT、刷新令牌）
-- 工作空间模块（CRUD、成员管理）
-- 文档模块（CRUD、搜索、版本控制）
-- 块模块（CRUD、版本控制、批量操作）
-
-### 🚧 进行中
-
-- 版本控制模块（文档修订历史）
-- 资产模块（文件上传）
-
-### 📝 待开发
-
-- 标签模块
-- 收藏模块
-- 评论模块
-- 活动日志模块
-
-详细进度请查看：[CURRENT_PROGRESS.md](./docs/CURRENT_PROGRESS.md)
-
-## 📖 相关文档
-
-- [API 设计文档](./docs/API_DESIGN.md) - 详细的 API 接口设计
-- [当前进度](./docs/CURRENT_PROGRESS.md) - 功能实现进度
-- [设置文档](./docs/SETUP.md) - 环境配置说明
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 📄 许可证
-
-本项目采用 MIT 许可证。
-
----
-
-**注意**：本项目仍在积极开发中，API 可能会有变更。建议在生产环境使用前仔细测试。
+MIT
