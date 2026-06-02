@@ -265,7 +265,12 @@ export class BlocksService {
             };
           }
 
-          const newVer = lockedBlock.latestVer + 1;
+          const newVer = await this.getNextBlockVersionNumber(
+            manager,
+            lockedBlock.docId,
+            blockId,
+            lockedBlock.latestVer,
+          );
           const preservedSortKey =
             latestVersionInfo.sortKey && latestVersionInfo.sortKey.trim() !== ""
               ? latestVersionInfo.sortKey
@@ -684,7 +689,12 @@ export class BlocksService {
       });
 
       // 创建新版本（移动操作会创建新版本）
-      const newVer = block.latestVer + 1;
+      const newVer = await this.getNextBlockVersionNumber(
+        manager,
+        block.docId,
+        blockId,
+        block.latestVer,
+      );
       const blockVersion = manager.create(BlockVersion, {
         versionId: generateVersionId(blockId, newVer),
         docId: block.docId,
@@ -1331,7 +1341,12 @@ export class BlocksService {
       throw new NotFoundException(`Block ${operation.blockId} not found`);
     }
 
-    const newVer = block.latestVer + 1;
+    const newVer = await this.getNextBlockVersionNumber(
+      manager,
+      block.docId,
+      operation.blockId,
+      block.latestVer,
+    );
     const latestVersion = await manager.findOne(BlockVersion, {
       where: { docId, blockId: operation.blockId, ver: block.latestVer },
     });
@@ -1420,7 +1435,12 @@ export class BlocksService {
       now,
     );
 
-    const newVer = block.latestVer + 1;
+    const newVer = await this.getNextBlockVersionNumber(
+      manager,
+      block.docId,
+      operation.blockId,
+      block.latestVer,
+    );
     const deletedPayload = {
       ...(latestVersion.payload as Record<string, unknown>),
       attrs: {
@@ -1456,6 +1476,23 @@ export class BlocksService {
     await manager.save(Block, block);
 
     return { blockId: operation.blockId, version: newVer, createDeleteCompensation };
+  }
+
+  private async getNextBlockVersionNumber(
+    manager: EntityManager,
+    docId: string,
+    blockId: string,
+    currentLatestVer: number,
+  ): Promise<number> {
+    const allVersions = await manager.find(BlockVersion, {
+      where: { docId, blockId },
+      select: ["ver"],
+    });
+    const maxHistoricalVer = allVersions.reduce((max, version) => {
+      const ver = typeof version.ver === "number" ? version.ver : Number(version.ver);
+      return Number.isFinite(ver) && ver > max ? ver : max;
+    }, currentLatestVer);
+    return maxHistoricalVer + 1;
   }
 
   private buildCreateDeleteCompensation(
@@ -1539,7 +1576,12 @@ export class BlocksService {
       excludeBlockId: operation.blockId,
     });
 
-    const newVer = block.latestVer + 1;
+    const newVer = await this.getNextBlockVersionNumber(
+      manager,
+      block.docId,
+      operation.blockId,
+      block.latestVer,
+    );
     const blockVersion = manager.create(BlockVersion, {
       versionId: generateVersionId(operation.blockId, newVer),
       docId: block.docId,

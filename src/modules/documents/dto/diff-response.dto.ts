@@ -1,3 +1,5 @@
+﻿import type { DiffRefKind } from './diff-versions.dto';
+
 export interface BlockSnapshot {
   ver: number;
   type: string;
@@ -25,10 +27,18 @@ export interface DiffSummary {
   unchanged: number;
 }
 
+export interface DiffRefDescriptor {
+  kind: DiffRefKind;
+  label: string;
+  version?: number | null;
+}
+
 export interface DiffResponse {
   docId: string;
-  fromVer: number;
-  toVer: number;
+  fromVer: number | null;
+  toVer: number | null;
+  fromRef: DiffRefDescriptor;
+  toRef: DiffRefDescriptor;
   summary: DiffSummary;
   changes: DiffChangeItem[];
   fromContent: {

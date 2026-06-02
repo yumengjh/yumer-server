@@ -125,6 +125,23 @@ function createDraftAwareBlocksService() {
       }
       return null;
     },
+    find: async (
+      entity: unknown,
+      options: { where?: Record<string, unknown>; select?: string[] },
+    ) => {
+      const where = options.where ?? {};
+      if (entity === BlockVersion) {
+        return versions.filter((item) =>
+          Object.entries(where).every(([key, value]) => item[key as keyof BlockVersion] === value),
+        );
+      }
+      if (entity === Block) {
+        return blocks.filter((item) =>
+          Object.entries(where).every(([key, value]) => item[key as keyof Block] === value),
+        );
+      }
+      return [];
+    },
     getRepository: (entity: unknown) => ({
       createQueryBuilder: () => {
         const params: Record<string, unknown> = {};
@@ -376,5 +393,43 @@ describe("BlocksService draft writes", () => {
     expect(
       (latestVersion?.payload as { attrs?: Record<string, unknown> })?.attrs?.deleted,
     ).toBeUndefined();
+  });
+
+  it("continues from the historical max block version after a revert-style latestVer rewind", async () => {
+    const { service, documentDraftService, versions } = createDraftAwareBlocksService();
+    versions.push({
+      versionId: "block_1_v5",
+      docId: "doc_1",
+      blockId: "block_1",
+      ver: 5,
+      parentId: "root_1",
+      sortKey: "001000",
+      indent: 0,
+      collapsed: false,
+      payload: { type: "paragraph", content: [{ type: "text", text: "future" }] },
+      hash: "future",
+      plainText: "future",
+      refs: [],
+    });
+
+    await service.updateContent(
+      "block_1",
+      {
+        payload: { type: "paragraph", content: [{ type: "text", text: "after revert" }] },
+        createVersion: false,
+      },
+      "user_1",
+    );
+
+    expect(documentDraftService.pointBlockToVersion).toHaveBeenCalledWith(
+      "doc_1",
+      "block_1",
+      6,
+      "user_1",
+      expect.any(Object),
+    );
+
+    const latestVersion = versions.find((item) => item.blockId === "block_1" && item.ver === 6);
+    expect(latestVersion).toBeDefined();
   });
 });

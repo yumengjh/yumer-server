@@ -38,8 +38,11 @@ import type {
 import { MoveDocumentDto } from "./dto/move-document.dto";
 import { QueryDocumentsDto } from "./dto/query-documents.dto";
 import { QueryRevisionsDto } from "./dto/query-revisions.dto";
+import type { RevertDraftStrategy } from "./dto/revert-version.dto";
 import { SearchQueryDto } from "./dto/search-query.dto";
 import { SyncStateResponseDto } from "./dto/sync-state-response.dto";
+import type { DiffRefKind } from "./dto/diff-versions.dto";
+import { DiffVersionsDto } from "./dto/diff-versions.dto";
 import { ActivitiesService } from "../activities/activities.service";
 import { DOC_ACTIONS } from "../activities/constants/activity-actions";
 import { SITE_PUBLIC_ANONYMOUS_USER_ID } from "../../common/decorators/public.decorator";
@@ -52,6 +55,14 @@ type DocumentActorSummary = {
   userId: string;
   displayName: string | null;
   avatar: string | null;
+};
+
+type ResolvedDiffRef = {
+  kind: DiffRefKind;
+  label: string;
+  version: number | null;
+  createdAt: number;
+  map: Record<string, number>;
 };
 
 export type ContentRenderDiagnostics = DocumentRenderDiagnostics & {
@@ -1564,24 +1575,32 @@ export class DocumentsService {
    */
   async getDiff(
     docId: string,
-    fromVer: number,
-    toVer: number,
+    diffQuery: DiffVersionsDto,
     userId: string,
   ): Promise<DiffResponse> {
     const document = await this.findOne(docId, userId);
     await this.checkDocumentEditPermission(document, userId);
 
-    if (fromVer > toVer) {
-      throw new BadRequestException("fromVer 不能大于 toVer");
-    }
-    if (fromVer > document.head || toVer > document.head) {
-      throw new BadRequestException("版本号不能超过当前文档 head");
+    const fromKind = diffQuery.fromKind ?? "revision";
+    const toKind = diffQuery.toKind ?? "revision";
+    if (fromKind === "draft" && toKind === "draft") {
+      throw new BadRequestException("cannot diff draft against draft");
     }
 
     const [fromResult, toResult] = await Promise.all([
-      this.getBlockVersionMapForVersion(docId, fromVer),
-      this.getBlockVersionMapForVersion(docId, toVer),
+      this.resolveDiffRef(docId, document.head, fromKind, diffQuery.fromVer),
+      this.resolveDiffRef(docId, document.head, toKind, diffQuery.toVer),
     ]);
+
+    if (
+      fromResult.kind === "revision" &&
+      toResult.kind === "revision" &&
+      fromResult.version !== null &&
+      toResult.version !== null &&
+      fromResult.version > toResult.version
+    ) {
+      throw new BadRequestException("fromVer cannot be greater than toVer");
+    }
 
     const [fromTree, toTree] = await Promise.all([
       this.buildContentTreeFromVersionMap(
@@ -1608,8 +1627,18 @@ export class DocumentsService {
 
     return {
       docId,
-      fromVer,
-      toVer,
+      fromVer: fromResult.version,
+      toVer: toResult.version,
+      fromRef: {
+        kind: fromResult.kind,
+        label: fromResult.label,
+        version: fromResult.version,
+      },
+      toRef: {
+        kind: toResult.kind,
+        label: toResult.label,
+        version: toResult.version,
+      },
       summary,
       changes,
       fromContent: fromTree,
@@ -1617,10 +1646,49 @@ export class DocumentsService {
     };
   }
 
-  /**
-   * 回滚文档到指定版本
-   */
-  async revert(docId: string, version: number, userId: string) {
+  private async resolveDiffRef(
+    docId: string,
+    head: number,
+    kind: DiffRefKind,
+    version?: number,
+  ): Promise<ResolvedDiffRef> {
+    if (kind === "draft") {
+      const draft = await this.documentDraftService.findByDocId(docId);
+      if (!draft) {
+        throw new NotFoundException("draft not found");
+      }
+      return {
+        kind: "draft",
+        label: "draft",
+        version: null,
+        createdAt: draft.updatedAt ?? Date.now(),
+        map: (draft.blockVersionMap ?? {}) as Record<string, number>,
+      };
+    }
+
+    if (typeof version !== "number") {
+      throw new BadRequestException("revision diff requires version number");
+    }
+    if (version > head) {
+      throw new BadRequestException("version cannot exceed current head");
+    }
+
+    const result = await this.getBlockVersionMapForVersion(docId, version);
+    return {
+      kind: "revision",
+      label: `v${version}`,
+      version,
+      createdAt: result.createdAt,
+      map: result.map,
+    };
+  }
+
+  async revert(
+    docId: string,
+    version: number,
+    userId: string,
+    draftStrategy: RevertDraftStrategy | undefined = "preserve",
+  ) {
     const document = await this.findOne(docId, userId);
     await this.checkDocumentEditPermission(document, userId);
 
@@ -1636,13 +1704,26 @@ export class DocumentsService {
       where: { docId, docVer: version },
     });
     if (!revision) {
-      throw new NotFoundException("修订版本不存在");
+      throw new NotFoundException("保存回退前草稿");
     }
+    const existingDraft = await this.documentDraftService.findByDocId(docId);
+    const effectiveDraftStrategy = existingDraft ? draftStrategy ?? "preserve" : null;
 
     return await this.dataSource.transaction(async (manager) => {
       const docRepo = manager.getRepository(Document);
       const blockRepo = manager.getRepository(Block);
       const revRepo = manager.getRepository(DocRevision);
+
+      if (effectiveDraftStrategy === "preserve") {
+        await this.documentDraftService.commitDraftWithManager(
+          docId,
+          userId,
+          "保存回退前草稿",
+          manager,
+        );
+      } else if (effectiveDraftStrategy === "discard") {
+        await this.documentDraftService.discardDraftWithManager(docId, manager);
+      }
 
       const doc = await docRepo.findOne({ where: { docId } });
       if (!doc) throw new NotFoundException("文档不存在");
@@ -1674,18 +1755,18 @@ export class DocumentsService {
         docVer: doc.head,
         createdAt: Date.now(),
         createdBy: userId,
-        message: `Revert to version ${version}`,
+        message: `回退到 v${version}`,
         branch: "draft",
         patches: [],
         rootBlockId: doc.rootBlockId,
         source: "api",
-        opSummary: { revertedFrom: version },
+        opSummary: { revertedFrom: version, draftStrategy: effectiveDraftStrategy },
       });
       await revRepo.save(newRevision);
       await this.documentSnapshotService.createSnapshotForRevision(docId, doc.head, manager, {
         kind: "revision",
         pinned: false,
-        metadata: { source: "revert", revertedFrom: version },
+        metadata: { source: "revert", revertedFrom: version, draftStrategy: effectiveDraftStrategy },
       });
 
       return this.findOne(docId, userId);
@@ -1693,7 +1774,7 @@ export class DocumentsService {
   }
 
   /**
-   * 创建文档快照（保存当前版本的完整块版本映射）
+   * ??????????????????????
    */
   async createSnapshot(docId: string, userId: string) {
     const document = await this.findOne(docId, userId);
@@ -1709,7 +1790,7 @@ export class DocumentsService {
   }
 
   /**
-   * 手动触发创建文档版本（提交待创建的版本）
+   * ????????????????????
    */
   async commitVersion(docId: string, message: string | undefined, userId: string) {
     const document = await this.findOne(docId, userId);
@@ -1850,23 +1931,25 @@ export class DocumentsService {
     for (const blockId of allBlockIds) {
       const fromVer = fromMap[blockId];
       const toVer = toMap[blockId];
+      const fromBv = fromVer === undefined ? undefined : bvIndex.get(`${blockId}:${fromVer}`);
+      const toBv = toVer === undefined ? undefined : bvIndex.get(`${blockId}:${toVer}`);
+      const fromVisible = Boolean(fromBv) && !this.isDeletedSnapshotVersion(fromBv!);
+      const toVisible = Boolean(toBv) && !this.isDeletedSnapshotVersion(toBv!);
 
-      if (fromVer === undefined) {
+      if (!fromVisible && !toVisible) {
+        continue;
+      }
+
+      if (!fromVisible && toVisible) {
         // 新增块
-        const bv = bvIndex.get(`${blockId}:${toVer}`);
-        if (!bv) continue;
         summary.added++;
-        changes.push({ type: "added", blockId, to: this.extractSnapshot(bv) });
-      } else if (toVer === undefined) {
+        changes.push({ type: "added", blockId, to: this.extractSnapshot(toBv!) });
+      } else if (fromVisible && !toVisible) {
         // 删除块
-        const bv = bvIndex.get(`${blockId}:${fromVer}`);
-        if (!bv) continue;
         summary.deleted++;
-        changes.push({ type: "deleted", blockId, from: this.extractSnapshot(bv) });
+        changes.push({ type: "deleted", blockId, from: this.extractSnapshot(fromBv!) });
       } else {
         // 两边都存在，比较差异
-        const fromBv = bvIndex.get(`${blockId}:${fromVer}`);
-        const toBv = bvIndex.get(`${blockId}:${toVer}`);
         if (!fromBv || !toBv) continue;
 
         const hashChanged = fromBv.hash !== toBv.hash;
@@ -1905,6 +1988,18 @@ export class DocumentsService {
     }
 
     return { changes, summary };
+  }
+
+  private isDeletedSnapshotVersion(bv: Pick<BlockVersion, "payload">): boolean {
+    const payload = bv.payload;
+    if (!payload || typeof payload !== "object" || !("attrs" in payload)) {
+      return false;
+    }
+    const attrs = (payload as { attrs?: unknown }).attrs;
+    if (!attrs || typeof attrs !== "object") {
+      return false;
+    }
+    return (attrs as Record<string, unknown>).deleted === true;
   }
 
   private extractSnapshot(bv: BlockVersion): BlockSnapshot {

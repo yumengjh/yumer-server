@@ -281,7 +281,7 @@ export class DocumentsController {
     @Query() queryDto: DiffVersionsDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.getDiff(docId, queryDto.fromVer, queryDto.toVer, user.userId);
+    return this.documentsService.getDiff(docId, queryDto, user.userId);
   }
 
   @Post(":docId/revert")
@@ -296,7 +296,7 @@ export class DocumentsController {
     @Body() revertDto: RevertVersionDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.revert(docId, revertDto.version, user.userId);
+    return this.documentsService.revert(docId, revertDto.version, user.userId, revertDto.draftStrategy);
   }
 
   @Post(":docId/snapshots")

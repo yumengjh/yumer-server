@@ -1,11 +1,22 @@
-import { IsInt, Min } from 'class-validator';
+import { IsIn, IsInt, IsOptional, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
+export type RevertDraftStrategy = 'preserve' | 'discard';
+
 export class RevertVersionDto {
-  @ApiProperty({ description: '要回滚到的文档版本号', minimum: 1 })
+  @ApiProperty({ description: '??????????', minimum: 1 })
   @Type(() => Number)
   @IsInt()
   @Min(1)
   version: number;
+
+  @ApiProperty({
+    description: '???????????preserve=??????discard=????',
+    enum: ['preserve', 'discard'],
+    required: false,
+  })
+  @IsOptional()
+  @IsIn(['preserve', 'discard'])
+  draftStrategy?: RevertDraftStrategy;
 }

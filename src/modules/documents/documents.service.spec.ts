@@ -35,7 +35,9 @@ describe("DocumentsService", () => {
   const documentDraftService = {
     findByDocId: jest.fn(),
     discardDraft: jest.fn(),
+    discardDraftWithManager: jest.fn(),
     commitDraft: jest.fn(),
+    commitDraftWithManager: jest.fn(),
   } as unknown as DocumentDraftService;
   const blockRepository = {
     findOne: jest.fn(),
@@ -271,6 +273,155 @@ describe("DocumentsService", () => {
       committed: true,
       version: 4,
     });
+  });
+
+  it("preserves draft before revert when requested", async () => {
+    const document = {
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 5,
+      publishedHead: 2,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document;
+    jest.spyOn(service as any, "findOne").mockResolvedValue(document);
+    jest.spyOn(service as any, "checkDocumentEditPermission").mockResolvedValue(undefined);
+    jest.spyOn(service as any, "getBlockVersionMapForVersion").mockResolvedValue({
+      map: { root_1: 1, block_1: 2 },
+      createdAt: 1,
+    });
+    jest.mocked(docRevisionRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      docVer: 2,
+      createdAt: 1,
+    } as DocRevision);
+    jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue({
+      draftId: "doc_1@draft",
+    });
+    jest.mocked((documentDraftService as any).commitDraftWithManager).mockResolvedValue({
+      docId: "doc_1",
+      version: 6,
+      committed: true,
+      draftRemoved: true,
+    });
+
+    const docRepo = {
+      findOne: jest.fn().mockResolvedValue({ ...document, head: 6 }),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    const blockRepo = {
+      find: jest.fn().mockResolvedValue([
+        { blockId: "root_1", latestVer: 1, isDeleted: false },
+        { blockId: "block_1", latestVer: 9, isDeleted: false },
+      ]),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    const revRepo = {
+      create: jest.fn().mockImplementation((value) => value),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    const manager = {
+      getRepository: jest
+        .fn()
+        .mockReturnValueOnce(docRepo)
+        .mockReturnValueOnce(blockRepo)
+        .mockReturnValueOnce(revRepo),
+    };
+    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+    jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
+      snapshotId: "doc_1@snap@7",
+    });
+
+    await service.revert("doc_1", 2, "user_1", "preserve");
+
+    expect(documentDraftService.commitDraftWithManager).toHaveBeenCalledWith(
+      "doc_1",
+      "user_1",
+      "保存回退前草稿",
+      manager,
+    );
+    expect(revRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "回退到 v2",
+        opSummary: expect.objectContaining({ revertedFrom: 2, draftStrategy: "preserve" }),
+      }),
+    );
+  });
+
+  it("discards draft before revert when requested", async () => {
+    const document = {
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 5,
+      publishedHead: 2,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document;
+    jest.spyOn(service as any, "findOne").mockResolvedValue(document);
+    jest.spyOn(service as any, "checkDocumentEditPermission").mockResolvedValue(undefined);
+    jest.spyOn(service as any, "getBlockVersionMapForVersion").mockResolvedValue({
+      map: { root_1: 1, block_1: 2 },
+      createdAt: 1,
+    });
+    jest.mocked(docRevisionRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      docVer: 2,
+      createdAt: 1,
+    } as DocRevision);
+    jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue({
+      draftId: "doc_1@draft",
+    });
+    jest.mocked((documentDraftService as any).discardDraftWithManager).mockResolvedValue({
+      docId: "doc_1",
+      discarded: true,
+      fallbackSource: "head",
+    });
+
+    const docRepo = {
+      findOne: jest.fn().mockResolvedValue({ ...document }),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    const blockRepo = {
+      find: jest.fn().mockResolvedValue([
+        { blockId: "root_1", latestVer: 1, isDeleted: false },
+        { blockId: "block_1", latestVer: 9, isDeleted: false },
+      ]),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    const revRepo = {
+      create: jest.fn().mockImplementation((value) => value),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    const manager = {
+      getRepository: jest
+        .fn()
+        .mockReturnValueOnce(docRepo)
+        .mockReturnValueOnce(blockRepo)
+        .mockReturnValueOnce(revRepo),
+    };
+    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+    jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
+      snapshotId: "doc_1@snap@6",
+    });
+
+    await service.revert("doc_1", 2, "user_1", "discard");
+
+    expect(documentDraftService.discardDraftWithManager).toHaveBeenCalledWith("doc_1", manager);
+    expect(documentDraftService.commitDraftWithManager).not.toHaveBeenCalled();
+    expect(revRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "回退到 v2",
+        opSummary: expect.objectContaining({ revertedFrom: 2, draftStrategy: "discard" }),
+      }),
+    );
   });
 
   it("maps pending-versions to draft existence for compatibility", async () => {
@@ -1267,4 +1418,269 @@ describe("DocumentsService", () => {
     expect(result.content.docVer).toBe(4);
     expect(documentRepository.save).not.toHaveBeenCalled();
   });
+
+  it("supports diffing a saved revision against the current draft", async () => {
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 5,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
+    jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
+    jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue({
+      draftId: "doc_1@draft",
+      updatedAt: 1700000000000,
+      blockVersionMap: { root_1: 1, block_1: 3 },
+    });
+
+    jest.spyOn(service as any, "getBlockVersionMapForVersion").mockResolvedValue({
+      map: { root_1: 1, block_1: 2 },
+      createdAt: 1690000000000,
+    });
+    jest
+      .spyOn(service as any, "buildContentTreeFromVersionMap")
+      .mockResolvedValue({ tree: { blockId: "root_1" }, totalBlocks: 1, returnedBlocks: 1, hasMore: false });
+    jest.spyOn(service as any, "buildDiff").mockResolvedValue({
+      summary: { added: 0, deleted: 0, modified: 1, moved: 0, reordered: 0, indentChanged: 0, unchanged: 1 },
+      changes: [{ type: "modified", blockId: "block_1" }],
+    });
+
+    const result = await service.getDiff(
+      "doc_1",
+      { fromKind: "revision", fromVer: 4, toKind: "draft" },
+      "user_1",
+    );
+
+    expect(result.fromVer).toBe(4);
+    expect(result.toVer).toBeNull();
+    expect(result.fromRef).toEqual({ kind: "revision", label: "v4", version: 4 });
+    expect(result.toRef).toEqual({ kind: "draft", label: "draft", version: null });
+    expect((documentDraftService as any).findByDocId).toHaveBeenCalledWith("doc_1");
+  });
+
+  it("supports diffing the current draft against a saved revision", async () => {
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 5,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
+    jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
+    jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue({
+      draftId: "doc_1@draft",
+      updatedAt: 1700000000000,
+      blockVersionMap: { root_1: 1, block_1: 3 },
+    });
+
+    const getBlockVersionMapForVersion = jest
+      .spyOn(service as any, "getBlockVersionMapForVersion")
+      .mockResolvedValue({ map: { root_1: 1, block_1: 2 }, createdAt: 1690000000000 });
+    jest
+      .spyOn(service as any, "buildContentTreeFromVersionMap")
+      .mockResolvedValue({ tree: { blockId: "root_1" }, totalBlocks: 1, returnedBlocks: 1, hasMore: false });
+    jest.spyOn(service as any, "buildDiff").mockResolvedValue({
+      summary: { added: 0, deleted: 0, modified: 1, moved: 0, reordered: 0, indentChanged: 0, unchanged: 1 },
+      changes: [{ type: "modified", blockId: "block_1" }],
+    });
+
+    const result = await service.getDiff(
+      "doc_1",
+      { fromKind: "draft", toKind: "revision", toVer: 5 },
+      "user_1",
+    );
+
+    expect(result.fromVer).toBeNull();
+    expect(result.toVer).toBe(5);
+    expect(result.fromRef).toEqual({ kind: "draft", label: "draft", version: null });
+    expect(result.toRef).toEqual({ kind: "revision", label: "v5", version: 5 });
+    expect(getBlockVersionMapForVersion).toHaveBeenCalledWith("doc_1", 5);
+  });
+
+  it("rejects draft diff requests when no draft exists", async () => {
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 5,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
+    jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
+    jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue(null);
+
+    await expect(
+      service.getDiff("doc_1", { fromKind: "revision", fromVer: 4, toKind: "draft" }, "user_1"),
+    ).rejects.toThrow("draft not found");
+  });
+
+  it("ignores draft-only tombstone blocks when diffing visible content", async () => {
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 5,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
+    jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
+    jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue({
+      draftId: "doc_1@draft",
+      updatedAt: 1700000000000,
+      blockVersionMap: { root_1: 1, block_a: 2, block_deleted: 9 },
+    });
+
+    jest.spyOn(service as any, "getBlockVersionMapForVersion").mockResolvedValue({
+      map: { root_1: 1, block_a: 2 },
+      createdAt: 1690000000000,
+    });
+    jest
+      .spyOn(service as any, "buildContentTreeFromVersionMap")
+      .mockResolvedValue({ tree: { blockId: "root_1" }, totalBlocks: 2, returnedBlocks: 2, hasMore: false });
+    jest.mocked(blockVersionRepository.find).mockResolvedValue([
+      {
+        blockId: "root_1",
+        ver: 1,
+        parentId: "",
+        sortKey: "0",
+        indent: 0,
+        payload: { type: "root", children: [] },
+        hash: "root",
+      },
+      {
+        blockId: "block_a",
+        ver: 2,
+        parentId: "root_1",
+        sortKey: "001000",
+        indent: 0,
+        payload: { type: "paragraph", attrs: {}, content: [{ type: "text", text: "hello" }] },
+        hash: "same",
+      },
+      {
+        blockId: "block_deleted",
+        ver: 9,
+        parentId: "root_1",
+        sortKey: "002000",
+        indent: 0,
+        payload: { type: "paragraph", attrs: { deleted: true }, content: [{ type: "text", text: "ghost" }] },
+        hash: "deleted",
+      },
+    ] as BlockVersion[]);
+
+    const result = await service.getDiff(
+      "doc_1",
+      { fromKind: "revision", fromVer: 4, toKind: "draft" },
+      "user_1",
+    );
+
+    expect(result.summary).toEqual({
+      added: 0,
+      deleted: 0,
+      modified: 0,
+      moved: 0,
+      reordered: 0,
+      indentChanged: 0,
+      unchanged: 2,
+    });
+    expect(result.changes).toEqual([]);
+  });
+
+  it("treats draft tombstone of an existing block as a deletion", async () => {
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 5,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
+    jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
+    jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue({
+      draftId: "doc_1@draft",
+      updatedAt: 1700000000000,
+      blockVersionMap: { root_1: 1, block_a: 5 },
+    });
+
+    jest.spyOn(service as any, "getBlockVersionMapForVersion").mockResolvedValue({
+      map: { root_1: 1, block_a: 2 },
+      createdAt: 1690000000000,
+    });
+    jest
+      .spyOn(service as any, "buildContentTreeFromVersionMap")
+      .mockResolvedValue({ tree: { blockId: "root_1" }, totalBlocks: 2, returnedBlocks: 2, hasMore: false });
+    jest.mocked(blockVersionRepository.find).mockResolvedValue([
+      {
+        blockId: "root_1",
+        ver: 1,
+        parentId: "",
+        sortKey: "0",
+        indent: 0,
+        payload: { type: "root", children: [] },
+        hash: "root",
+      },
+      {
+        blockId: "block_a",
+        ver: 2,
+        parentId: "root_1",
+        sortKey: "001000",
+        indent: 0,
+        payload: { type: "paragraph", attrs: {}, content: [{ type: "text", text: "hello" }] },
+        hash: "same",
+      },
+      {
+        blockId: "block_a",
+        ver: 5,
+        parentId: "root_1",
+        sortKey: "001000",
+        indent: 0,
+        payload: { type: "paragraph", attrs: { deleted: true }, content: [{ type: "text", text: "hello" }] },
+        hash: "deleted",
+      },
+    ] as BlockVersion[]);
+
+    const result = await service.getDiff(
+      "doc_1",
+      { fromKind: "revision", fromVer: 4, toKind: "draft" },
+      "user_1",
+    );
+
+    expect(result.summary.deleted).toBe(1);
+    expect(result.changes).toEqual([
+      expect.objectContaining({
+        type: "deleted",
+        blockId: "block_a",
+      }),
+    ]);
+  });
+
 });
