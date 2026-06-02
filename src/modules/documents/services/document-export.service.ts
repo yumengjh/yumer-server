@@ -43,7 +43,7 @@ export class DocumentExportService {
     const source = await this.documentsService.getExportSource(docId, userId);
     const title = source.document.title?.trim() || source.document.docId;
     const bodyHtml = this.renderBodyHtml(source.content.tree);
-    const filenameBase = this.buildFilenameBase(title, source.document.head);
+    const filenameBase = this.buildFilenameBase(title);
 
     if (format === "html") {
       return {
@@ -246,9 +246,9 @@ export class DocumentExportService {
     `;
   }
 
-  private buildFilenameBase(title: string, version: number): string {
+  private buildFilenameBase(title: string): string {
     const safeTitle = this.sanitizeFilenamePart(title) || "document";
-    return `${safeTitle}-v${version}`;
+    return safeTitle;
   }
 
   private sanitizeFilenamePart(input: string): string {

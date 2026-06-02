@@ -71,7 +71,7 @@ describe("DocumentExportService", () => {
     const content = artifact.buffer.toString("utf8");
 
     expect(documentsService.getExportSource).toHaveBeenCalledWith("doc_1", "user_1");
-    expect(artifact.filename).toBe("Demo Doc-v2.md");
+    expect(artifact.filename).toBe("Demo Doc.md");
     expect(artifact.contentType).toContain("text/markdown");
     expect(content).toContain("# Demo Doc");
     expect(content).toContain("Hello export");
@@ -86,7 +86,7 @@ describe("DocumentExportService", () => {
     const indexHtml = await zip.file("index.html")!.async("string");
     const styleCss = await zip.file("style.css")!.async("string");
 
-    expect(artifact.filename).toBe("Demo Doc-v2.zip");
+    expect(artifact.filename).toBe("Demo Doc.zip");
     expect(artifact.contentType).toBe("application/zip");
     expect(indexHtml).toContain("<title>Demo Doc</title>");
     expect(indexHtml).toContain("Hello export");
@@ -117,7 +117,7 @@ describe("DocumentExportService", () => {
       }),
     );
     expect(browser.close).toHaveBeenCalled();
-    expect(artifact.filename).toBe("Demo Doc-v2.pdf");
+    expect(artifact.filename).toBe("Demo Doc.pdf");
     expect(artifact.contentType).toBe("application/pdf");
     expect(artifact.buffer.toString("utf8")).toBe("PDF");
   });
