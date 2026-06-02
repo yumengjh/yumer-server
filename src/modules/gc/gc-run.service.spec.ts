@@ -137,7 +137,6 @@ describe("GcRunService", () => {
               versionCreatedAt: 1,
               reasonCode: "unreferenced_older_than_policy",
               reasonDetail: {},
-              riskLevel: "medium",
             },
             {
               resourceKey: "b_1@2",
@@ -149,7 +148,6 @@ describe("GcRunService", () => {
               versionCreatedAt: 2,
               reasonCode: "unreferenced_older_than_policy",
               reasonDetail: {},
-              riskLevel: "medium",
             },
           ],
         }),
@@ -217,7 +215,6 @@ describe("GcRunService", () => {
               distanceFromLatestVer: 4,
               decisionPath: ["unreferenced", "older_than_policy"],
             },
-            riskLevel: "low",
           },
         ],
         1,
@@ -236,15 +233,9 @@ describe("GcRunService", () => {
         rootSources: ["doc_snapshots", "document_drafts"],
       }),
       explainPersistedBlockVersionCandidate: jest.fn().mockReturnValue({
-        plannedAction: "candidate_block_version",
-        requiredChecks: ["verify_root_stability"],
-        readiness: "ready_for_manual_review",
-        riskAssessment: {
-          level: "low",
-          score: 12,
-          reasons: ["version is far beyond the grace window"],
-          factors: [],
-        },
+        decision: "candidate",
+        candidateClass: "unreferenced_block_version",
+        decisionReasons: ["version is far beyond the grace window"],
       }),
     } as unknown as GcPolicyService;
     const service = new GcRunService(
@@ -261,15 +252,9 @@ describe("GcRunService", () => {
     expect(result.items[0]).toMatchObject({
       resourceKey: "b_1@1",
       reasonCode: "unreferenced_older_than_policy",
-      riskLevel: "low",
-      plannedAction: "candidate_block_version",
-      requiredChecks: ["verify_root_stability"],
-      readiness: "ready_for_manual_review",
-      riskAssessment: {
-        level: "low",
-        score: 12,
-        reasons: ["version is far beyond the grace window"],
-      },
+      decision: "candidate",
+      candidateClass: "unreferenced_block_version",
+      decisionReasons: ["version is far beyond the grace window"],
     });
   });
 
@@ -454,16 +439,6 @@ describe("GcRunService", () => {
                 distanceFromLatestVer: 3,
                 decisionPath: ["unreferenced", "older_than_policy"],
               },
-              riskLevel: "low",
-              plannedAction: "candidate_block_version",
-              requiredChecks: ["verify_root_stability"],
-              readiness: "ready_for_manual_review",
-              riskAssessment: {
-                level: "low",
-                score: 12,
-                reasons: ["version is far beyond the grace window"],
-                factors: [],
-              },
             },
           ],
           runCounter: ++runCounter,
@@ -584,16 +559,6 @@ describe("GcRunService", () => {
                 keepLatestPerBlock: 0,
                 decisionPath: ["tombstone_root", "old_enough_for_compaction"],
               },
-              riskLevel: "low",
-              plannedAction: "compact_map_entry",
-              requiredChecks: ["verify_root_stability"],
-              readiness: "ready_for_manual_review",
-              riskAssessment: {
-                level: "low",
-                score: 12,
-                reasons: ["tombstone root is old enough to compact"],
-                factors: [],
-              },
             },
             {
               resourceKey: "b_1@4",
@@ -622,16 +587,6 @@ describe("GcRunService", () => {
                 tombstoneGracePeriodMs: 60_000,
                 keepLatestPerBlock: 0,
                 decisionPath: ["tombstone_root", "old_enough_for_compaction"],
-              },
-              riskLevel: "low",
-              plannedAction: "compact_map_entry",
-              requiredChecks: ["verify_root_stability"],
-              readiness: "ready_for_manual_review",
-              riskAssessment: {
-                level: "low",
-                score: 12,
-                reasons: ["tombstone root is old enough to compact"],
-                factors: [],
               },
             },
           ],

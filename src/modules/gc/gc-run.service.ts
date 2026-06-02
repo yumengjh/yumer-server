@@ -85,7 +85,6 @@ export class GcRunService {
             versionCreatedAt: candidate.versionCreatedAt,
             reasonCode: candidate.reasonCode,
             reasonDetail: candidate.reasonDetail,
-            riskLevel: candidate.riskLevel,
           }),
         );
         if (candidateEntities.length > 0) {
@@ -172,13 +171,9 @@ export class GcRunService {
     });
     const policy = this.normalizePolicySnapshot(run.policySnapshot);
     return {
-      items: items.map((candidate) => ({
-        ...candidate,
-        ...this.gcPolicyService.explainPersistedBlockVersionCandidate(
-          candidate as unknown as BlockVersionGcPersistedCandidate,
-          policy,
-        ),
-      })),
+      items: items.map((candidate) =>
+        this.withDecisionFields(candidate as unknown as BlockVersionGcPersistedCandidate, policy),
+      ),
       total,
       page,
       pageSize,
@@ -217,13 +212,12 @@ export class GcRunService {
     });
 
     return {
-      items: items.map((candidate) => ({
-        ...candidate,
-        ...this.gcPolicyService.explainPersistedBlockVersionCandidate(
+      items: items.map((candidate) =>
+        this.withDecisionFields(
           candidate as unknown as BlockVersionGcPersistedCandidate,
           this.normalizePolicySnapshot(candidate.policySnapshot),
         ),
-      })),
+      ),
       total,
       page,
       pageSize,
@@ -234,6 +228,21 @@ export class GcRunService {
     return {
       workspaceId: input.workspaceId ?? null,
       docId: input.docId ?? null,
+    };
+  }
+
+  private withDecisionFields(
+    candidate: BlockVersionGcPersistedCandidate,
+    policy: BlockVersionGcPolicy,
+  ) {
+    const { riskLevel: _riskLevel, ...plainCandidate } = candidate as BlockVersionGcPersistedCandidate & {
+      riskLevel?: unknown;
+    };
+    void _riskLevel;
+
+    return {
+      ...plainCandidate,
+      ...this.gcPolicyService.explainPersistedBlockVersionCandidate(candidate, policy),
     };
   }
 
@@ -327,7 +336,6 @@ export class GcRunService {
         lastValidationAt: seenAt,
         reasonCode: candidate.reasonCode,
         reasonDetail: candidate.reasonDetail,
-        riskLevel: candidate.riskLevel,
         policySnapshot: policy as unknown as Record<string, unknown>,
         lastBlockers: existing?.lastBlockers ?? [],
       });

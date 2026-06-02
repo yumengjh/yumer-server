@@ -1,18 +1,13 @@
-// cspell:words explainability
 import { Injectable } from "@nestjs/common";
 import type {
   BlockVersionGcCandidateAgeBucket,
-  BlockVersionGcCandidateExplainability,
+  BlockVersionGcCandidateDecision,
   BlockVersionGcCandidateFacts,
   BlockVersionGcPersistedCandidate,
   BlockVersionGcPolicy,
-  BlockVersionGcRiskAssessment,
-  BlockVersionGcRiskFactor,
 } from "./gc.types";
 
 const SECOND = 1000;
-const LOW_RISK_THRESHOLD = 33;
-const MEDIUM_RISK_THRESHOLD = 66;
 
 /**
  * 块版本 GC preview 的集中硬编码策略。
@@ -109,219 +104,75 @@ export class GcPolicyService {
 
   assessBlockVersionCandidate(
     candidate: BlockVersionGcCandidateFacts,
-  ): BlockVersionGcCandidateExplainability {
-    return this.buildExplainability(candidate);
+  ): BlockVersionGcCandidateDecision {
+    return this.buildDecision(candidate);
   }
 
   explainPersistedBlockVersionCandidate(
     candidate: BlockVersionGcPersistedCandidate,
     policy = BLOCK_VERSION_GC_POLICY,
-  ): BlockVersionGcCandidateExplainability {
-    return this.buildExplainability(this.normalizePersistedCandidate(candidate, policy));
+  ): BlockVersionGcCandidateDecision {
+    return this.buildDecision(this.normalizePersistedCandidate(candidate, policy));
   }
 
-  private buildExplainability(
-    candidate: BlockVersionGcCandidateFacts,
-  ): BlockVersionGcCandidateExplainability {
-    const factors: BlockVersionGcRiskFactor[] = [];
+  private buildDecision(candidate: BlockVersionGcCandidateFacts): BlockVersionGcCandidateDecision {
     const reasons: string[] = [];
     const action = candidate.action;
     const isTombstoneCompaction = action === "compact_map_entry";
     const graceWindowMs = isTombstoneCompaction
       ? candidate.tombstoneGracePeriodMs
       : candidate.gracePeriodMs;
-    let score = isTombstoneCompaction ? 24 : 52;
 
     if (isTombstoneCompaction) {
-      this.addFactor(
-        factors,
-        reasons,
-        "metadata_only_action",
-        -8,
-        { action },
-        "candidate only compacts a tombstone map entry",
-      );
-
       if (candidate.ageMs >= graceWindowMs * 24) {
-        this.addFactor(
-          factors,
-          reasons,
-          "tombstone_age_stable",
-          -20,
-          { ageMs: candidate.ageMs, graceWindowMs },
-          "tombstone root is old enough to compact",
-        );
+        reasons.push("tombstone root is old enough to compact");
       } else if (candidate.ageMs >= graceWindowMs * 4) {
-        this.addFactor(
-          factors,
-          reasons,
-          "tombstone_age_old",
-          -10,
-          { ageMs: candidate.ageMs, graceWindowMs },
-          "tombstone root is comfortably past the grace window",
-        );
+        reasons.push("tombstone root is comfortably past the grace window");
       } else {
-        this.addFactor(
-          factors,
-          reasons,
-          "tombstone_age_fresh",
-          24,
-          { ageMs: candidate.ageMs, graceWindowMs },
-          "tombstone root only just crossed the grace window",
-        );
+        reasons.push("tombstone root only just crossed the grace window");
       }
 
       if (candidate.rootSourceCount > 1) {
-        this.addFactor(
-          factors,
-          reasons,
-          "root_source_ambiguity",
-          18,
-          { rootSourceCount: candidate.rootSourceCount },
-          "same tombstone appears from multiple root sources",
-        );
+        reasons.push("same tombstone appears from multiple root sources");
       }
 
       if (candidate.retainedByPolicy) {
-        this.addFactor(
-          factors,
-          reasons,
-          "policy_overlap",
-          14,
-          {
-            retainedByPolicy: candidate.retainedByPolicy,
-            keepLatestPerBlock: candidate.keepLatestPerBlock,
-          },
-          "candidate still overlaps policy retention",
-        );
+        reasons.push("candidate still overlaps policy retention");
       }
 
       if (candidate.distanceFromLatestVer <= candidate.keepLatestPerBlock) {
-        this.addFactor(
-          factors,
-          reasons,
-          "latest_boundary",
-          10,
-          {
-            distanceFromLatestVer: candidate.distanceFromLatestVer,
-            keepLatestPerBlock: candidate.keepLatestPerBlock,
-          },
-          "candidate is close to the latest-version boundary",
-        );
+        reasons.push("candidate is close to the latest-version boundary");
       } else {
-        this.addFactor(
-          factors,
-          reasons,
-          "latest_distance_bonus",
-          -4,
-          {
-            distanceFromLatestVer: candidate.distanceFromLatestVer,
-            keepLatestPerBlock: candidate.keepLatestPerBlock,
-          },
-          "candidate is far enough from the latest-version boundary",
-        );
+        reasons.push("candidate is far enough from the latest-version boundary");
       }
     } else {
-      this.addFactor(
-        factors,
-        reasons,
-        "unreferenced_cleanup_action",
-        -4,
-        { action },
-        "candidate is a regular block-version cleanup target",
-      );
-
       if (candidate.ageMs >= graceWindowMs * 24) {
-        this.addFactor(
-          factors,
-          reasons,
-          "far_beyond_grace",
-          -22,
-          { ageMs: candidate.ageMs, graceWindowMs },
-          "version is far beyond the grace window",
-        );
+        reasons.push("version is far beyond the grace window");
       } else if (candidate.ageMs >= graceWindowMs * 4) {
-        this.addFactor(
-          factors,
-          reasons,
-          "well_beyond_grace",
-          -12,
-          { ageMs: candidate.ageMs, graceWindowMs },
-          "version is comfortably beyond the grace window",
-        );
+        reasons.push("version is comfortably beyond the grace window");
       } else if (candidate.ageMs >= graceWindowMs * 2) {
-        this.addFactor(
-          factors,
-          reasons,
-          "just_beyond_grace",
-          14,
-          { ageMs: candidate.ageMs, graceWindowMs },
-          "version only barely cleared the grace window",
-        );
+        reasons.push("version only barely cleared the grace window");
       } else {
-        this.addFactor(
-          factors,
-          reasons,
-          "near_grace_boundary",
-          28,
-          { ageMs: candidate.ageMs, graceWindowMs },
-          "version is close to the grace window",
-        );
+        reasons.push("version is close to the grace window");
       }
 
       if (candidate.distanceFromLatestVer <= candidate.keepLatestPerBlock) {
-        this.addFactor(
-          factors,
-          reasons,
-          "near_latest_boundary",
-          18,
-          {
-            distanceFromLatestVer: candidate.distanceFromLatestVer,
-            keepLatestPerBlock: candidate.keepLatestPerBlock,
-          },
-          "version is close to the latest retained versions",
-        );
+        reasons.push("version is close to the latest retained versions");
       } else {
-        this.addFactor(
-          factors,
-          reasons,
-          "well_past_latest_boundary",
-          -10,
-          {
-            distanceFromLatestVer: candidate.distanceFromLatestVer,
-            keepLatestPerBlock: candidate.keepLatestPerBlock,
-          },
-          "version is far from the latest retained versions",
-        );
+        reasons.push("version is far from the latest retained versions");
       }
 
       if (candidate.rootKind === "none") {
-        this.addFactor(
-          factors,
-          reasons,
-          "no_active_root",
-          -8,
-          { rootKind: candidate.rootKind },
-          "version is not currently root-referenced",
-        );
+        reasons.push("version is not currently root-referenced");
       }
     }
 
-    score = this.clampScore(score);
-
-    const riskAssessment = this.buildRiskAssessment(score, reasons, factors);
-    const plannedAction = action;
-    const requiredChecks =
-      plannedAction === "compact_map_entry"
-        ? this.buildTombstoneChecks(candidate)
-        : this.buildBlockVersionChecks(candidate);
-
     return {
-      riskAssessment,
-      plannedAction,
-      requiredChecks,
-      readiness:
-        riskAssessment.level === "low" ? "ready_for_manual_review" : "needs_more_validation",
+      decision: "candidate",
+      candidateClass: isTombstoneCompaction
+        ? "deleted_tombstone_map_entry"
+        : "unreferenced_block_version",
+      decisionReasons: reasons,
     };
   }
 
@@ -358,56 +209,6 @@ export class GcPolicyService {
     };
   }
 
-  private buildRiskAssessment(
-    score: number,
-    reasons: string[],
-    factors: BlockVersionGcRiskFactor[],
-  ): BlockVersionGcRiskAssessment {
-    return {
-      level:
-        score <= LOW_RISK_THRESHOLD ? "low" : score <= MEDIUM_RISK_THRESHOLD ? "medium" : "high",
-      score,
-      reasons:
-        reasons.length > 0
-          ? reasons
-          : score <= LOW_RISK_THRESHOLD
-            ? ["candidate is sufficiently stable for manual review"]
-            : ["candidate still needs more validation"],
-      factors,
-    };
-  }
-
-  private buildTombstoneChecks(candidate: BlockVersionGcCandidateFacts): string[] {
-    const checks = ["verify_root_stability"];
-    if (candidate.rootSourceCount > 1) {
-      checks.push("verify_source_consistency");
-    }
-    if (candidate.retainedByPolicy) {
-      checks.push("verify_policy_overlap");
-    }
-    return checks;
-  }
-
-  private buildBlockVersionChecks(candidate: BlockVersionGcCandidateFacts): string[] {
-    const checks = ["verify_root_stability", "verify_no_recent_write_dependency"];
-    if (candidate.ageBucket !== "stable") {
-      checks.push("verify_content_read_paths");
-    }
-    return checks;
-  }
-
-  private addFactor(
-    factors: BlockVersionGcRiskFactor[],
-    reasons: string[],
-    code: string,
-    weight: number,
-    detail: Record<string, unknown>,
-    reason: string,
-  ): void {
-    factors.push({ code, weight, detail });
-    reasons.push(reason);
-  }
-
   private deriveAgeBucket(ageMs: number, graceWindowMs: number): BlockVersionGcCandidateAgeBucket {
     if (ageMs < graceWindowMs * 2) return "fresh";
     if (ageMs < graceWindowMs * 8) return "recent";
@@ -418,9 +219,5 @@ export class GcPolicyService {
     return reasonCode === "deleted_tombstone_map_entry"
       ? ["tombstone_root", "old_enough_for_compaction"]
       : ["unreferenced", "older_than_policy"];
-  }
-
-  private clampScore(score: number): number {
-    return Math.max(0, Math.min(100, score));
   }
 }

@@ -1,5 +1,3 @@
-// cspell:words Explainability
-import type { GcCandidateRiskLevel } from "../../entities/gc-run-candidate.entity";
 import type { GcCandidatePoolState } from "../../entities/gc-candidate-pool.entity";
 import type { GcRunMode, GcRunStatus } from "../../entities/gc-run.entity";
 
@@ -17,26 +15,14 @@ export type BlockVersionGcRootRefType = "snapshot" | "draft";
 
 export type BlockVersionGcCandidateAgeBucket = "fresh" | "recent" | "stable";
 
-export type BlockVersionGcCandidateReadiness = "ready_for_manual_review" | "needs_more_validation";
+export type BlockVersionGcCandidateClass =
+  | "unreferenced_block_version"
+  | "deleted_tombstone_map_entry";
 
-export type BlockVersionGcRiskFactor = {
-  code: string;
-  weight: number;
-  detail: Record<string, unknown>;
-};
-
-export type BlockVersionGcRiskAssessment = {
-  level: GcCandidateRiskLevel;
-  score: number;
-  reasons: string[];
-  factors: BlockVersionGcRiskFactor[];
-};
-
-export type BlockVersionGcCandidateExplainability = {
-  riskAssessment: BlockVersionGcRiskAssessment;
-  plannedAction: BlockVersionGcCandidateAction;
-  requiredChecks: string[];
-  readiness: BlockVersionGcCandidateReadiness;
+export type BlockVersionGcCandidateDecision = {
+  decision: "candidate";
+  candidateClass: BlockVersionGcCandidateClass;
+  decisionReasons: string[];
 };
 
 export type BlockVersionGcCandidateReasonDetail = {
@@ -133,8 +119,7 @@ export type BlockVersionGcCandidate = {
   versionCreatedAt: number;
   reasonCode: BlockVersionGcReasonCode;
   reasonDetail: BlockVersionGcCandidateReasonDetail;
-  riskLevel: GcCandidateRiskLevel;
-} & BlockVersionGcCandidateExplainability;
+} & BlockVersionGcCandidateDecision;
 
 export type BlockVersionGcPersistedCandidate = {
   resourceKey: string;
@@ -146,7 +131,6 @@ export type BlockVersionGcPersistedCandidate = {
   versionCreatedAt: number;
   reasonCode: BlockVersionGcReasonCode;
   reasonDetail: BlockVersionGcCandidateReasonDetail;
-  riskLevel: GcCandidateRiskLevel;
 };
 
 export type GcRunListItem = {

@@ -17,7 +17,7 @@ describe("GcPolicyService", () => {
     });
   });
 
-  it("explains why a tombstone compaction candidate is low risk", () => {
+  it("builds direct decision output without legacy risk/readiness fields", () => {
     const service = new GcPolicyService();
 
     const result = service.assessBlockVersionCandidate({
@@ -39,10 +39,12 @@ describe("GcPolicyService", () => {
       decisionPath: ["tombstone_root", "old_enough_for_compaction"],
     });
 
-    expect(result.riskAssessment.level).toBe("low");
-    expect(result.plannedAction).toBe("compact_map_entry");
-    expect(result.requiredChecks).toContain("verify_root_stability");
-    expect(result.readiness).toBe("ready_for_manual_review");
-    expect(result.riskAssessment.reasons).toContain("tombstone root is old enough to compact");
+    expect(result.decision).toBe("candidate");
+    expect(result.candidateClass).toBe("deleted_tombstone_map_entry");
+    expect(result.decisionReasons).toContain("tombstone root is old enough to compact");
+    expect(result).not.toHaveProperty("riskAssessment");
+    expect(result).not.toHaveProperty("plannedAction");
+    expect(result).not.toHaveProperty("requiredChecks");
+    expect(result).not.toHaveProperty("readiness");
   });
 });

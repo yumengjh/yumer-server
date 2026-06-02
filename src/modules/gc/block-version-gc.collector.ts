@@ -214,7 +214,6 @@ export class BlockVersionGcCollector {
             versionCreatedAt: Number(version.createdAt),
             reasonCode,
             reasonDetail,
-            riskLevel: explainability.riskAssessment.level,
             ...explainability,
           });
         }
@@ -271,7 +270,6 @@ export class BlockVersionGcCollector {
         versionCreatedAt: Number(version.createdAt),
         reasonCode,
         reasonDetail,
-        riskLevel: explainability.riskAssessment.level,
         ...explainability,
       });
     }

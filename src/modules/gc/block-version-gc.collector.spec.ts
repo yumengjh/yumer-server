@@ -203,9 +203,9 @@ describe("BlockVersionGcCollector", () => {
         expect.objectContaining({
           resourceKey: "b_1@4",
           reasonCode: "deleted_tombstone_map_entry",
-          riskLevel: "low",
-          plannedAction: "compact_map_entry",
-          readiness: "ready_for_manual_review",
+          decision: "candidate",
+          candidateClass: "deleted_tombstone_map_entry",
+          decisionReasons: expect.arrayContaining(["tombstone root is old enough to compact"]),
           reasonDetail: expect.objectContaining({
             rootKind: "tombstone",
             deleted: true,
@@ -218,9 +218,9 @@ describe("BlockVersionGcCollector", () => {
         expect.objectContaining({
           resourceKey: "b_1@4",
           reasonCode: "deleted_tombstone_map_entry",
-          riskLevel: "low",
-          plannedAction: "compact_map_entry",
-          readiness: "ready_for_manual_review",
+          decision: "candidate",
+          candidateClass: "deleted_tombstone_map_entry",
+          decisionReasons: expect.arrayContaining(["tombstone root is old enough to compact"]),
           reasonDetail: expect.objectContaining({
             rootKind: "tombstone",
             deleted: true,
@@ -231,12 +231,6 @@ describe("BlockVersionGcCollector", () => {
           }),
         }),
       ]),
-    );
-    expect(result.candidates[0].requiredChecks).toEqual(
-      expect.arrayContaining(["verify_root_stability", "verify_policy_overlap"]),
-    );
-    expect(result.candidates[0].riskAssessment.reasons).toContain(
-      "tombstone root is old enough to compact",
     );
   });
 });
