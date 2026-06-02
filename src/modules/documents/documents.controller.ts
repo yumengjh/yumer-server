@@ -44,6 +44,27 @@ import { AuditLog } from "../../common/decorators/audit-log.decorator";
 import { SitePublic, isSitePublicAnonymousUserId } from "../../common/decorators/public.decorator";
 import { DocumentExportService } from "./services/document-export.service";
 
+function encodeRFC5987Value(input: string): string {
+  return encodeURIComponent(input).replace(/[!'()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+function sanitizeHeaderFilename(input: string): string {
+  const safe = input.replace(/[^\x20-\x7E]|["\\\r\n\t]/g, "_").trim();
+  return safe.length > 0 ? safe : "document";
+}
+
+function buildContentDisposition(filename: string): string {
+  const escapedFilename = filename.replace(/(["\\])/g, "\\$1");
+
+  if (/^[\x20-\x7E]*$/.test(filename) && !/[\r\n\t]/.test(filename)) {
+    return `attachment; filename="${escapedFilename}"`;
+  }
+
+  return `attachment; filename="${sanitizeHeaderFilename(filename)}"; filename*=UTF-8''${encodeRFC5987Value(filename)}`;
+}
+
 @ApiTags("documents")
 @Controller("documents")
 @UseGuards(JwtAuthGuard)
@@ -348,7 +369,7 @@ export class DocumentsController {
     response.setHeader("Content-Type", artifact.contentType);
     response.setHeader(
       "Content-Disposition",
-      `attachment; filename="${artifact.filename.replace(/"/g, '\\"')}"`,
+      buildContentDisposition(artifact.filename),
     );
     response.setHeader("Content-Length", artifact.buffer.length.toString());
 

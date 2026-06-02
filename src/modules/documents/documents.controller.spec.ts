@@ -220,4 +220,25 @@ describe("DocumentsController", () => {
     expect(response.setHeader).toHaveBeenCalledWith("Content-Length", "5");
     expect(result).toBeInstanceOf(StreamableFile);
   });
+
+  it("uses an RFC 5987 filename for exported documents with non-ASCII names", async () => {
+    documentExportService.exportDocument.mockResolvedValue({
+      buffer: Buffer.from("hello"),
+      filename: "中文文档-v2.md",
+      contentType: "text/markdown; charset=utf-8",
+    });
+    const response = { setHeader: jest.fn() };
+
+    await controller.exportDocument(
+      "doc_1",
+      { format: "md" } as any,
+      { userId: "user_1" },
+      response as any,
+    );
+
+    expect(response.setHeader).toHaveBeenCalledWith(
+      "Content-Disposition",
+      "attachment; filename=\"____-v2.md\"; filename*=UTF-8''%E4%B8%AD%E6%96%87%E6%96%87%E6%A1%A3-v2.md",
+    );
+  });
 });
