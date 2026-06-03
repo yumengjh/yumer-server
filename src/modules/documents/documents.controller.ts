@@ -38,6 +38,7 @@ import { EditContentResponseDto } from "./dto/edit-content-response.dto";
 import { UpdateEditorStateDto } from "./dto/update-editor-state.dto";
 import { ExportDocumentDto } from "./dto/export-document.dto";
 import { SyncStateResponseDto } from "./dto/sync-state-response.dto";
+import { PublishVersionDto } from "./dto/publish-version.dto";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import { AuditLog } from "../../common/decorators/audit-log.decorator";
@@ -239,6 +240,30 @@ export class DocumentsController {
   @ApiResponse({ status: 403, description: "Forbidden" })
   async publish(@Param("docId") docId: string, @CurrentUser() user: any) {
     return this.documentsService.publish(docId, user.userId);
+  }
+
+  @Post(":docId/publish-version")
+  @ApiOperation({ summary: "Publish a specific document version" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
+  @ApiResponse({ status: 404, description: "Document not found" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
+  async publishVersion(
+    @Param("docId") docId: string,
+    @Body() publishVersionDto: PublishVersionDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.documentsService.publishVersion(docId, publishVersionDto.version, user.userId);
+  }
+
+  @Post(":docId/unpublish")
+  @ApiOperation({ summary: "Unpublish document" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
+  @ApiResponse({ status: 404, description: "Document not found" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
+  async unpublish(@Param("docId") docId: string, @CurrentUser() user: any) {
+    return this.documentsService.unpublish(docId, user.userId);
   }
 
   @Post(":docId/move")

@@ -5,6 +5,7 @@ export const DOC_ACTIONS = {
   DELETE: 'doc.delete',
   MOVE: 'doc.move',
   PUBLISH: 'doc.publish',
+  UNPUBLISH: 'doc.unpublish',
 } as const;
 
 /** 操作类型：块 */

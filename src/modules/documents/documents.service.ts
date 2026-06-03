@@ -79,6 +79,12 @@ export type PublicDocumentRevalidationResult = {
   error?: string;
 };
 
+type PublishRestoreState = {
+  kind?: string;
+  pinned?: boolean;
+  source?: unknown;
+};
+
 function toSafeISOString(value: unknown): string | null {
   if (value === null || value === undefined) {
     return null;
@@ -549,37 +555,71 @@ export class DocumentsService {
     });
 
     if (!document) {
-      throw new NotFoundException("文档不存在");
+      throw new NotFoundException("Document not found");
     }
 
-    // 已删除的文档不能发布
+    return this.publishVersion(docId, document.head, userId);
+  }
+
+  async publishVersion(docId: string, version: number, userId: string) {
+    const document = await this.documentRepository.findOne({
+      where: { docId },
+    });
+
+    if (!document) {
+      throw new NotFoundException("Document not found");
+    }
+
+    // Deleted documents cannot be published.
     if (document.status === "deleted") {
-      throw new NotFoundException("文档不存在");
+      throw new NotFoundException("Document not found");
     }
 
-    // 检查编辑权限
+    // Check edit permission.
     await this.checkDocumentEditPermission(document, userId);
 
-    // 更新已发布版本号
+    // Update published pointers and snapshot state.
     await this.dataSource.transaction(async (manager) => {
       const docRepo = manager.getRepository(Document);
+      const snapshotRepo = manager.getRepository(DocSnapshot);
       const lockedDocument = await docRepo.findOne({ where: { docId } });
       if (!lockedDocument) {
-        throw new NotFoundException("文档不存在");
+        throw new NotFoundException("Document not found");
       }
 
-      const ensuredSnapshot = await this.documentSnapshotService.createSnapshotForRevision(
-        docId,
-        lockedDocument.head,
-        manager,
-        {
-          kind: "publish",
-          pinned: true,
-          metadata: { source: "publish" },
-        },
-      );
+      let ensuredSnapshot: DocSnapshot;
+      if (lockedDocument.head === version) {
+        ensuredSnapshot = await this.documentSnapshotService.createSnapshotForRevision(
+          docId,
+          lockedDocument.head,
+          manager,
+          {
+            kind: "publish",
+            pinned: true,
+            metadata: { source: "publish" },
+          },
+        );
+        ensuredSnapshot.metadata = this.buildPublishMetadata(ensuredSnapshot);
+        await snapshotRepo.save(ensuredSnapshot);
+      } else {
+        const targetSnapshot = await snapshotRepo.findOne({ where: { docId, docVer: version } });
+        if (!targetSnapshot) {
+          throw new NotFoundException(`Version snapshot ${docId}@${version} not found`);
+        }
+        targetSnapshot.metadata = this.buildPublishMetadata(targetSnapshot);
+        targetSnapshot.kind = "publish";
+        targetSnapshot.pinned = true;
+        ensuredSnapshot = await snapshotRepo.save(targetSnapshot);
+      }
 
-      lockedDocument.publishedHead = lockedDocument.head;
+      if (
+        lockedDocument.publishedSnapshotId &&
+        lockedDocument.publishedSnapshotId !== ensuredSnapshot.snapshotId
+      ) {
+        await this.restorePublishedSnapshotState(snapshotRepo, lockedDocument.publishedSnapshotId);
+      }
+
+      lockedDocument.publishedHead = version;
       lockedDocument.publishedSnapshotId = ensuredSnapshot.snapshotId;
       lockedDocument.updatedBy = userId;
       await docRepo.save(lockedDocument);
@@ -597,6 +637,96 @@ export class DocumentsService {
       document: publishedDocument,
       revalidation,
     };
+  }
+
+  async unpublish(docId: string, userId: string) {
+    const document = await this.documentRepository.findOne({
+      where: { docId },
+    });
+
+    if (!document) {
+      throw new NotFoundException("Document not found");
+    }
+
+    if (document.status === "deleted") {
+      throw new NotFoundException("Document not found");
+    }
+
+    await this.checkDocumentEditPermission(document, userId);
+
+    if (document.publishedHead <= 0 || !document.publishedSnapshotId) {
+      throw new BadRequestException("Document is not currently published");
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      const docRepo = manager.getRepository(Document);
+      const snapshotRepo = manager.getRepository(DocSnapshot);
+      const lockedDocument = await docRepo.findOne({ where: { docId } });
+      if (!lockedDocument) {
+        throw new NotFoundException("Document not found");
+      }
+      if (lockedDocument.publishedHead <= 0 || !lockedDocument.publishedSnapshotId) {
+        throw new BadRequestException("Document is not currently published");
+      }
+
+      await this.restorePublishedSnapshotState(snapshotRepo, lockedDocument.publishedSnapshotId);
+      lockedDocument.publishedHead = 0;
+      lockedDocument.publishedSnapshotId = null;
+      lockedDocument.updatedBy = userId;
+      await docRepo.save(lockedDocument);
+    });
+
+    await this.activitiesService.record(
+      document.workspaceId,
+      DOC_ACTIONS.UNPUBLISH,
+      "document",
+      docId,
+      userId,
+    );
+    const revalidation = await this.revalidatePublicDocumentPath(document);
+    const unpublishedDocument = await this.findOne(docId, userId);
+    return {
+      document: unpublishedDocument,
+      revalidation,
+    };
+  }
+
+  private buildPublishMetadata(snapshot: DocSnapshot): Record<string, unknown> {
+    const metadata = (snapshot.metadata as Record<string, unknown> | null) ?? {};
+    return {
+      ...metadata,
+      source: "publish",
+      publishRestore: {
+        kind: snapshot.kind,
+        pinned: snapshot.pinned,
+        source: metadata.source,
+      },
+    };
+  }
+
+  private async restorePublishedSnapshotState(
+    snapshotRepository: Repository<DocSnapshot>,
+    snapshotId: string,
+  ) {
+    const snapshot = await snapshotRepository.findOne({ where: { snapshotId } });
+    if (!snapshot) {
+      return;
+    }
+
+    const metadata = { ...(((snapshot.metadata as Record<string, unknown> | null) ?? {})) };
+    const restore = (metadata.publishRestore ?? {}) as PublishRestoreState;
+    delete metadata.publishRestore;
+
+    if (restore.source !== undefined) {
+      metadata.source = restore.source;
+    } else if (metadata.source === "publish") {
+      delete metadata.source;
+    }
+
+    snapshot.kind = restore.kind ?? "revision";
+    snapshot.pinned = restore.pinned ?? false;
+    snapshot.metadata = metadata;
+    await snapshotRepository.save(snapshot);
   }
 
   private async revalidatePublicDocumentPath(

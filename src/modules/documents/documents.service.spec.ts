@@ -745,6 +745,186 @@ describe("DocumentsService", () => {
     );
   });
 
+  it("?????????????????????????????? published ???", async () => {
+    const document = {
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      head: 8,
+      publishedHead: 7,
+      publishedSnapshotId: "doc_1@snap@7",
+      visibility: "public",
+      status: "draft",
+      updatedBy: "old_user",
+    } as Document;
+    const previousPublishedSnapshot = {
+      snapshotId: "doc_1@snap@7",
+      docId: "doc_1",
+      docVer: 7,
+      kind: "publish",
+      pinned: true,
+      metadata: {
+        source: "publish",
+        publishRestore: {
+          kind: "revision",
+          pinned: false,
+          source: "revert",
+        },
+      },
+    } as unknown as DocSnapshot;
+    const targetSnapshot = {
+      snapshotId: "doc_1@snap@3",
+      docId: "doc_1",
+      docVer: 3,
+      kind: "revision",
+      pinned: false,
+      metadata: {
+        source: "commit",
+      },
+    } as unknown as DocSnapshot;
+    jest.mocked(documentRepository.findOne).mockResolvedValue(document);
+    (service as any).checkDocumentEditPermission = jest.fn().mockResolvedValue(undefined);
+    (service as any).findOne = jest.fn().mockResolvedValue({
+      ...document,
+      publishedHead: 3,
+      publishedSnapshotId: "doc_1@snap@3",
+    });
+
+    const docRepo = {
+      findOne: jest.fn().mockResolvedValue({ ...document }),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    const snapshotRepo = {
+      findOne: jest.fn().mockImplementation(async ({ where }: any) => {
+        if (where?.snapshotId === "doc_1@snap@7") {
+          return { ...previousPublishedSnapshot };
+        }
+        if (where?.docId === "doc_1" && where?.docVer === 3) {
+          return { ...targetSnapshot };
+        }
+        return null;
+      }),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    const manager = {
+      getRepository: jest.fn((entity: unknown) => {
+        if ((entity as { name?: string })?.name === "Document") return docRepo;
+        if ((entity as { name?: string })?.name === "DocSnapshot") return snapshotRepo;
+        return docRepo;
+      }),
+    };
+    jest
+      .mocked(dataSource.transaction)
+      .mockImplementation(async (callback: any) => callback(manager));
+
+    await (service as any).publishVersion("doc_1", 3, "user_1");
+
+    expect(snapshotRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshotId: "doc_1@snap@7",
+        kind: "revision",
+        pinned: false,
+        metadata: expect.objectContaining({
+          source: "revert",
+        }),
+      }),
+    );
+    expect(snapshotRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshotId: "doc_1@snap@3",
+        kind: "publish",
+        pinned: true,
+        metadata: expect.objectContaining({
+          source: "publish",
+          publishRestore: expect.objectContaining({
+            kind: "revision",
+            pinned: false,
+            source: "commit",
+          }),
+        }),
+      }),
+    );
+    expect(docRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        publishedHead: 3,
+        publishedSnapshotId: "doc_1@snap@3",
+        updatedBy: "user_1",
+      }),
+    );
+  });
+  it("取消发布时会恢复当前发布快照并清空 published 指针", async () => {
+    const document = {
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      head: 8,
+      publishedHead: 5,
+      publishedSnapshotId: "doc_1@snap@5",
+      visibility: "public",
+      status: "draft",
+      updatedBy: "old_user",
+    } as Document;
+    const currentPublishedSnapshot = {
+      snapshotId: "doc_1@snap@5",
+      docId: "doc_1",
+      docVer: 5,
+      kind: "publish",
+      pinned: true,
+      metadata: {
+        source: "publish",
+        publishRestore: {
+          kind: "revision",
+          pinned: false,
+          source: "commit",
+        },
+      },
+    } as unknown as DocSnapshot;
+    jest.mocked(documentRepository.findOne).mockResolvedValue(document);
+    (service as any).checkDocumentEditPermission = jest.fn().mockResolvedValue(undefined);
+    (service as any).findOne = jest.fn().mockResolvedValue({
+      ...document,
+      publishedHead: 0,
+      publishedSnapshotId: null,
+    });
+
+    const docRepo = {
+      findOne: jest.fn().mockResolvedValue({ ...document }),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    const snapshotRepo = {
+      findOne: jest.fn().mockResolvedValue(currentPublishedSnapshot),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    const manager = {
+      getRepository: jest.fn((entity: unknown) => {
+        if ((entity as { name?: string })?.name === "Document") return docRepo;
+        if ((entity as { name?: string })?.name === "DocSnapshot") return snapshotRepo;
+        return docRepo;
+      }),
+    };
+    jest
+      .mocked(dataSource.transaction)
+      .mockImplementation(async (callback: any) => callback(manager));
+
+    await (service as any).unpublish("doc_1", "user_1");
+
+    expect(snapshotRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshotId: "doc_1@snap@5",
+        kind: "revision",
+        pinned: false,
+        metadata: expect.objectContaining({
+          source: "commit",
+        }),
+      }),
+    );
+    expect(docRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        publishedHead: 0,
+        publishedSnapshotId: null,
+        updatedBy: "user_1",
+      }),
+    );
+  });
+
   it("公开文档发布成功后调用前端缓存失效接口", async () => {
     process.env.PUBLIC_SITE_REVALIDATE_URL = "http://frontend.test/api/revalidate-doc";
     process.env.PUBLIC_SITE_REVALIDATE_SECRET = "top-secret";
