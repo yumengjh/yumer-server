@@ -61,6 +61,11 @@ describe("BlockVersionGcCollector", () => {
     expect(result.summary.liveRootedBlockVersions).toBe(2);
     expect(result.summary.tombstoneRootedBlockVersions).toBe(0);
     expect(result.summary.policyRetainedBlockVersions).toBe(1);
+    expect(result.summary.policyRetentionBreakdown).toEqual({
+      withinGracePeriod: 0,
+      activeLatestVersion: 1,
+      keepLatestPerBlock: 1,
+    });
   });
 
   it("returns old unreferenced versions outside the latest-per-block retention as candidates", async () => {
@@ -205,7 +210,7 @@ describe("BlockVersionGcCollector", () => {
           reasonCode: "deleted_tombstone_map_entry",
           decision: "candidate",
           candidateClass: "deleted_tombstone_map_entry",
-          decisionReasons: expect.arrayContaining(["tombstone root is old enough to compact"]),
+          decisionReasons: expect.arrayContaining(["墓碑 root 已经足够老，可以压缩 map 引用"]),
           reasonDetail: expect.objectContaining({
             rootKind: "tombstone",
             deleted: true,
@@ -220,7 +225,7 @@ describe("BlockVersionGcCollector", () => {
           reasonCode: "deleted_tombstone_map_entry",
           decision: "candidate",
           candidateClass: "deleted_tombstone_map_entry",
-          decisionReasons: expect.arrayContaining(["tombstone root is old enough to compact"]),
+          decisionReasons: expect.arrayContaining(["墓碑 root 已经足够老，可以压缩 map 引用"]),
           reasonDetail: expect.objectContaining({
             rootKind: "tombstone",
             deleted: true,
@@ -232,5 +237,56 @@ describe("BlockVersionGcCollector", () => {
         }),
       ]),
     );
+  });
+
+  it("returns unreferenced deleted latest tombstone versions after tombstone compaction removes the root", async () => {
+    const old = Date.now() - 60 * 24 * 60 * 60 * 1000;
+    const collector = new BlockVersionGcCollector(
+      repository<Document>({
+        findOne: jest.fn().mockResolvedValue({ docId: "doc_1", workspaceId: "ws_1" }),
+        find: jest.fn().mockResolvedValue([{ docId: "doc_1", workspaceId: "ws_1" }]),
+      }),
+      repository<Block>({
+        find: jest
+          .fn()
+          .mockResolvedValue([{ blockId: "b_1", docId: "doc_1", latestVer: 4, isDeleted: true }]),
+      }),
+      repository<BlockVersion>({
+        find: jest.fn().mockResolvedValue([
+          {
+            id: 4,
+            docId: "doc_1",
+            blockId: "b_1",
+            ver: 4,
+            createdAt: old,
+            payload: { attrs: { deleted: true } },
+          },
+        ]),
+      }),
+      repository<DocSnapshot>({
+        find: jest.fn().mockResolvedValue([]),
+      }),
+      repository<DocDraft>({
+        find: jest.fn().mockResolvedValue([]),
+      }),
+      new GcPolicyService(),
+    );
+
+    const result = await collector.preview({ docId: "doc_1" }, policy);
+
+    expect(result.candidates).toEqual([
+      expect.objectContaining({
+        resourceKey: "b_1@4",
+        reasonCode: "unreferenced_older_than_policy",
+        candidateClass: "unreferenced_block_version",
+        reasonDetail: expect.objectContaining({
+          rootKind: "none",
+          deleted: true,
+          retainedByPolicy: false,
+        }),
+      }),
+    ]);
+    expect(result.summary.policyRetainedBlockVersions).toBe(0);
+    expect(result.summary.candidateBlockVersions).toBe(1);
   });
 });

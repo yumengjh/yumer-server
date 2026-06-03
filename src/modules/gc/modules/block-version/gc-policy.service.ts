@@ -58,14 +58,22 @@ const BLOCK_VERSION_GC_POLICY: BlockVersionGcPolicy = {
   keepLatestPerBlock: 0,
 
   /**
-   * Candidate first appears in preview before it can be promoted into the executable pool.
+   * 候选项首次出现在 preview 后，还要再等多久，才允许进入可执行池。
+   *
+   * 作用：
+   * - 避免刚出现一次的抖动候选立刻进入 sweep
+   * - 即使命中了候选，也至少要等这个时间过去
    */
   promotionDelayMs: 10 * SECOND,
 
   /**
-   * A candidate must be seen in consecutive preview observations at least this many times.
+   * 同一个 candidate 至少要连续出现多少次 preview，才算“稳定出现”。
+   *
+   * 作用：
+   * - 值越大：越保守，必须多次重复观察到才进入 eligible
+   * - 值越小：越激进，更快进入可执行池
    */
-  stableSeenThreshold: 2,
+  stableSeenThreshold: 1,
 
   /**
    * 单次 preview 最多把多少条 candidate 明细写入 `gc_run_candidates`。
@@ -77,12 +85,18 @@ const BLOCK_VERSION_GC_POLICY: BlockVersionGcPolicy = {
   maxCandidatesToStore: 1000,
 
   /**
-   * Reserved for future sweep batch selection.
+   * sweep 阶段单次最多处理多少条候选。
+   *
+   * 当前主要用于批次上限控制，避免一次 sweep 处理过多。
    */
   maxSweepBatchSize: 1000,
 
   /**
-   * Reserved for future pool pruning.
+   * pool 中候选项的过期时间。
+   *
+   * 当前代码还没有真正用它去清理 pool，但它表达的是：
+   * - 候选项在池里最多允许保留多久
+   * - 后续如果做 pool 清理，会按这个窗口淘汰陈旧项
    */
   poolEntryExpireMs: 7 * 24 * 60 * 60 * SECOND,
 
@@ -125,45 +139,45 @@ export class GcPolicyService {
 
     if (isTombstoneCompaction) {
       if (candidate.ageMs >= graceWindowMs * 24) {
-        reasons.push("tombstone root is old enough to compact");
+        reasons.push("墓碑 root 已经足够老，可以压缩 map 引用");
       } else if (candidate.ageMs >= graceWindowMs * 4) {
-        reasons.push("tombstone root is comfortably past the grace window");
+        reasons.push("墓碑 root 已明显超过压缩宽限期");
       } else {
-        reasons.push("tombstone root only just crossed the grace window");
+        reasons.push("墓碑 root 刚刚超过压缩宽限期");
       }
 
       if (candidate.rootSourceCount > 1) {
-        reasons.push("same tombstone appears from multiple root sources");
+        reasons.push("同一个墓碑版本同时出现在多个 root 引用源中");
       }
 
       if (candidate.retainedByPolicy) {
-        reasons.push("candidate still overlaps policy retention");
+        reasons.push("该候选仍与策略保留窗口重叠");
       }
 
       if (candidate.distanceFromLatestVer <= candidate.keepLatestPerBlock) {
-        reasons.push("candidate is close to the latest-version boundary");
+        reasons.push("该候选距离最新版本边界较近");
       } else {
-        reasons.push("candidate is far enough from the latest-version boundary");
+        reasons.push("该候选距离最新版本边界已经足够远");
       }
     } else {
       if (candidate.ageMs >= graceWindowMs * 24) {
-        reasons.push("version is far beyond the grace window");
+        reasons.push("该版本已经远远超过保留时间窗口");
       } else if (candidate.ageMs >= graceWindowMs * 4) {
-        reasons.push("version is comfortably beyond the grace window");
+        reasons.push("该版本已经明显超过保留时间窗口");
       } else if (candidate.ageMs >= graceWindowMs * 2) {
-        reasons.push("version only barely cleared the grace window");
+        reasons.push("该版本只是刚刚越过保留时间窗口");
       } else {
-        reasons.push("version is close to the grace window");
+        reasons.push("该版本仍然贴近保留时间窗口");
       }
 
       if (candidate.distanceFromLatestVer <= candidate.keepLatestPerBlock) {
-        reasons.push("version is close to the latest retained versions");
+        reasons.push("该版本距离最近保留版本较近");
       } else {
-        reasons.push("version is far from the latest retained versions");
+        reasons.push("该版本距离最近保留版本已经足够远");
       }
 
       if (candidate.rootKind === "none") {
-        reasons.push("version is not currently root-referenced");
+        reasons.push("该版本当前没有被任何 root 引用");
       }
     }
 

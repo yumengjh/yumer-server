@@ -233,7 +233,7 @@ export class GcSweepService {
           continue;
         }
 
-        const result = await this.compactRevisionCandidate(candidate, now);
+        const result = await this.compactRevisionCandidate(candidate, triggeredBy, now);
         summary.processedCandidates += 1;
         summary.compactedSnapshots += result.compactedSnapshots;
         summary.compactedSnapshotEntries += result.compactedEntries;
@@ -597,7 +597,7 @@ export class GcSweepService {
 
     if (!block) {
       blockers.push("block_missing");
-    } else if (block.latestVer === candidate.blockVer) {
+    } else if (block.latestVer === candidate.blockVer && block.isDeleted !== true) {
       blockers.push("block_latest_version");
     }
 
@@ -605,7 +605,10 @@ export class GcSweepService {
       blockers.push("block_version_too_recent");
     }
 
-    if (await this.isRetainedByKeepLatest(candidate, policy, repositories.blockVersionRepository)) {
+    if (
+      block?.isDeleted !== true &&
+      (await this.isRetainedByKeepLatest(candidate, policy, repositories.blockVersionRepository))
+    ) {
       blockers.push("block_version_policy_retained");
     }
 
@@ -674,6 +677,15 @@ export class GcSweepService {
       draft.updatedAt = now.getTime();
       draft.updatedBy = triggeredBy;
       await draftRepository.save(draft);
+      await this.syncBlockDeletionAfterTombstoneCompaction(
+        candidate,
+        triggeredBy,
+        now,
+        manager.getRepository(Block),
+        manager.getRepository(BlockVersion),
+        draftRepository,
+        snapshotRepository,
+      );
 
       await poolRepository.save({
         ...candidate,
@@ -687,10 +699,12 @@ export class GcSweepService {
 
   private async compactRevisionCandidate(
     candidate: GcCandidatePool,
+    triggeredBy: string,
     now: Date,
   ): Promise<{ compactedSnapshots: number; compactedEntries: number }> {
     return this.dataSource.transaction(async (manager) => {
       const snapshotRepository = manager.getRepository(DocSnapshot);
+      const draftRepository = manager.getRepository(DocDraft);
       const poolRepository = manager.getRepository(GcCandidatePool);
       const rootRef = this.readRootRef(candidate);
 
@@ -726,6 +740,15 @@ export class GcSweepService {
       delete nextMap[candidate.blockId];
       snapshot.blockVersionMap = nextMap;
       await snapshotRepository.save(snapshot);
+      await this.syncBlockDeletionAfterTombstoneCompaction(
+        candidate,
+        triggeredBy,
+        now,
+        manager.getRepository(Block),
+        manager.getRepository(BlockVersion),
+        draftRepository,
+        snapshotRepository,
+      );
 
       await poolRepository.save({
         ...candidate,
@@ -786,6 +809,7 @@ export class GcSweepService {
         blockId: candidate.blockId,
         ver: candidate.blockVer,
       });
+      await this.syncBlockAfterDeletingVersion(candidate, blockRepository, blockVersionRepository);
       await poolRepository.save({
         ...candidate,
         state: "swept",
@@ -847,6 +871,95 @@ export class GcSweepService {
     });
 
     return versions.some((version) => version.ver === candidate.blockVer);
+  }
+
+  private async syncBlockAfterDeletingVersion(
+    candidate: GcCandidatePool,
+    blockRepository: Repository<Block>,
+    blockVersionRepository: Repository<BlockVersion>,
+  ): Promise<void> {
+    const block = await blockRepository.findOne({
+      where: { blockId: candidate.blockId, docId: candidate.docId ?? "" },
+    });
+
+    if (!block || block.latestVer !== candidate.blockVer) {
+      return;
+    }
+
+    const nextLatest = await blockVersionRepository.findOne({
+      where: {
+        docId: candidate.docId ?? "",
+        blockId: candidate.blockId,
+      },
+      order: { ver: "DESC" },
+    });
+
+    if (!nextLatest) {
+      await blockRepository.delete({
+        blockId: candidate.blockId,
+        docId: candidate.docId ?? "",
+      });
+      return;
+    }
+
+    block.latestVer = nextLatest.ver;
+    block.latestAt = Number(nextLatest.createdAt);
+    block.latestBy = nextLatest.createdBy;
+    await blockRepository.save(block);
+  }
+
+  private async syncBlockDeletionAfterTombstoneCompaction(
+    candidate: GcCandidatePool,
+    triggeredBy: string,
+    now: Date,
+    blockRepository: Repository<Block>,
+    blockVersionRepository: Repository<BlockVersion>,
+    draftRepository: Repository<DocDraft>,
+    snapshotRepository: Repository<DocSnapshot>,
+  ): Promise<void> {
+    const docId = candidate.docId ?? "";
+    const block = await blockRepository.findOne({
+      where: { blockId: candidate.blockId, docId },
+    });
+
+    if (!block || block.isDeleted === true || block.latestVer !== candidate.blockVer) {
+      return;
+    }
+
+    const latestVersion = await blockVersionRepository.findOne({
+      where: {
+        id: candidate.resourceRowId,
+        docId,
+        blockId: candidate.blockId,
+        ver: candidate.blockVer,
+      },
+    });
+
+    if (!latestVersion || !this.isDeletedTombstone(latestVersion)) {
+      return;
+    }
+
+    const [drafts, snapshots] = await Promise.all([
+      draftRepository.find({ where: { docId } }),
+      snapshotRepository.find({ where: { docId } }),
+    ]);
+
+    const stillRooted =
+      drafts.some((draft) =>
+        this.hasCandidateMapEntry(draft.blockVersionMap, candidate.blockId, candidate.blockVer),
+      ) ||
+      snapshots.some((snapshot) =>
+        this.hasCandidateMapEntry(snapshot.blockVersionMap, candidate.blockId, candidate.blockVer),
+      );
+
+    if (stillRooted) {
+      return;
+    }
+
+    block.isDeleted = true;
+    block.deletedAt = now.getTime();
+    block.deletedBy = triggeredBy;
+    await blockRepository.save(block);
   }
 
   private generateRunId(prefix: string): string {

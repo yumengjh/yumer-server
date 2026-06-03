@@ -253,6 +253,11 @@ export class GcRunService {
       liveRootedBlockVersions: 0,
       tombstoneRootedBlockVersions: 0,
       policyRetainedBlockVersions: 0,
+      policyRetentionBreakdown: {
+        withinGracePeriod: 0,
+        activeLatestVersion: 0,
+        keepLatestPerBlock: 0,
+      },
       softDeletedMapEntries: 0,
       candidateBlockVersions: 0,
       tombstoneCompactionCandidates: 0,

@@ -9,9 +9,9 @@ describe("GcPolicyService", () => {
       tombstoneGracePeriodMs: 10_000,
       keepLatestPerBlock: 0,
       promotionDelayMs: 10_000,
-      stableSeenThreshold: 2,
+      stableSeenThreshold: 1,
       maxCandidatesToStore: 1000,
-      maxSweepBatchSize: 100,
+      maxSweepBatchSize: 1000,
       poolEntryExpireMs: 604_800_000,
       rootSources: ["doc_snapshots", "document_drafts"],
     });
@@ -41,7 +41,7 @@ describe("GcPolicyService", () => {
 
     expect(result.decision).toBe("candidate");
     expect(result.candidateClass).toBe("deleted_tombstone_map_entry");
-    expect(result.decisionReasons).toContain("tombstone root is old enough to compact");
+    expect(result.decisionReasons).toContain("墓碑 root 已经足够老，可以压缩 map 引用");
     expect(result).not.toHaveProperty("riskAssessment");
     expect(result).not.toHaveProperty("plannedAction");
     expect(result).not.toHaveProperty("requiredChecks");

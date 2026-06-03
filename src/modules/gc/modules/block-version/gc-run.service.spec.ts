@@ -120,6 +120,11 @@ describe("GcRunService", () => {
             liveRootedBlockVersions: 0,
             tombstoneRootedBlockVersions: 0,
             policyRetainedBlockVersions: 0,
+            policyRetentionBreakdown: {
+              withinGracePeriod: 0,
+              activeLatestVersion: 0,
+              keepLatestPerBlock: 0,
+            },
             softDeletedMapEntries: 0,
             candidateBlockVersions: 2,
             tombstoneCompactionCandidates: 0,
@@ -235,7 +240,7 @@ describe("GcRunService", () => {
       explainPersistedBlockVersionCandidate: jest.fn().mockReturnValue({
         decision: "candidate",
         candidateClass: "unreferenced_block_version",
-        decisionReasons: ["version is far beyond the grace window"],
+        decisionReasons: ["该版本已经远远超过保留时间窗口"],
       }),
     } as unknown as GcPolicyService;
     const service = new GcRunService(
@@ -254,7 +259,7 @@ describe("GcRunService", () => {
       reasonCode: "unreferenced_older_than_policy",
       decision: "candidate",
       candidateClass: "unreferenced_block_version",
-      decisionReasons: ["version is far beyond the grace window"],
+      decisionReasons: ["该版本已经远远超过保留时间窗口"],
     });
   });
 
@@ -407,6 +412,11 @@ describe("GcRunService", () => {
             liveRootedBlockVersions: 0,
             tombstoneRootedBlockVersions: 0,
             policyRetainedBlockVersions: 0,
+            policyRetentionBreakdown: {
+              withinGracePeriod: 0,
+              activeLatestVersion: 0,
+              keepLatestPerBlock: 0,
+            },
             softDeletedMapEntries: 0,
             candidateBlockVersions: 1,
             tombstoneCompactionCandidates: 0,
@@ -524,6 +534,11 @@ describe("GcRunService", () => {
             liveRootedBlockVersions: 0,
             tombstoneRootedBlockVersions: 1,
             policyRetainedBlockVersions: 0,
+            policyRetentionBreakdown: {
+              withinGracePeriod: 0,
+              activeLatestVersion: 0,
+              keepLatestPerBlock: 0,
+            },
             softDeletedMapEntries: 2,
             candidateBlockVersions: 0,
             tombstoneCompactionCandidates: 2,

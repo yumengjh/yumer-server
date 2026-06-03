@@ -94,6 +94,11 @@ export type BlockVersionGcCollectorSummary = {
   liveRootedBlockVersions: number;
   tombstoneRootedBlockVersions: number;
   policyRetainedBlockVersions: number;
+  policyRetentionBreakdown: {
+    withinGracePeriod: number;
+    activeLatestVersion: number;
+    keepLatestPerBlock: number;
+  };
   softDeletedMapEntries: number;
   candidateBlockVersions: number;
   tombstoneCompactionCandidates: number;

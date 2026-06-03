@@ -63,7 +63,7 @@ export class BlockVersionGcCollector {
       this.blockVersionRepository.find({ where: { docId: In(docIds) } }),
       this.blockRepository.find({
         where: { docId: In(docIds) },
-        select: ["docId", "blockId", "latestVer"],
+        select: ["docId", "blockId", "latestVer", "isDeleted"],
       }),
       this.docSnapshotRepository.find({ where: { docId: In(docIds) } }),
       this.docDraftRepository.find({ where: { docId: In(docIds) } }),
@@ -134,7 +134,8 @@ export class BlockVersionGcCollector {
       }
     }
 
-    const retained = this.calculatePolicyRetained(blockVersions, blocks, policy);
+    const retention = this.calculatePolicyRetained(blockVersions, blocks, policy);
+    const retained = retention.retained;
     const latestVerByBlock = new Map(blocks.map((block) => [block.blockId, block.latestVer]));
     const nowMs = Date.now();
     const candidates: BlockVersionGcCandidate[] = [];
@@ -281,6 +282,7 @@ export class BlockVersionGcCollector {
         liveRootedBlockVersions: liveRoots.size,
         tombstoneRootedBlockVersions: tombstoneRoots.size,
         policyRetainedBlockVersions: retained.size,
+        policyRetentionBreakdown: retention.breakdown,
         softDeletedMapEntries,
         candidateBlockVersions,
         tombstoneCompactionCandidates,
@@ -296,21 +298,39 @@ export class BlockVersionGcCollector {
 
   private calculatePolicyRetained(
     blockVersions: BlockVersion[],
-    blocks: Pick<Block, "blockId" | "latestVer">[],
+    blocks: Pick<Block, "blockId" | "latestVer" | "isDeleted">[],
     policy: BlockVersionGcPolicy,
-  ): Set<string> {
+  ): {
+    retained: Set<string>;
+    breakdown: {
+      withinGracePeriod: number;
+      activeLatestVersion: number;
+      keepLatestPerBlock: number;
+    };
+  } {
     const retained = new Set<string>();
+    const retainedWithinGracePeriod = new Set<string>();
+    const retainedByActiveLatestVersion = new Set<string>();
+    const retainedByKeepLatestPerBlock = new Set<string>();
     const cutoff = Date.now() - policy.gracePeriodMs;
+    const deletedBlockIds = new Set(
+      blocks.filter((block) => block.isDeleted === true).map((block) => block.blockId),
+    );
 
     for (const version of blockVersions) {
       if (Number(version.createdAt) >= cutoff) {
-        retained.add(blockVersionResourceKey(version.blockId, version.ver));
+        const key = blockVersionResourceKey(version.blockId, version.ver);
+        retained.add(key);
+        retainedWithinGracePeriod.add(key);
       }
     }
 
     for (const block of blocks) {
+      if (block.isDeleted === true) continue;
       // `latestVer` 是块级别的单独保留，不走 keepLatestPerBlock 的候选逻辑。
-      retained.add(blockVersionResourceKey(block.blockId, block.latestVer));
+      const key = blockVersionResourceKey(block.blockId, block.latestVer);
+      retained.add(key);
+      retainedByActiveLatestVersion.add(key);
     }
 
     const versionsByBlock = new Map<string, BlockVersion[]>();
@@ -320,14 +340,26 @@ export class BlockVersionGcCollector {
       versionsByBlock.set(version.blockId, list);
     }
 
-    for (const versions of versionsByBlock.values()) {
+    for (const [blockId, versions] of versionsByBlock.entries()) {
+      if (deletedBlockIds.has(blockId)) continue;
       versions
         .sort((a, b) => b.ver - a.ver)
         .slice(0, policy.keepLatestPerBlock)
-        .forEach((version) => retained.add(blockVersionResourceKey(version.blockId, version.ver)));
+        .forEach((version) => {
+          const key = blockVersionResourceKey(version.blockId, version.ver);
+          retained.add(key);
+          retainedByKeepLatestPerBlock.add(key);
+        });
     }
 
-    return retained;
+    return {
+      retained,
+      breakdown: {
+        withinGracePeriod: retainedWithinGracePeriod.size,
+        activeLatestVersion: retainedByActiveLatestVersion.size,
+        keepLatestPerBlock: retainedByKeepLatestPerBlock.size,
+      },
+    };
   }
 
   private async findScopedDocuments(scope: BlockVersionGcScope): Promise<Document[]> {
@@ -353,6 +385,11 @@ export class BlockVersionGcCollector {
         liveRootedBlockVersions: 0,
         tombstoneRootedBlockVersions: 0,
         policyRetainedBlockVersions: 0,
+        policyRetentionBreakdown: {
+          withinGracePeriod: 0,
+          activeLatestVersion: 0,
+          keepLatestPerBlock: 0,
+        },
         softDeletedMapEntries: 0,
         candidateBlockVersions: 0,
         tombstoneCompactionCandidates: 0,
