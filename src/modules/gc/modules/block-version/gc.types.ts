@@ -1,5 +1,5 @@
-import type { GcCandidatePoolState } from "../../entities/gc-candidate-pool.entity";
-import type { GcRunMode, GcRunStatus } from "../../entities/gc-run.entity";
+import type { GcCandidatePoolState } from "../../../../entities/gc-candidate-pool.entity";
+import type { GcRunMode, GcRunStatus } from "../../../../entities/gc-run.entity";
 
 export type BlockVersionGcScope = {
   workspaceId?: string;

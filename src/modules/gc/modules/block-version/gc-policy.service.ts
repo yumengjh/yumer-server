@@ -79,7 +79,7 @@ const BLOCK_VERSION_GC_POLICY: BlockVersionGcPolicy = {
   /**
    * Reserved for future sweep batch selection.
    */
-  maxSweepBatchSize: 100,
+  maxSweepBatchSize: 1000,
 
   /**
    * Reserved for future pool pruning.

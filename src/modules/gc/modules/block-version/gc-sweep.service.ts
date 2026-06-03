@@ -2,13 +2,13 @@
 import { Injectable } from "@nestjs/common";
 import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
 import { DataSource, FindOptionsWhere, Repository } from "typeorm";
-import { Block } from "../../entities/block.entity";
-import { BlockVersion } from "../../entities/block-version.entity";
-import { DocDraft } from "../../entities/doc-draft.entity";
-import { DocSnapshot } from "../../entities/doc-snapshot.entity";
-import { Document } from "../../entities/document.entity";
-import { GcCandidatePool } from "../../entities/gc-candidate-pool.entity";
-import { GcRun } from "../../entities/gc-run.entity";
+import { Block } from "../../../../entities/block.entity";
+import { BlockVersion } from "../../../../entities/block-version.entity";
+import { DocDraft } from "../../../../entities/doc-draft.entity";
+import { DocSnapshot } from "../../../../entities/doc-snapshot.entity";
+import { Document } from "../../../../entities/document.entity";
+import { GcCandidatePool } from "../../../../entities/gc-candidate-pool.entity";
+import { GcRun } from "../../../../entities/gc-run.entity";
 import { GcPolicyService } from "./gc-policy.service";
 
 export type CreateDraftTombstoneSweepInput = {

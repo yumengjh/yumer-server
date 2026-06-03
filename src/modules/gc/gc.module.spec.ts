@@ -11,15 +11,17 @@ import { Document } from "../../entities/document.entity";
 import { GcCandidatePool } from "../../entities/gc-candidate-pool.entity";
 import { GcRunCandidate } from "../../entities/gc-run-candidate.entity";
 import { GcRun } from "../../entities/gc-run.entity";
-import { BlockVersionGcCollector } from "./block-version-gc.collector";
-import { GcStorageController } from "./gc-storage.controller";
-import { GcStorageMaintenanceService } from "./gc-storage-maintenance.service";
-import { GcController } from "./gc.controller";
-import { GcHealthService } from "./gc-health.service";
+import { GcModulesController } from "./gc-modules.controller";
+import { GcRegistryService } from "./gc-registry.service";
 import { GcModule } from "./gc.module";
-import { GcPolicyService } from "./gc-policy.service";
-import { GcRunService } from "./gc-run.service";
-import { GcSweepService } from "./gc-sweep.service";
+import { BlockVersionGcCollector } from "./modules/block-version/block-version-gc.collector";
+import { GcController } from "./modules/block-version/gc.controller";
+import { GcHealthService } from "./modules/block-version/gc-health.service";
+import { GcPolicyService } from "./modules/block-version/gc-policy.service";
+import { GcRunService } from "./modules/block-version/gc-run.service";
+import { GcSweepService } from "./modules/block-version/gc-sweep.service";
+import { GcStorageController } from "./modules/storage/gc-storage.controller";
+import { GcStorageMaintenanceService } from "./modules/storage/gc-storage-maintenance.service";
 
 function createRepositoryMock() {
   return {
@@ -32,7 +34,7 @@ function createRepositoryMock() {
 }
 
 describe("GcModule", () => {
-  it("wires controller and services with repository providers", async () => {
+  it("wires root GC shell and nested submodules with repository providers", async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [ConfigModule.forRoot({ isGlobal: true }), GcModule],
     })
@@ -68,6 +70,8 @@ describe("GcModule", () => {
       .useValue({ canActivate: jest.fn().mockReturnValue(true) })
       .compile();
 
+    expect(moduleRef.get(GcModulesController)).toBeInstanceOf(GcModulesController);
+    expect(moduleRef.get(GcRegistryService)).toBeInstanceOf(GcRegistryService);
     expect(moduleRef.get(GcController)).toBeInstanceOf(GcController);
     expect(moduleRef.get(GcStorageController)).toBeInstanceOf(GcStorageController);
     expect(moduleRef.get(GcPolicyService)).toBeInstanceOf(GcPolicyService);

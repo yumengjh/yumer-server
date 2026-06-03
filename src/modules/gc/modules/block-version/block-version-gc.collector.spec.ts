@@ -1,9 +1,9 @@
 import type { ObjectLiteral, Repository } from "typeorm";
-import { Block } from "../../entities/block.entity";
-import { BlockVersion } from "../../entities/block-version.entity";
-import { DocDraft } from "../../entities/doc-draft.entity";
-import { DocSnapshot } from "../../entities/doc-snapshot.entity";
-import { Document } from "../../entities/document.entity";
+import { Block } from "../../../../entities/block.entity";
+import { BlockVersion } from "../../../../entities/block-version.entity";
+import { DocDraft } from "../../../../entities/doc-draft.entity";
+import { DocSnapshot } from "../../../../entities/doc-snapshot.entity";
+import { Document } from "../../../../entities/document.entity";
 import { BlockVersionGcCollector } from "./block-version-gc.collector";
 import { GcPolicyService } from "./gc-policy.service";
 import type { BlockVersionGcPolicy } from "./gc.types";

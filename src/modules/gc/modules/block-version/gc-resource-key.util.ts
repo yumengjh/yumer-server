@@ -1,4 +1,4 @@
-import { generateVersionId } from "../../common/utils/id-generator.util";
+import { generateVersionId } from "../../../../common/utils/id-generator.util";
 
 export function blockVersionResourceKey(blockId: string, ver: number): string {
   return generateVersionId(blockId, ver);

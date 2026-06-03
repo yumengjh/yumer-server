@@ -2,7 +2,7 @@ import { Body, Controller, Post, Req, UseGuards } from "@nestjs/common";
 import { ApiHeader, ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { SkipThrottle } from "@nestjs/throttler";
 import type { Request } from "express";
-import { SystemAdminTokenGuard } from "../../common/guards/system-admin-token.guard";
+import { SystemAdminTokenGuard } from "../../../../common/guards/system-admin-token.guard";
 import { CreateStorageCompactDto } from "./dto/create-storage-compact.dto";
 import { GcStorageMaintenanceService } from "./gc-storage-maintenance.service";
 

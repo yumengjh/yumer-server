@@ -1,8 +1,8 @@
 // cspell:words explainability
 import type { ObjectLiteral, Repository } from "typeorm";
-import { GcCandidatePool } from "../../entities/gc-candidate-pool.entity";
-import { GcRun } from "../../entities/gc-run.entity";
-import { GcRunCandidate } from "../../entities/gc-run-candidate.entity";
+import { GcCandidatePool } from "../../../../entities/gc-candidate-pool.entity";
+import { GcRun } from "../../../../entities/gc-run.entity";
+import { GcRunCandidate } from "../../../../entities/gc-run-candidate.entity";
 import type { BlockVersionGcCollector } from "./block-version-gc.collector";
 import type { GcHealthService } from "./gc-health.service";
 import type { GcPolicyService } from "./gc-policy.service";

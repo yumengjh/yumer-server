@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from "@nest
 import { ApiHeader, ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { SkipThrottle } from "@nestjs/throttler";
 import type { Request } from "express";
-import { SystemAdminTokenGuard } from "../../common/guards/system-admin-token.guard";
+import { SystemAdminTokenGuard } from "../../../../common/guards/system-admin-token.guard";
 import { CreateBlockVersionGcSweepDto } from "./dto/create-block-version-gc-sweep.dto";
 import { CreateBlockVersionGcRunDto } from "./dto/create-block-version-gc-run.dto";
 import { QueryGcCandidatesDto } from "./dto/query-gc-candidates.dto";

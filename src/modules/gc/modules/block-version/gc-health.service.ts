@@ -1,11 +1,11 @@
 import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, Repository } from "typeorm";
-import { BlockVersion } from "../../entities/block-version.entity";
-import { DocDraft } from "../../entities/doc-draft.entity";
-import { DocRevision } from "../../entities/doc-revision.entity";
-import { DocSnapshot } from "../../entities/doc-snapshot.entity";
-import { Document } from "../../entities/document.entity";
+import { BlockVersion } from "../../../../entities/block-version.entity";
+import { DocDraft } from "../../../../entities/doc-draft.entity";
+import { DocRevision } from "../../../../entities/doc-revision.entity";
+import { DocSnapshot } from "../../../../entities/doc-snapshot.entity";
+import { Document } from "../../../../entities/document.entity";
 import { snapshotMapToResourceKeys } from "./gc-resource-key.util";
 import type { BlockVersionGcHealth, BlockVersionGcScope } from "./gc.types";
 

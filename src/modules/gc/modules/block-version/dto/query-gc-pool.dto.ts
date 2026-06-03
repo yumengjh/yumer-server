@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { IsIn, IsOptional, IsString } from "class-validator";
-import { PaginationDto } from "../../../common/dto/pagination.dto";
+import { PaginationDto } from "../../../../../common/dto/pagination.dto";
 
 export class QueryGcPoolDto extends PaginationDto {
   @ApiPropertyOptional({

@@ -1,47 +1,14 @@
 import { Module } from "@nestjs/common";
-import { TypeOrmModule } from "@nestjs/typeorm";
 import { SystemAdminTokenGuard } from "../../common/guards/system-admin-token.guard";
-import { Block } from "../../entities/block.entity";
-import { BlockVersion } from "../../entities/block-version.entity";
-import { DocDraft } from "../../entities/doc-draft.entity";
-import { DocRevision } from "../../entities/doc-revision.entity";
-import { DocSnapshot } from "../../entities/doc-snapshot.entity";
-import { Document } from "../../entities/document.entity";
-import { GcCandidatePool } from "../../entities/gc-candidate-pool.entity";
-import { GcRun } from "../../entities/gc-run.entity";
-import { GcRunCandidate } from "../../entities/gc-run-candidate.entity";
-import { BlockVersionGcCollector } from "./block-version-gc.collector";
-import { GcStorageController } from "./gc-storage.controller";
-import { GcStorageMaintenanceService } from "./gc-storage-maintenance.service";
-import { GcController } from "./gc.controller";
-import { GcHealthService } from "./gc-health.service";
-import { GcPolicyService } from "./gc-policy.service";
-import { GcRunService } from "./gc-run.service";
-import { GcSweepService } from "./gc-sweep.service";
+import { GcModulesController } from "./gc-modules.controller";
+import { GcRegistryService } from "./gc-registry.service";
+import { BlockVersionGcModule } from "./modules/block-version/block-version-gc.module";
+import { GcStorageModule } from "./modules/storage/gc-storage.module";
 
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([
-      Block,
-      BlockVersion,
-      Document,
-      DocRevision,
-      DocSnapshot,
-      DocDraft,
-      GcRun,
-      GcRunCandidate,
-      GcCandidatePool,
-    ]),
-  ],
-  controllers: [GcController, GcStorageController],
-  providers: [
-    SystemAdminTokenGuard,
-    GcPolicyService,
-    GcHealthService,
-    BlockVersionGcCollector,
-    GcRunService,
-    GcSweepService,
-    GcStorageMaintenanceService,
-  ],
+  imports: [BlockVersionGcModule, GcStorageModule],
+  controllers: [GcModulesController],
+  providers: [SystemAdminTokenGuard, GcRegistryService],
+  exports: [BlockVersionGcModule, GcStorageModule, GcRegistryService],
 })
 export class GcModule {}
