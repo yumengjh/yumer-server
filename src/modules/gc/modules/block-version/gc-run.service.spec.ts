@@ -18,13 +18,20 @@ describe("GcRunService", () => {
   it("stores a blocked run without collecting candidates when health check fails", async () => {
     const runRepo = repository<GcRun>({
       create: jest.fn((value) => value),
+      find: jest.fn().mockResolvedValue([]),
+      delete: jest.fn(),
       save: jest.fn().mockImplementation(async (value) => value),
     });
-    const candidateRepo = repository<GcRunCandidate>({ create: jest.fn(), save: jest.fn() });
+    const candidateRepo = repository<GcRunCandidate>({
+      create: jest.fn(),
+      save: jest.fn(),
+      delete: jest.fn(),
+    });
     const poolRepo = repository<GcCandidatePool>({
       find: jest.fn().mockResolvedValue([]),
       save: jest.fn(),
       create: jest.fn((value) => value),
+      delete: jest.fn(),
     });
     const service = new GcRunService(
       runRepo,
@@ -71,16 +78,20 @@ describe("GcRunService", () => {
   it("stores completed run summary and truncates candidate details by policy", async () => {
     const runRepo = repository<GcRun>({
       create: jest.fn((value) => value),
+      find: jest.fn().mockResolvedValue([]),
+      delete: jest.fn(),
       save: jest.fn().mockImplementation(async (value) => value),
     });
     const candidateRepo = repository<GcRunCandidate>({
       create: jest.fn((value) => value),
       save: jest.fn().mockImplementation(async (value) => value),
+      delete: jest.fn(),
     });
     const poolRepo = repository<GcCandidatePool>({
       create: jest.fn((value) => value),
       find: jest.fn().mockResolvedValue([]),
       save: jest.fn().mockImplementation(async (value) => value),
+      delete: jest.fn(),
     });
     const service = new GcRunService(
       runRepo,
@@ -336,6 +347,8 @@ describe("GcRunService", () => {
     const savedPoolEntries: Array<Record<string, unknown>> = [];
     const runRepo = repository<GcRun>({
       create: jest.fn((value) => value),
+      find: jest.fn().mockResolvedValue([]),
+      delete: jest.fn(),
       save: jest.fn().mockImplementation(async (value) => {
         if (value.finishedAt == null) {
           return value;
@@ -348,6 +361,7 @@ describe("GcRunService", () => {
     const candidateRepo = repository<GcRunCandidate>({
       create: jest.fn((value) => value),
       save: jest.fn().mockImplementation(async (value) => value),
+      delete: jest.fn(),
     });
     const poolRepo = repository<GcCandidatePool>({
       create: jest.fn((value) => value),
@@ -372,6 +386,7 @@ describe("GcRunService", () => {
         );
         return value;
       }),
+      delete: jest.fn(),
     });
     let runCounter = 0;
     const service = new GcRunService(
@@ -477,6 +492,8 @@ describe("GcRunService", () => {
     const savedPoolEntries: Array<Record<string, unknown>> = [];
     const runRepo = repository<GcRun>({
       create: jest.fn((value) => value),
+      find: jest.fn().mockResolvedValue([]),
+      delete: jest.fn(),
       save: jest.fn().mockImplementation(async (value) => {
         if (value.finishedAt == null) {
           return value;
@@ -491,6 +508,7 @@ describe("GcRunService", () => {
       repository<GcRunCandidate>({
         create: jest.fn((value) => value),
         save: jest.fn().mockImplementation(async (value) => value),
+        delete: jest.fn(),
       }),
       repository<GcCandidatePool>({
         create: jest.fn((value) => value),
@@ -499,6 +517,7 @@ describe("GcRunService", () => {
           savedPoolEntries.splice(0, savedPoolEntries.length, ...value);
           return value;
         }),
+        delete: jest.fn(),
       }),
       {
         getBlockVersionPolicy: jest.fn().mockReturnValue({
@@ -627,5 +646,133 @@ describe("GcRunService", () => {
         }),
       ]),
     );
+  });
+
+  it("removes scoped pool entries that disappear from a later preview", async () => {
+    const runRepo = repository<GcRun>({
+      create: jest.fn((value) => value),
+      find: jest.fn().mockResolvedValue([]),
+      delete: jest.fn(),
+      save: jest.fn().mockImplementation(async (value) => {
+        if (value.finishedAt == null) {
+          return value;
+        }
+
+        value.finishedAt = new Date("2026-05-31T00:01:00.000Z");
+        return value;
+      }),
+    });
+    const candidateRepo = repository<GcRunCandidate>({
+      create: jest.fn((value) => value),
+      save: jest.fn().mockImplementation(async (value) => value),
+      delete: jest.fn(),
+    });
+    const stalePoolEntry = {
+      id: 9,
+      candidateKey: "block_version:stale:candidate_block_version",
+      resourceType: "block_version",
+      action: "candidate_block_version",
+      source: null,
+      resourceKey: "b_stale@1",
+      resourceRowId: 9,
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      blockId: "b_stale",
+      blockVer: 1,
+      versionCreatedAt: 1,
+      firstSeenRunId: "gc_run_old",
+      lastSeenRunId: "gc_run_old",
+      firstSeenAt: new Date("2026-05-31T00:00:00.000Z"),
+      lastSeenAt: new Date("2026-05-31T00:00:00.000Z"),
+      seenCount: 1,
+      stableSeenCount: 1,
+      state: "pending",
+      eligibleAfter: new Date("2026-05-31T00:00:00.000Z"),
+      lastSweepAt: null,
+      lastValidationAt: null,
+      reasonCode: "unreferenced_older_than_policy",
+      reasonDetail: {
+        rootKind: "none",
+        deleted: false,
+        source: null,
+        action: "candidate_block_version",
+        hardRooted: false,
+        retainedByPolicy: false,
+        ageMs: 3_600_000,
+        ageBucket: "stable",
+        rootSourceCount: 0,
+        distanceFromLatestVer: 2,
+        decisionPath: ["unreferenced", "older_than_policy"],
+      },
+      policySnapshot: {},
+      lastBlockers: [],
+      createdAt: new Date("2026-05-31T00:00:00.000Z"),
+      updatedAt: new Date("2026-05-31T00:00:00.000Z"),
+    };
+    const poolRepo = repository<GcCandidatePool>({
+      create: jest.fn((value) => value),
+      find: jest.fn().mockResolvedValue([stalePoolEntry]),
+      save: jest.fn().mockImplementation(async (value) => value),
+      delete: jest.fn().mockImplementation(async (value) => value),
+    });
+    const service = new GcRunService(
+      runRepo,
+      candidateRepo,
+      poolRepo,
+      {
+        getBlockVersionPolicy: jest.fn().mockReturnValue({
+          gracePeriodMs: 60_000,
+          tombstoneGracePeriodMs: 60_000,
+          keepLatestPerBlock: 0,
+          promotionDelayMs: 0,
+          stableSeenThreshold: 1,
+          maxCandidatesToStore: 1000,
+          maxSweepBatchSize: 1000,
+          poolEntryExpireMs: 604_800_000,
+          rootSources: ["doc_snapshots", "document_drafts"],
+        }),
+      } as unknown as GcPolicyService,
+      {
+        checkBlockVersionGcHealth: jest.fn().mockResolvedValue({
+          status: "ok",
+          missingRevisionSnapshots: 0,
+          missingPublishedSnapshots: 0,
+          missingRootBlockVersions: 0,
+          samples: {
+            missingRevisionSnapshots: [],
+            missingPublishedSnapshots: [],
+            missingRootBlockVersions: [],
+          },
+        }),
+      } as unknown as GcHealthService,
+      {
+        preview: jest.fn().mockResolvedValue({
+          summary: {
+            blockVersionsScanned: 0,
+            hardRootedBlockVersions: 0,
+            liveRootedBlockVersions: 0,
+            tombstoneRootedBlockVersions: 0,
+            policyRetainedBlockVersions: 0,
+            policyRetentionBreakdown: {
+              withinGracePeriod: 0,
+              activeLatestVersion: 0,
+              keepLatestPerBlock: 0,
+            },
+            softDeletedMapEntries: 0,
+            candidateBlockVersions: 0,
+            tombstoneCompactionCandidates: 0,
+            rootSources: { docSnapshots: 0, documentDrafts: 0 },
+            candidateReasons: {},
+          },
+          candidates: [],
+        }),
+      } as unknown as BlockVersionGcCollector,
+    );
+
+    await service.previewBlockVersions({ docId: "doc_1", includeCandidates: false }, "tester");
+
+    expect(poolRepo.delete).toHaveBeenCalledWith({
+      id: expect.anything(),
+    });
   });
 });

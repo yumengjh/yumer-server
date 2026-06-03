@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { FindOptionsWhere, In, Repository } from "typeorm";
+import { FindOptionsWhere, In, LessThan, Repository } from "typeorm";
 import { GcCandidatePool } from "../../../../entities/gc-candidate-pool.entity";
 import { GcRun } from "../../../../entities/gc-run.entity";
 import { GcRunCandidate } from "../../../../entities/gc-run-candidate.entity";
@@ -20,6 +20,9 @@ export type CreateBlockVersionGcRunInput = BlockVersionGcScope & {
   includeCandidates?: boolean;
 };
 
+const RUN_CANDIDATE_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
+const PREVIEW_RUN_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+
 @Injectable()
 export class GcRunService {
   constructor(
@@ -35,6 +38,7 @@ export class GcRunService {
   ) {}
 
   async previewBlockVersions(input: CreateBlockVersionGcRunInput, triggeredBy: string) {
+    const policy = this.gcPolicyService.getBlockVersionPolicy();
     const run = this.gcRunRepository.create({
       runId: this.generateRunId(),
       resourceType: "block_version",
@@ -54,7 +58,6 @@ export class GcRunService {
     await this.gcRunRepository.save(run);
 
     try {
-      const policy = this.gcPolicyService.getBlockVersionPolicy();
       const health = await this.gcHealthService.checkBlockVersionGcHealth(input);
       run.policySnapshot = policy;
       run.health = health as unknown as Record<string, unknown>;
@@ -63,7 +66,9 @@ export class GcRunService {
         run.status = "blocked";
         run.summary = this.emptySummary();
         run.finishedAt = new Date();
-        return this.gcRunRepository.save(run);
+        const savedRun = await this.gcRunRepository.save(run);
+        await this.pruneHistoricalArtifacts(savedRun.finishedAt ?? new Date(), policy);
+        return savedRun;
       }
 
       const collectorResult = await this.blockVersionGcCollector.preview(input, policy);
@@ -97,12 +102,16 @@ export class GcRunService {
 
       run.status = "completed";
       run.finishedAt = new Date();
-      return this.gcRunRepository.save(run);
+      const savedRun = await this.gcRunRepository.save(run);
+      await this.pruneHistoricalArtifacts(savedRun.finishedAt ?? new Date(), policy);
+      return savedRun;
     } catch (error) {
       run.status = "failed";
       run.errorMessage = error instanceof Error ? error.message : String(error);
       run.finishedAt = new Date();
-      return this.gcRunRepository.save(run);
+      const savedRun = await this.gcRunRepository.save(run);
+      await this.pruneHistoricalArtifacts(savedRun.finishedAt ?? new Date(), policy);
+      return savedRun;
     }
   }
 
@@ -286,15 +295,14 @@ export class GcRunService {
     candidates: BlockVersionGcCandidate[],
     policy: BlockVersionGcPolicy,
   ): Promise<void> {
-    if (candidates.length === 0) {
-      return;
-    }
-
     const seenAt = run.finishedAt ?? new Date();
     const candidateKeys = candidates.map((candidate) => this.buildCandidateKey(candidate));
-    const existingItems = await this.gcCandidatePoolRepository.find({
-      where: { candidateKey: In(candidateKeys) },
-    });
+    const existingItems =
+      candidateKeys.length > 0
+        ? await this.gcCandidatePoolRepository.find({
+            where: { candidateKey: In(candidateKeys) },
+          })
+        : [];
     const existingByKey = new Map(existingItems.map((item) => [item.candidateKey, item]));
 
     const entities = candidates.map((candidate) => {
@@ -351,6 +359,9 @@ export class GcRunService {
     if (entities.length > 0) {
       await this.gcCandidatePoolRepository.save(entities);
     }
+
+    await this.deleteMissingScopePoolEntries(run, candidateKeys);
+    await this.deleteExpiredPoolEntries(seenAt, policy);
   }
 
   private buildCandidateKey(candidate: BlockVersionGcCandidate | BlockVersionGcCandidatePoolEntry) {
@@ -364,5 +375,71 @@ export class GcRunService {
     }
 
     return `block_version:${candidate.resourceKey}:${action}`;
+  }
+
+  private async deleteMissingScopePoolEntries(run: GcRun, candidateKeys: string[]): Promise<void> {
+    const scope = run.scope as { workspaceId?: string | null; docId?: string | null };
+    const where: FindOptionsWhere<GcCandidatePool> = { resourceType: "block_version" };
+
+    if (scope.docId) {
+      where.docId = scope.docId;
+    } else if (scope.workspaceId) {
+      where.workspaceId = scope.workspaceId;
+    }
+
+    const scopedItems = await this.gcCandidatePoolRepository.find({ where });
+    const currentKeys = new Set(candidateKeys);
+    const staleIds = scopedItems
+      .filter((item) => !currentKeys.has(item.candidateKey))
+      .map((item) => item.id);
+
+    if (staleIds.length > 0) {
+      await this.gcCandidatePoolRepository.delete({ id: In(staleIds) });
+    }
+  }
+
+  private async deleteExpiredPoolEntries(
+    seenAt: Date,
+    policy: BlockVersionGcPolicy,
+  ): Promise<void> {
+    const expireBefore = new Date(seenAt.getTime() - policy.poolEntryExpireMs);
+    await this.gcCandidatePoolRepository.delete({
+      resourceType: "block_version",
+      lastSeenAt: LessThan(expireBefore),
+    });
+  }
+
+  private async pruneHistoricalArtifacts(
+    now: Date,
+    policy: BlockVersionGcPolicy,
+  ): Promise<void> {
+    const candidateCutoff = new Date(now.getTime() - RUN_CANDIDATE_RETENTION_MS);
+    await this.gcRunCandidateRepository.delete({
+      resourceType: "block_version",
+      createdAt: LessThan(candidateCutoff),
+    });
+
+    const runCutoff = new Date(now.getTime() - PREVIEW_RUN_RETENTION_MS);
+    const oldPreviewRuns = await this.gcRunRepository.find({
+      where: {
+        resourceType: "block_version",
+        mode: "preview",
+        createdAt: LessThan(runCutoff),
+      },
+    });
+
+    if (oldPreviewRuns.length > 0) {
+      await this.gcRunCandidateRepository.delete({
+        runId: In(oldPreviewRuns.map((run) => run.runId)),
+      });
+      await this.gcRunRepository.delete({
+        id: In(oldPreviewRuns.map((run) => run.id)),
+      });
+    }
+
+    await this.gcCandidatePoolRepository.delete({
+      resourceType: "block_version",
+      lastSeenAt: LessThan(new Date(now.getTime() - policy.poolEntryExpireMs)),
+    });
   }
 }
