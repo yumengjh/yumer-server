@@ -8,6 +8,7 @@ import type {
 } from "./gc.types";
 
 const SECOND = 1000;
+const MAX_GC_SWEEP_BATCH_SIZE = 10_000;
 
 /**
  * 块版本 GC preview 的集中硬编码策略。
@@ -89,7 +90,7 @@ const BLOCK_VERSION_GC_POLICY: BlockVersionGcPolicy = {
    *
    * 当前主要用于批次上限控制，避免一次 sweep 处理过多。
    */
-  maxSweepBatchSize: 1000,
+  maxSweepBatchSize: MAX_GC_SWEEP_BATCH_SIZE,
 
   /**
    * pool 中候选项的过期时间。

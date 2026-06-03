@@ -11,7 +11,7 @@ describe("GcPolicyService", () => {
       promotionDelayMs: 10_000,
       stableSeenThreshold: 1,
       maxCandidatesToStore: 1000,
-      maxSweepBatchSize: 1000,
+      maxSweepBatchSize: 10_000,
       poolEntryExpireMs: 604_800_000,
       rootSources: ["doc_snapshots", "document_drafts"],
     });
