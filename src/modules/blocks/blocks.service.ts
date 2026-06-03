@@ -452,13 +452,18 @@ export class BlocksService {
   ): Record<string, unknown> {
     const previousAttrs = (previousPayload?.attrs as Record<string, unknown> | undefined) ?? {};
     const incomingAttrs = (incomingPayload.attrs as Record<string, unknown> | undefined) ?? {};
+    const shouldPreserveLegacyClientBatchId =
+      !previousAttrs.syncCreateId &&
+      !incomingAttrs.syncCreateId &&
+      typeof previousAttrs.clientBatchId === "string" &&
+      incomingAttrs.clientBatchId == null;
     const attrs: Record<string, unknown> = {
       ...previousAttrs,
       ...incomingAttrs,
       ...(previousAttrs.clientId && incomingAttrs.clientId == null
         ? { clientId: previousAttrs.clientId }
         : {}),
-      ...(previousAttrs.clientBatchId && incomingAttrs.clientBatchId == null
+      ...(shouldPreserveLegacyClientBatchId
         ? { clientBatchId: previousAttrs.clientBatchId }
         : {}),
       ...(previousAttrs.syncCreateId && incomingAttrs.syncCreateId == null
@@ -1252,7 +1257,9 @@ export class BlocksService {
           ...(((operation.data.payload as Record<string, unknown>).attrs as
             | Record<string, unknown>
             | undefined) ?? {}),
-          clientBatchId,
+          ...(!operation.syncCreateId && operation.clientId
+            ? { clientBatchId }
+            : {}),
           ...(operation.clientId ? { clientId: operation.clientId } : {}),
           ...(operation.syncCreateId ? { syncCreateId: operation.syncCreateId } : {}),
         },

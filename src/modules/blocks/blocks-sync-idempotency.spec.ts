@@ -83,6 +83,23 @@ function createBlocksServiceWithInMemoryRepositories() {
       }
       return null;
     },
+    find: async (
+      entity: unknown,
+      options: { where?: Record<string, unknown>; select?: string[] },
+    ) => {
+      const where = options.where ?? {};
+      if (entity === BlockVersion) {
+        return versions.filter((item) =>
+          Object.entries(where).every(([key, value]) => item[key as keyof BlockVersion] === value),
+        );
+      }
+      if (entity === Block) {
+        return blocks.filter((item) =>
+          Object.entries(where).every(([key, value]) => item[key as keyof Block] === value),
+        );
+      }
+      return [];
+    },
     getRepository: (entity: unknown) => ({
       createQueryBuilder: () => {
         const params: Record<string, unknown> = {};
@@ -444,6 +461,15 @@ describe("BlocksService sync idempotency", () => {
     );
 
     const blockId = created.results[0].blockId!;
+    const createdVersion = versions.find((version) => version.blockId === blockId && version.ver === 1);
+    expect((createdVersion?.payload as { attrs?: Record<string, unknown> })?.attrs).toMatchObject({
+      clientId: "client_update",
+      syncCreateId: "sync-create:client_update",
+    });
+    expect(
+      (createdVersion?.payload as { attrs?: Record<string, unknown> })?.attrs?.clientBatchId,
+    ).toBeUndefined();
+
     await service.batch(
       {
         docId: "doc_1",
@@ -473,6 +499,9 @@ describe("BlocksService sync idempotency", () => {
       clientId: "client_update",
       syncCreateId: "sync-create:client_update",
     });
+    expect(
+      (latest?.payload as { attrs?: Record<string, unknown> })?.attrs?.clientBatchId,
+    ).toBeUndefined();
   });
 
   it("keeps payload sortKey aligned with the persisted version sortKey during update", async () => {
