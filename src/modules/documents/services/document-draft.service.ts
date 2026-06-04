@@ -80,8 +80,12 @@ export class DocumentDraftService {
 
   async discardDraftWithManager(docId: string, manager: EntityManager) {
     await this.lockDocumentForDraftMutation(docId, manager);
-    await this.deleteDraft(docId, manager);
-    await this.incrementDraftRevision(docId, manager);
+    const draftRepository = manager.getRepository(DocDraft);
+    const existing = await draftRepository.findOne({ where: { docId } });
+    if (existing) {
+      await this.deleteDraft(docId, manager);
+      await this.incrementDraftRevision(docId, manager);
+    }
     return {
       docId,
       discarded: true,

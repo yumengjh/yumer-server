@@ -3,7 +3,9 @@
 import { BlocksService } from "./blocks.service";
 import { Block } from "../../entities/block.entity";
 import { BlockVersion } from "../../entities/block-version.entity";
+import { DocRevision } from "../../entities/doc-revision.entity";
 import { Document } from "../../entities/document.entity";
+import { SyncBatchReceipt } from "../../entities/sync-batch-receipt.entity";
 import { BatchOperationType, BatchSourceType } from "./dto/batch-block.dto";
 import type { DocumentDraftService } from "../documents/services/document-draft.service";
 import type { DocumentSnapshotService } from "../documents/services/document-snapshot.service";
@@ -12,7 +14,7 @@ import type { DataSource } from "typeorm";
 type BlockState = Partial<Block>;
 type BlockVersionState = Partial<BlockVersion>;
 
-function createDraftAwareBlocksService() {
+function createDraftAwareBlocksService(config?: { throwOnBlockVersionFind?: boolean }) {
   const document = {
     docId: "doc_1",
     rootBlockId: "root_1",
@@ -71,6 +73,8 @@ function createDraftAwareBlocksService() {
       refs: [],
     },
   ];
+  const revisions: Array<Record<string, unknown>> = [];
+  const receipts: Array<Record<string, unknown>> = [];
 
   const draft = {
     docId: "doc_1",
@@ -149,6 +153,9 @@ function createDraftAwareBlocksService() {
     ) => {
       const where = options.where ?? {};
       if (entity === BlockVersion) {
+        if (config?.throwOnBlockVersionFind) {
+          throw new Error("full block version scan is disabled in this test");
+        }
         return versions.filter((item) =>
           Object.entries(where).every(([key, value]) => item[key as keyof BlockVersion] === value),
         );
@@ -161,9 +168,36 @@ function createDraftAwareBlocksService() {
       return [];
     },
     getRepository: (entity: unknown) => ({
+      create: (value: Record<string, unknown>) => ({ ...value }),
+      save: async (value: Record<string, unknown>) => {
+        if (entity === DocRevision) {
+          revisions.push(value);
+        }
+        if (entity === SyncBatchReceipt) {
+          const index = receipts.findIndex(
+            (item) =>
+              item.docId === value.docId && item.clientBatchId === value.clientBatchId,
+          );
+          if (index >= 0) receipts[index] = { ...receipts[index], ...value };
+          else receipts.push(value);
+        }
+        return value;
+      },
+      findOne: async (options: { where?: Record<string, unknown> }) => {
+        const where = options.where ?? {};
+        if (entity === SyncBatchReceipt) {
+          return (
+            receipts.find((item) =>
+              Object.entries(where).every(([key, value]) => item[key] === value),
+            ) ?? null
+          );
+        }
+        return null;
+      },
       createQueryBuilder: () => {
         const params: Record<string, unknown> = {};
         const query = {
+          select: () => query,
           setLock: () => query,
           where: (_condition: string, values?: Record<string, unknown>) => {
             Object.assign(params, values);
@@ -184,6 +218,14 @@ function createDraftAwareBlocksService() {
               );
             }
             return null;
+          },
+          getRawOne: async () => {
+            if (entity !== BlockVersion) return null;
+            const matched = versions.filter(
+              (item) => item.docId === params.docId && item.blockId === params.blockId,
+            );
+            const maxVer = matched.reduce((max, item) => Math.max(max, Number(item.ver ?? 0)), 0);
+            return { maxVer };
           },
           getMany: async () => versions,
         };
@@ -245,6 +287,68 @@ function createDraftAwareBlocksService() {
 }
 
 describe("BlocksService draft writes", () => {
+  it("locks the document before a versioned create write", async () => {
+    const { service, documentDraftService } = createDraftAwareBlocksService();
+
+    await service.create(
+      {
+        docId: "doc_1",
+        type: "paragraph",
+        payload: { type: "paragraph" },
+        parentId: "root_1",
+        sortKey: "002000",
+        createVersion: true,
+      },
+      "user_1",
+    );
+
+    expect(documentDraftService.lockDocumentForDraftMutation).toHaveBeenCalledWith(
+      "doc_1",
+      expect.any(Object),
+    );
+  });
+
+  it("locks the document before a versioned update write", async () => {
+    const { service, documentDraftService } = createDraftAwareBlocksService();
+
+    await service.updateContent(
+      "block_1",
+      {
+        payload: {
+          type: "paragraph",
+          content: [{ type: "text", text: "updated" }],
+        },
+        createVersion: true,
+      },
+      "user_1",
+    );
+
+    expect(documentDraftService.lockDocumentForDraftMutation).toHaveBeenCalledWith(
+      "doc_1",
+      expect.any(Object),
+    );
+  });
+
+  it("locks the document before a versioned move write", async () => {
+    const { service, documentDraftService } = createDraftAwareBlocksService();
+
+    await service.move(
+      "block_1",
+      {
+        parentId: "root_1",
+        sortKey: "003000",
+        indent: 1,
+        createVersion: true,
+      },
+      "user_1",
+    );
+
+    expect(documentDraftService.lockDocumentForDraftMutation).toHaveBeenCalledWith(
+      "doc_1",
+      expect.any(Object),
+    );
+  });
+
   it("creates a draft mapping when create runs with createVersion=false", async () => {
     const { service, documentDraftService } = createDraftAwareBlocksService();
 
@@ -457,5 +561,48 @@ describe("BlocksService draft writes", () => {
 
     const latestVersion = versions.find((item) => item.blockId === "block_1" && item.ver === 6);
     expect(latestVersion).toBeDefined();
+  });
+
+  it("does not require a full version scan to continue from the historical max block version", async () => {
+    const { service, documentDraftService, versions } = createDraftAwareBlocksService({
+      throwOnBlockVersionFind: true,
+    });
+    versions.push({
+      versionId: "block_1_v5",
+      docId: "doc_1",
+      blockId: "block_1",
+      ver: 5,
+      parentId: "root_1",
+      sortKey: "001000",
+      indent: 0,
+      collapsed: false,
+      payload: {
+        type: "paragraph",
+        content: [{ type: "text", text: "future" }],
+      },
+      hash: "future",
+      plainText: "future",
+      refs: [],
+    });
+
+    await service.updateContent(
+      "block_1",
+      {
+        payload: {
+          type: "paragraph",
+          content: [{ type: "text", text: "after revert without scan" }],
+        },
+        createVersion: false,
+      },
+      "user_1",
+    );
+
+    expect(documentDraftService.pointBlockToVersion).toHaveBeenCalledWith(
+      "doc_1",
+      "block_1",
+      6,
+      "user_1",
+      expect.any(Object),
+    );
   });
 });

@@ -77,6 +77,12 @@ export class SyncBatchResponseDto {
   })
   draftRevision: number;
 
+  @ApiPropertyOptional({
+    description: '服务端已确认的当前会话客户端操作序号高水位',
+    example: 42,
+  })
+  ackedThroughOpSeq?: number;
+
   @ApiProperty({ description: '是否需要客户端 reload', example: false })
   needsReload: boolean;
 

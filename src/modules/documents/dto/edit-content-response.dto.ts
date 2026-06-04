@@ -31,6 +31,20 @@ class EditLockMetaDto {
   lockExpiresAt: string | null;
 }
 
+class SyncSessionMetaDto {
+  @ApiProperty()
+  sessionId: string;
+
+  @ApiProperty()
+  sessionEpoch: number;
+
+  @ApiProperty({ required: false, nullable: true })
+  leaseExpiresAt?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  lastAckedOpSeq?: number | null;
+}
+
 class EditPaginationDto {
   @ApiProperty()
   totalBlocks: number;
@@ -79,6 +93,9 @@ export class EditContentResponseDto {
 
   @ApiProperty()
   publishedHead: number;
+
+  @ApiProperty({ type: SyncSessionMetaDto, required: false, nullable: true })
+  syncSession?: SyncSessionMetaDto | null;
 
   @ApiProperty({ type: EditorStateDto, required: false, nullable: true })
   editorState?: EditorStateDto | null;

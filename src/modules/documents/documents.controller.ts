@@ -32,6 +32,7 @@ import { DiffVersionsDto } from "./dto/diff-versions.dto";
 import { RevertVersionDto } from "./dto/revert-version.dto";
 import { SearchQueryDto } from "./dto/search-query.dto";
 import { CommitVersionDto } from "./dto/commit-version.dto";
+import { DiscardDraftDto } from "./dto/discard-draft.dto";
 import { QueryContentDto } from "./dto/query-content.dto";
 import { QueryEditContentDto } from "./dto/query-edit-content.dto";
 import { EditContentResponseDto } from "./dto/edit-content-response.dto";
@@ -173,6 +174,17 @@ export class DocumentsController {
     );
   }
 
+  @Post(":docId/sync-session/renew")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Renew the active document sync session lease" })
+  async renewSyncSession(
+    @Param("docId") docId: string,
+    @Body() syncSession: DiscardDraftDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.documentsService.renewSyncSession(docId, user.userId, syncSession);
+  }
+
   private withRenderDiagnosticsHeaders(result: unknown, response: Response) {
     if (!result || typeof result !== "object") {
       return result;
@@ -298,8 +310,12 @@ export class DocumentsController {
   @ApiOperation({ summary: "Discard current draft" })
   @ApiParam({ name: "docId", description: "Document ID" })
   @ApiResponse({ status: 200, description: "Success" })
-  async discardDraft(@Param("docId") docId: string, @CurrentUser() user: any) {
-    return this.documentsService.discardDraft(docId, user.userId);
+  async discardDraft(
+    @Param("docId") docId: string,
+    @Body() discardDraftDto: DiscardDraftDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.documentsService.discardDraft(docId, user.userId, discardDraftDto);
   }
 
   @Get(":docId/revisions")
@@ -369,7 +385,11 @@ export class DocumentsController {
     @Body() commitDto: CommitVersionDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.commitVersion(docId, commitDto.message, user.userId);
+    return this.documentsService.commitVersion(docId, commitDto.message, user.userId, {
+      sessionId: commitDto.sessionId,
+      sessionEpoch: commitDto.sessionEpoch,
+      ackedThroughOpSeq: commitDto.ackedThroughOpSeq,
+    });
   }
 
   @Get(":docId/export")

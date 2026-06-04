@@ -30,7 +30,10 @@ describe("DocDraft entity wiring", () => {
     const manager = {
       getRepository: jest.fn((entity: unknown) => {
         if (entity === DocDraft) {
-          return { delete: deleteDraft };
+          return {
+            findOne: jest.fn().mockResolvedValue({ docId: "doc_1", draftId: "draft_1" }),
+            delete: deleteDraft,
+          };
         }
         if (entity === Document) {
           return {
@@ -67,6 +70,52 @@ describe("DocDraft entity wiring", () => {
     expect(deleteDraft.mock.invocationCallOrder[0]).toBeLessThan(
       incrementDraftRevision.mock.invocationCallOrder[0],
     );
+  });
+
+  it("does not increment the document revision when no draft exists", async () => {
+    const deleteDraft = jest.fn().mockResolvedValue(undefined);
+    const incrementDraftRevision = jest.fn().mockResolvedValue(undefined);
+    const findDraft = jest.fn().mockResolvedValue(null);
+    const manager = {
+      getRepository: jest.fn((entity: unknown) => {
+        if (entity === DocDraft) {
+          return {
+            findOne: findDraft,
+            delete: deleteDraft,
+          };
+        }
+        if (entity === Document) {
+          return {
+            increment: incrementDraftRevision,
+            findOne: jest.fn().mockResolvedValue({ docId: "doc_1", draftRevision: 8 }),
+          };
+        }
+        throw new Error(`Unexpected repository: ${String(entity)}`);
+      }),
+    };
+    const dataSource = {
+      options: { type: "better-sqlite3" },
+      transaction: jest.fn(async (callback: (txManager: typeof manager) => Promise<unknown>) =>
+        callback(manager),
+      ),
+    };
+    const service = new (DocumentDraftService as any)(
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      dataSource,
+    ) as DocumentDraftService;
+
+    await expect(service.discardDraft("doc_1")).resolves.toMatchObject({
+      docId: "doc_1",
+      discarded: true,
+      fallbackSource: "head",
+    });
+    expect(findDraft).toHaveBeenCalledWith({ where: { docId: "doc_1" } });
+    expect(incrementDraftRevision).not.toHaveBeenCalled();
   });
 
   it("returns the document revision when a draft is committed", async () => {

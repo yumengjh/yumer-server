@@ -6,6 +6,8 @@ import { Block } from "../../entities/block.entity";
 import { BlockVersion } from "../../entities/block-version.entity";
 import { Document } from "../../entities/document.entity";
 import { DocRevision } from "../../entities/doc-revision.entity";
+import { SyncBatchReceipt } from "../../entities/sync-batch-receipt.entity";
+import { DocumentSyncSession } from "../../entities/document-sync-session.entity";
 import { DocumentsService } from "../documents/documents.service";
 import { DocumentDraftService } from "../documents/services/document-draft.service";
 import { DocumentSnapshotService } from "../documents/services/document-snapshot.service";
@@ -26,6 +28,7 @@ import { SyncBatchResponseDto, SyncOperationResultDto } from "./dto/sync-batch-r
 import { PaginationDto } from "../../common/dto/pagination.dto";
 import { ActivitiesService } from "../activities/activities.service";
 import { BLOCK_ACTIONS } from "../activities/constants/activity-actions";
+import { createHash } from "node:crypto";
 
 type SyncCreateDeleteCompensation = {
   blockId: string;
@@ -44,10 +47,17 @@ type BatchDeleteResult = {
   createDeleteCompensation?: SyncCreateDeleteCompensation;
 };
 
+type StoredBatchResponse = {
+  response: SyncBatchResponseDto;
+  replayed: boolean;
+  createDeleteCompensations: SyncCreateDeleteCompensation[];
+};
+
 @Injectable()
 export class BlocksService {
   private readonly logger = new Logger(BlocksService.name);
   private readonly createDeleteCompensationWindowMs = 60_000;
+  private readonly syncSessionLeaseMs = 5 * 60 * 1000;
 
   constructor(
     @InjectRepository(Block)
@@ -98,12 +108,7 @@ export class BlocksService {
 
     // 使用事务创建块和初始版本
     const result = await this.dataSource.transaction(async (manager) => {
-      if (createBlockDto.createVersion === false) {
-        await this.documentDraftService.lockDocumentForDraftMutation(
-          createBlockDto.docId,
-          manager,
-        );
-      }
+      await this.documentDraftService.lockDocumentForDraftMutation(createBlockDto.docId, manager);
       const now = Date.now();
       const blockId = generateBlockId();
       const sortKey = createBlockDto.sortKey
@@ -235,9 +240,7 @@ export class BlocksService {
     const result = await this.executeWithRetry(
       async () =>
         this.dataSource.transaction(async (manager) => {
-          if (updateBlockDto.createVersion === false) {
-            await this.documentDraftService.lockDocumentForDraftMutation(docId, manager);
-          }
+          await this.documentDraftService.lockDocumentForDraftMutation(docId, manager);
           const now = Date.now();
           const hash = this.calculateHash(updateBlockDto.payload);
 
@@ -367,6 +370,148 @@ export class BlocksService {
     await new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  private buildPayloadAttrEqualsCondition(
+    alias: string,
+    attrName: string,
+    paramName: string,
+  ): string {
+    const dbType = this.dataSource.options.type;
+    if (dbType === "sqlite" || dbType === "better-sqlite3") {
+      return `json_extract(${alias}.payload, '$.attrs.${attrName}') = :${paramName}`;
+    }
+    return `${alias}.payload->'attrs'->>'${attrName}' = :${paramName}`;
+  }
+
+  private normalizeClientBatchId(clientBatchId?: string): string | null {
+    const normalized = clientBatchId?.trim();
+    return normalized ? normalized : null;
+  }
+
+  private buildBatchRequestFingerprint(batchBlockDto: BatchBlockDto): string {
+    return JSON.stringify({
+      docId: batchBlockDto.docId,
+      createVersion: batchBlockDto.createVersion !== false,
+      baseVersion: batchBlockDto.baseVersion ?? null,
+      draftRevision: batchBlockDto.draftRevision ?? null,
+      source: batchBlockDto.source ?? null,
+      sessionId: batchBlockDto.sessionId ?? null,
+      sessionEpoch: batchBlockDto.sessionEpoch ?? null,
+      ackedThroughOpSeq: batchBlockDto.ackedThroughOpSeq ?? null,
+      operations: batchBlockDto.operations,
+    });
+  }
+
+  private buildBatchResponse(params: {
+    acceptedBatchId: string;
+    appliedAt: number;
+    serverHead: number;
+    draftRevision: number;
+    ackedThroughOpSeq?: number;
+    needsReload: boolean;
+    conflicts: SyncBatchResponseDto["conflicts"];
+    results: SyncBatchResponseDto["results"];
+  }): SyncBatchResponseDto {
+    return {
+      acceptedBatchId: params.acceptedBatchId,
+      appliedAt: params.appliedAt,
+      serverHead: params.serverHead,
+      draftRevision: params.draftRevision,
+      ...(typeof params.ackedThroughOpSeq === "number"
+        ? { ackedThroughOpSeq: params.ackedThroughOpSeq }
+        : {}),
+      needsReload: params.needsReload,
+      conflicts: params.conflicts,
+      results: params.results,
+    };
+  }
+
+  private async findStoredBatchReceipt(
+    manager: EntityManager,
+    docId: string,
+    clientBatchId: string,
+  ): Promise<SyncBatchReceipt | null> {
+    return manager.getRepository(SyncBatchReceipt).findOne({
+      where: { docId, clientBatchId },
+    });
+  }
+
+  private mapReceiptToBatchResponse(receipt: SyncBatchReceipt): SyncBatchResponseDto {
+    return this.buildBatchResponse({
+      acceptedBatchId: receipt.acceptedBatchId,
+      appliedAt: receipt.appliedAt,
+      serverHead: receipt.serverHead,
+      draftRevision: receipt.draftRevision,
+      ...(typeof receipt.ackedThroughOpSeq === "number"
+        ? { ackedThroughOpSeq: receipt.ackedThroughOpSeq }
+        : {}),
+      needsReload: receipt.needsReload,
+      conflicts: receipt.conflicts as unknown as SyncBatchResponseDto["conflicts"],
+      results: receipt.results as unknown as SyncBatchResponseDto["results"],
+    });
+  }
+
+  private async saveBatchReceipt(params: {
+    manager: EntityManager;
+    docId: string;
+    clientBatchId: string;
+    requestFingerprint: string;
+    response: SyncBatchResponseDto;
+    userId: string;
+    now: number;
+  }): Promise<void> {
+    const receiptRepository = params.manager.getRepository(SyncBatchReceipt);
+    const existing = await receiptRepository.findOne({
+      where: { docId: params.docId, clientBatchId: params.clientBatchId },
+    });
+    const receipt = receiptRepository.create({
+      ...(existing ? { id: existing.id } : {}),
+      docId: params.docId,
+      clientBatchId: params.clientBatchId,
+      requestFingerprint: params.requestFingerprint,
+      acceptedBatchId: params.response.acceptedBatchId,
+      appliedAt: params.response.appliedAt,
+      serverHead: params.response.serverHead,
+      draftRevision: params.response.draftRevision,
+      ackedThroughOpSeq: params.response.ackedThroughOpSeq ?? null,
+      needsReload: params.response.needsReload,
+      conflicts: params.response.conflicts,
+      results: params.response.results,
+      createdBy: existing?.createdBy ?? params.userId,
+      createdAt: existing?.createdAt ?? params.now,
+      updatedAt: params.now,
+    } as any);
+    await receiptRepository.save(receipt);
+  }
+
+  private async getCurrentDocumentSyncSession(
+    manager: EntityManager,
+    docId: string,
+  ): Promise<DocumentSyncSession | null> {
+    return manager.getRepository(DocumentSyncSession).findOne({
+      where: { docId },
+    });
+  }
+
+  private async refreshDocumentSyncSessionLease(
+    manager: EntityManager,
+    session: DocumentSyncSession,
+  ): Promise<void> {
+    session.leaseExpiresAt = Date.now() + this.syncSessionLeaseMs;
+    session.updatedAt = Date.now();
+    await manager.getRepository(DocumentSyncSession).save(session);
+  }
+
+  private async advanceDocumentSyncSessionAck(
+    manager: EntityManager,
+    session: DocumentSyncSession,
+    ackedThroughOpSeq?: number,
+  ): Promise<void> {
+    if (typeof ackedThroughOpSeq !== "number") return;
+    session.lastAckedOpSeq = Math.max(session.lastAckedOpSeq ?? 0, ackedThroughOpSeq);
+    session.updatedAt = Date.now();
+    await manager.getRepository(DocumentSyncSession).save(session);
+  }
+
   private async executeWithRetry<T>(
     fn: () => Promise<T>,
     context: { blockId: string; userId: string },
@@ -401,14 +546,7 @@ export class BlocksService {
    * 计算内容的哈希值
    */
   private calculateHash(content: unknown): string {
-    const str = JSON.stringify(content);
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = (hash << 5) - hash + char;
-      hash = hash & hash;
-    }
-    return hash.toString(36);
+    return createHash("sha256").update(JSON.stringify(content)).digest("hex");
   }
 
   /**
@@ -688,9 +826,7 @@ export class BlocksService {
 
     // 使用事务更新块位置
     const result = await this.dataSource.transaction(async (manager) => {
-      if (moveBlockDto.createVersion === false) {
-        await this.documentDraftService.lockDocumentForDraftMutation(block.docId, manager);
-      }
+      await this.documentDraftService.lockDocumentForDraftMutation(block.docId, manager);
       const now = Date.now();
       const latestVersion = await manager.findOne(BlockVersion, {
         where: { blockId, ver: block.latestVer },
@@ -802,6 +938,7 @@ export class BlocksService {
 
     // 使用事务软删除块
     const result = await this.dataSource.transaction(async (manager) => {
+      await this.documentDraftService.lockDocumentForDraftMutation(block.docId, manager);
       const now = Date.now();
 
       // 软删除块
@@ -946,29 +1083,11 @@ export class BlocksService {
   async batch(batchBlockDto: BatchBlockDto, userId: string): Promise<SyncBatchResponseDto> {
     await this.documentsService.assertAccessWithoutViewIncrement(batchBlockDto.docId, userId);
 
-    const acceptedBatchId =
-      batchBlockDto.clientBatchId?.trim() ||
-      `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const acceptedBatchId = this.normalizeClientBatchId(batchBlockDto.clientBatchId);
+    const requestFingerprint = this.buildBatchRequestFingerprint(batchBlockDto);
 
     const txResult = await this.dataSource.transaction(
-      async (
-        manager,
-      ): Promise<{
-        results: SyncOperationResultDto[];
-        serverHead: number;
-        successCount: number;
-        needsReload: boolean;
-        draftRevision: number;
-        conflicts: Array<{
-          code: string;
-          message: string;
-          serverHead: number;
-          clientBaseVersion?: number;
-          serverDraftRevision?: number;
-          clientDraftRevision?: number;
-        }>;
-        createDeleteCompensations: SyncCreateDeleteCompensation[];
-      }> => {
+      async (manager): Promise<StoredBatchResponse> => {
         const docQuery = manager
           .getRepository(Document)
           .createQueryBuilder("doc")
@@ -985,18 +1104,103 @@ export class BlocksService {
         const shouldCreateVersion = batchBlockDto.createVersion !== false;
         const serverDraftRevision = docInTx.draftRevision ?? 0;
         const clientDraftRevision = batchBlockDto.draftRevision ?? 0;
+        const appliedAt = Date.now();
 
-        if (
-          typeof batchBlockDto.baseVersion === "number" &&
-          batchBlockDto.baseVersion !== docInTx.head
-        ) {
+        if (!acceptedBatchId) {
           return {
-            results: [],
-            serverHead: docInTx.head,
-            successCount: 0,
-            needsReload: true,
-            draftRevision: serverDraftRevision,
+            response: this.buildBatchResponse({
+              acceptedBatchId: "missing-client-batch-id",
+              appliedAt,
+              serverHead: docInTx.head,
+              draftRevision: serverDraftRevision,
+              needsReload: true,
+              conflicts: [
+                {
+                  code: "CLIENT_BATCH_ID_REQUIRED",
+                  message: "clientBatchId is required for sync batch writes",
+                  serverHead: docInTx.head,
+                },
+              ],
+              results: [],
+            }),
+            replayed: false,
             createDeleteCompensations: [],
+          };
+        }
+
+        const existingReceipt = await this.findStoredBatchReceipt(
+          manager,
+          batchBlockDto.docId,
+          acceptedBatchId,
+        );
+        if (existingReceipt) {
+          if (existingReceipt.requestFingerprint !== requestFingerprint) {
+            return {
+              response: this.buildBatchResponse({
+                acceptedBatchId,
+                appliedAt,
+                serverHead: docInTx.head,
+                draftRevision: serverDraftRevision,
+                needsReload: true,
+                conflicts: [
+                  {
+                    code: "CLIENT_BATCH_ID_REUSED",
+                    message: `clientBatchId(${acceptedBatchId}) has already been used for a different batch request`,
+                    serverHead: docInTx.head,
+                  },
+                ],
+                results: [],
+              }),
+              replayed: false,
+              createDeleteCompensations: [],
+            };
+          }
+          return {
+            response: this.mapReceiptToBatchResponse(existingReceipt),
+            replayed: true,
+            createDeleteCompensations: [],
+          };
+        }
+
+        if (typeof batchBlockDto.baseVersion !== "number") {
+          const response = this.buildBatchResponse({
+            acceptedBatchId,
+            appliedAt,
+            serverHead: docInTx.head,
+            draftRevision: serverDraftRevision,
+            needsReload: true,
+            conflicts: [
+              {
+                code: "BASE_VERSION_REQUIRED",
+                message: "baseVersion is required for sync batch writes",
+                serverHead: docInTx.head,
+              },
+            ],
+            results: [],
+          });
+          await this.saveBatchReceipt({
+            manager,
+            docId: batchBlockDto.docId,
+            clientBatchId: acceptedBatchId,
+            requestFingerprint,
+            response,
+            userId,
+            now: appliedAt,
+          });
+          return {
+            response,
+            replayed: false,
+            createDeleteCompensations: [],
+          };
+        }
+
+        if (batchBlockDto.baseVersion !== docInTx.head) {
+          const response = this.buildBatchResponse({
+            acceptedBatchId,
+            appliedAt,
+            serverHead: docInTx.head,
+            draftRevision: serverDraftRevision,
+            needsReload: true,
             conflicts: [
               {
                 code: "BASE_VERSION_MISMATCH",
@@ -1005,17 +1209,31 @@ export class BlocksService {
                 clientBaseVersion: batchBlockDto.baseVersion,
               },
             ],
+            results: [],
+          });
+          await this.saveBatchReceipt({
+            manager,
+            docId: batchBlockDto.docId,
+            clientBatchId: acceptedBatchId,
+            requestFingerprint,
+            response,
+            userId,
+            now: appliedAt,
+          });
+          return {
+            response,
+            replayed: false,
+            createDeleteCompensations: [],
           };
         }
 
         if (!shouldCreateVersion && clientDraftRevision !== serverDraftRevision) {
-          return {
-            results: [],
+          const response = this.buildBatchResponse({
+            acceptedBatchId,
+            appliedAt,
             serverHead: docInTx.head,
-            successCount: 0,
-            needsReload: true,
             draftRevision: serverDraftRevision,
-            createDeleteCompensations: [],
+            needsReload: true,
             conflicts: [
               {
                 code: "DRAFT_REVISION_MISMATCH",
@@ -1025,7 +1243,126 @@ export class BlocksService {
                 clientDraftRevision,
               },
             ],
+            results: [],
+          });
+          await this.saveBatchReceipt({
+            manager,
+            docId: batchBlockDto.docId,
+            clientBatchId: acceptedBatchId,
+            requestFingerprint,
+            response,
+            userId,
+            now: appliedAt,
+          });
+          return {
+            response,
+            replayed: false,
+            createDeleteCompensations: [],
           };
+        }
+
+        const currentSyncSession = await this.getCurrentDocumentSyncSession(
+          manager,
+          batchBlockDto.docId,
+        );
+        if (currentSyncSession) {
+          if (!batchBlockDto.sessionId || typeof batchBlockDto.sessionEpoch !== "number") {
+            const response = this.buildBatchResponse({
+              acceptedBatchId,
+              appliedAt,
+              serverHead: docInTx.head,
+              draftRevision: serverDraftRevision,
+              needsReload: true,
+              conflicts: [
+                {
+                  code: "SYNC_SESSION_REQUIRED",
+                  message: "sessionId and sessionEpoch are required for sync batch writes",
+                  serverHead: docInTx.head,
+                },
+              ],
+              results: [],
+            });
+            await this.saveBatchReceipt({
+              manager,
+              docId: batchBlockDto.docId,
+              clientBatchId: acceptedBatchId,
+              requestFingerprint,
+              response,
+              userId,
+              now: appliedAt,
+            });
+            return {
+              response,
+              replayed: false,
+              createDeleteCompensations: [],
+            };
+          }
+          if (
+            currentSyncSession.sessionId !== batchBlockDto.sessionId ||
+            currentSyncSession.sessionEpoch !== batchBlockDto.sessionEpoch
+          ) {
+            const response = this.buildBatchResponse({
+              acceptedBatchId,
+              appliedAt,
+              serverHead: docInTx.head,
+              draftRevision: serverDraftRevision,
+              needsReload: true,
+              conflicts: [
+                {
+                  code: "SYNC_SESSION_MISMATCH",
+                  message: "sync session is stale, please reload the document",
+                  serverHead: docInTx.head,
+                },
+              ],
+              results: [],
+            });
+            await this.saveBatchReceipt({
+              manager,
+              docId: batchBlockDto.docId,
+              clientBatchId: acceptedBatchId,
+              requestFingerprint,
+              response,
+              userId,
+              now: appliedAt,
+            });
+            return {
+              response,
+              replayed: false,
+              createDeleteCompensations: [],
+            };
+          }
+          if (currentSyncSession.leaseExpiresAt < Date.now()) {
+            const response = this.buildBatchResponse({
+              acceptedBatchId,
+              appliedAt,
+              serverHead: docInTx.head,
+              draftRevision: serverDraftRevision,
+              needsReload: true,
+              conflicts: [
+                {
+                  code: "SYNC_SESSION_EXPIRED",
+                  message: "sync session lease expired, please reload the document",
+                  serverHead: docInTx.head,
+                },
+              ],
+              results: [],
+            });
+            await this.saveBatchReceipt({
+              manager,
+              docId: batchBlockDto.docId,
+              clientBatchId: acceptedBatchId,
+              requestFingerprint,
+              response,
+              userId,
+              now: appliedAt,
+            });
+            return {
+              response,
+              replayed: false,
+              createDeleteCompensations: [],
+            };
+          }
+          await this.refreshDocumentSyncSessionLease(manager, currentSyncSession);
         }
 
         const results: SyncOperationResultDto[] = [];
@@ -1152,7 +1489,8 @@ export class BlocksService {
         }
 
         const successCount = results.filter((item) => item.success).length;
-        if (shouldCreateVersion && successCount > 0) {
+        const hasFailures = results.some((item) => !item.success);
+        if (shouldCreateVersion && successCount > 0 && !hasFailures) {
           await this.incrementDocumentHead(batchBlockDto.docId, userId, manager);
         } else if (!shouldCreateVersion && draftMutations.length > 0) {
           await this.documentDraftService.ensureDraftForMutation(
@@ -1190,32 +1528,49 @@ export class BlocksService {
           select: ["head"],
         });
 
-        return {
-          results,
+        const response = this.buildBatchResponse({
+          acceptedBatchId,
+          appliedAt,
           serverHead: docAfterBatch?.head ?? docInTx.head,
-          successCount,
-          needsReload: false,
           draftRevision,
+          ...(!hasFailures && typeof batchBlockDto.ackedThroughOpSeq === "number"
+            ? { ackedThroughOpSeq: batchBlockDto.ackedThroughOpSeq }
+            : {}),
+          needsReload: false,
           conflicts: [],
+          results,
+        });
+        await this.saveBatchReceipt({
+          manager,
+          docId: batchBlockDto.docId,
+          clientBatchId: acceptedBatchId,
+          requestFingerprint,
+          response,
+          userId,
+          now,
+        });
+        if (currentSyncSession && !hasFailures) {
+          await this.advanceDocumentSyncSessionAck(
+            manager,
+            currentSyncSession,
+            (batchBlockDto as BatchBlockDto & { ackedThroughOpSeq?: number }).ackedThroughOpSeq,
+          );
+        }
+
+        return {
+          response,
+          replayed: false,
           createDeleteCompensations,
         };
       },
     );
 
-    if (txResult.needsReload) {
-      return {
-        acceptedBatchId,
-        appliedAt: Date.now(),
-        serverHead: txResult.serverHead,
-        draftRevision: txResult.draftRevision,
-        needsReload: true,
-        conflicts: txResult.conflicts,
-        results: [],
-      };
+    if (txResult.response.needsReload || txResult.replayed) {
+      return txResult.response;
     }
 
     this.logger.log(
-      `sync batch: docId=${batchBlockDto.docId}, clientBatchId=${acceptedBatchId}, source=${batchBlockDto.source ?? "unknown"}, operations=${batchBlockDto.operations.length}, serverHead=${txResult.serverHead}`,
+      `sync batch: docId=${batchBlockDto.docId}, clientBatchId=${acceptedBatchId}, source=${batchBlockDto.source ?? "unknown"}, operations=${batchBlockDto.operations.length}, serverHead=${txResult.response.serverHead}`,
     );
     if (txResult.createDeleteCompensations.length > 0) {
       const examples = txResult.createDeleteCompensations.slice(0, 5).map((item) => ({
@@ -1247,13 +1602,7 @@ export class BlocksService {
       );
 
     return {
-      acceptedBatchId,
-      appliedAt: Date.now(),
-      serverHead: txResult.serverHead,
-      draftRevision: txResult.draftRevision,
-      needsReload: false,
-      conflicts: [],
-      results: txResult.results,
+      ...txResult.response,
     };
   }
 
@@ -1376,23 +1725,42 @@ export class BlocksService {
   ): Promise<BlockVersion | null> {
     if (!syncCreateId && (!clientBatchId || !clientId)) return null;
 
-    const latestVersions = await manager
+    if (syncCreateId) {
+      const matchedBySyncCreateId = await manager
+        .getRepository(BlockVersion)
+        .createQueryBuilder("bv")
+        .innerJoin(Block, "b", "b.blockId = bv.blockId AND b.latestVer = bv.ver")
+        .where("bv.docId = :docId", { docId })
+        .andWhere("b.isDeleted = false")
+        .andWhere(this.buildPayloadAttrEqualsCondition("bv", "syncCreateId", "syncCreateId"), {
+          syncCreateId,
+        })
+        .getOne();
+      if (matchedBySyncCreateId) {
+        return matchedBySyncCreateId;
+      }
+    }
+
+    if (!clientBatchId || !clientId) {
+      return null;
+    }
+
+    return manager
       .getRepository(BlockVersion)
       .createQueryBuilder("bv")
       .innerJoin(Block, "b", "b.blockId = bv.blockId AND b.latestVer = bv.ver")
       .where("bv.docId = :docId", { docId })
       .andWhere("b.isDeleted = false")
-      .getMany();
-
-    return (
-      latestVersions.find((version) => {
-        const attrs = (version.payload as { attrs?: Record<string, unknown> } | undefined)?.attrs;
-        if (syncCreateId && attrs?.syncCreateId === syncCreateId) {
-          return true;
-        }
-        return attrs?.clientBatchId === clientBatchId && attrs?.clientId === clientId;
-      }) ?? null
-    );
+      .andWhere(
+        this.buildPayloadAttrEqualsCondition("bv", "clientBatchId", "clientBatchId"),
+        {
+          clientBatchId,
+        },
+      )
+      .andWhere(this.buildPayloadAttrEqualsCondition("bv", "clientId", "clientId"), {
+        clientId,
+      })
+      .getOne();
   }
 
   private async handleBatchUpdate(
@@ -1557,14 +1925,17 @@ export class BlocksService {
     blockId: string,
     currentLatestVer: number,
   ): Promise<number> {
-    const allVersions = await manager.find(BlockVersion, {
-      where: { docId, blockId },
-      select: ["ver"],
-    });
-    const maxHistoricalVer = allVersions.reduce((max, version) => {
-      const ver = typeof version.ver === "number" ? version.ver : Number(version.ver);
-      return Number.isFinite(ver) && ver > max ? ver : max;
-    }, currentLatestVer);
+    const raw = await manager
+      .getRepository(BlockVersion)
+      .createQueryBuilder("bv")
+      .select("MAX(bv.ver)", "maxVer")
+      .where("bv.docId = :docId", { docId })
+      .andWhere("bv.blockId = :blockId", { blockId })
+      .getRawOne<{ maxVer?: number | string | null }>();
+    const maxHistoricalVer = Math.max(
+      currentLatestVer,
+      Number.isFinite(Number(raw?.maxVer)) ? Number(raw?.maxVer) : currentLatestVer,
+    );
     return maxHistoricalVer + 1;
   }
 

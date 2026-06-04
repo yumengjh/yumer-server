@@ -104,6 +104,12 @@ describe("DocumentsController", () => {
       source: "draft",
       head: 3,
       publishedHead: 2,
+      syncSession: {
+        sessionId: "session_1",
+        sessionEpoch: 1,
+        leaseExpiresAt: "2026-06-04T23:30:00.000Z",
+        lastAckedOpSeq: null,
+      },
       editorState: {
         mode: "edit",
         lastEditPosition: {
@@ -123,6 +129,10 @@ describe("DocumentsController", () => {
       }),
     ).resolves.toMatchObject({
       source: "draft",
+      syncSession: {
+        sessionId: "session_1",
+        sessionEpoch: 1,
+      },
       editorState: {
         mode: "edit",
         lastEditPosition: {
@@ -179,14 +189,76 @@ describe("DocumentsController", () => {
     });
 
     await expect(
-      controller.discardDraft("doc_1", {
-        userId: "user_1",
-      }),
+      controller.discardDraft(
+        "doc_1",
+        {} as any,
+        {
+          userId: "user_1",
+        },
+      ),
     ).resolves.toEqual({
       docId: "doc_1",
       discarded: true,
       fallbackSource: "head",
     });
+  });
+
+  it("passes optional sync session metadata when discarding a draft", async () => {
+    documentsService.discardDraft.mockResolvedValue({
+      docId: "doc_1",
+      discarded: true,
+      fallbackSource: "head",
+    });
+
+    await controller.discardDraft(
+      "doc_1",
+      {
+        sessionId: "session_1",
+        sessionEpoch: 2,
+      } as any,
+      { userId: "user_1" },
+    );
+
+    expect(documentsService.discardDraft).toHaveBeenCalledWith(
+      "doc_1",
+      "user_1",
+      expect.objectContaining({
+        sessionId: "session_1",
+        sessionEpoch: 2,
+      }),
+    );
+  });
+
+  it("passes optional sync session metadata when committing a version", async () => {
+    documentsService.commitVersion = jest.fn().mockResolvedValue({
+      docId: "doc_1",
+      version: 5,
+      draftRevision: 8,
+      committed: true,
+      draftRemoved: true,
+    });
+
+    await controller.commitVersion(
+      "doc_1",
+      {
+        message: "手动保存",
+        sessionId: "session_1",
+        sessionEpoch: 3,
+        ackedThroughOpSeq: 42,
+      } as any,
+      { userId: "user_1" },
+    );
+
+    expect(documentsService.commitVersion).toHaveBeenCalledWith(
+      "doc_1",
+      "手动保存",
+      "user_1",
+      expect.objectContaining({
+        sessionId: "session_1",
+        sessionEpoch: 3,
+        ackedThroughOpSeq: 42,
+      }),
+    );
   });
 
   it("returns a download response for document export", async () => {

@@ -15,6 +15,7 @@ import { ActivitiesService } from "../activities/activities.service";
 
 describe("DocumentsService", () => {
   const originalFetch = global.fetch;
+  const syncSessions: Array<Record<string, unknown>> = [];
   const documentRepository = {
     findOne: jest.fn(),
     save: jest.fn(),
@@ -52,6 +53,31 @@ describe("DocumentsService", () => {
   const docSnapshotRepository = {} as Repository<DocSnapshot>;
   const tagRepository = {} as Repository<Tag>;
   const dataSource = {
+    getRepository: jest.fn((entity: { name?: string }) => {
+      if (entity?.name === "DocumentSyncSession") {
+        return {
+          findOne: jest.fn(async ({ where }: { where?: Record<string, unknown> }) => {
+            return (
+              syncSessions.find((item) =>
+                Object.entries(where ?? {}).every(([key, value]) => item[key] === value),
+              ) ?? null
+            );
+          }),
+          create: jest.fn((value) => ({ ...value })),
+          save: jest.fn(async (value) => {
+            const index = syncSessions.findIndex((item) => item.docId === value.docId);
+            if (index >= 0) syncSessions[index] = { ...syncSessions[index], ...value };
+            else syncSessions.push({ ...value });
+            return value;
+          }),
+        };
+      }
+      return {
+        findOne: jest.fn(),
+        create: jest.fn((value) => value),
+        save: jest.fn(async (value) => value),
+      };
+    }),
     transaction: jest.fn(),
   } as unknown as DataSource;
   const workspacesService = {
@@ -70,6 +96,7 @@ describe("DocumentsService", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    syncSessions.length = 0;
     global.fetch = originalFetch;
     delete process.env.PUBLIC_SITE_REVALIDATE_URL;
     delete process.env.PUBLIC_SITE_REVALIDATE_SECRET;
@@ -148,6 +175,10 @@ describe("DocumentsService", () => {
       (service as any).getEditContent("doc_1", "user_1", undefined, undefined, undefined),
     ).resolves.toMatchObject({
       source: "draft",
+      syncSession: {
+        sessionId: expect.any(String),
+        sessionEpoch: 1,
+      },
       draft: {
         draftRevision: 12,
       },
@@ -295,12 +326,98 @@ describe("DocumentsService", () => {
       discarded: true,
       fallbackSource: "head",
     });
+    syncSessions.push({
+      docId: "doc_1",
+      sessionId: "session_discard_required",
+      sessionEpoch: 1,
+      holderUserId: "user_1",
+      leaseExpiresAt: Date.now() + 60_000,
+      lastAckedOpSeq: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
 
-    await expect((service as any).discardDraft("doc_1", "user_1")).resolves.toEqual({
+    await expect((service as any).discardDraft("doc_1", "user_1")).rejects.toThrow(
+      "SYNC_SESSION_REQUIRED",
+    );
+  });
+
+  it("accepts discardDraft when the current sync session matches", async () => {
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 3,
+      publishedHead: 2,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
+    jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
+    jest.mocked((documentDraftService as any).discardDraft).mockResolvedValue({
       docId: "doc_1",
       discarded: true,
       fallbackSource: "head",
     });
+    syncSessions.push({
+      docId: "doc_1",
+      sessionId: "session_discard_ok",
+      sessionEpoch: 2,
+      holderUserId: "user_1",
+      leaseExpiresAt: Date.now() + 60_000,
+      lastAckedOpSeq: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    await expect(
+      (service as any).discardDraft("doc_1", "user_1", {
+        sessionId: "session_discard_ok",
+        sessionEpoch: 2,
+      }),
+    ).resolves.toEqual({
+      docId: "doc_1",
+      discarded: true,
+      fallbackSource: "head",
+    });
+  });
+
+  it("reuses the same active sync session for repeated loads by the same user", async () => {
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 3,
+      draftRevision: 12,
+      publishedHead: 2,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+      editorState: {
+        mode: "edit",
+      },
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
+    jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
+    jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue(null);
+    jest.spyOn(service as any, "getContentByDocument").mockResolvedValue({
+      tree: { blockId: "root_1", type: "root", children: [] },
+      pagination: { totalBlocks: 1, returnedBlocks: 1, hasMore: false },
+    });
+
+    const first = await (service as any).getEditContent("doc_1", "user_1");
+    const second = await (service as any).getEditContent("doc_1", "user_1");
+
+    expect(first.syncSession.sessionId).toBe(second.syncSession.sessionId);
+    expect(first.syncSession.sessionEpoch).toBe(second.syncSession.sessionEpoch);
   });
 
   it("commits the current draft through POST /documents/:docId/commit", async () => {
@@ -327,13 +444,138 @@ describe("DocumentsService", () => {
       draftRevision: 12,
       draftRemoved: true,
     });
+    syncSessions.push({
+      docId: "doc_1",
+      sessionId: "session_commit_required",
+      sessionEpoch: 3,
+      holderUserId: "user_1",
+      leaseExpiresAt: Date.now() + 60_000,
+      lastAckedOpSeq: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
 
-    await expect(service.commitVersion("doc_1", "manual save", "user_1")).resolves.toMatchObject({
+    await expect(service.commitVersion("doc_1", "manual save", "user_1")).rejects.toThrow(
+      "SYNC_SESSION_REQUIRED",
+    );
+  });
+
+  it("commits when the provided sync session matches the active editor session", async () => {
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 3,
+      publishedHead: 2,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
+    jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
+    jest.mocked((documentDraftService as any).commitDraft).mockResolvedValue({
+      docId: "doc_1",
+      committed: true,
+      version: 4,
+      draftRevision: 12,
+      draftRemoved: true,
+    });
+    syncSessions.push({
+      docId: "doc_1",
+      sessionId: "session_commit_ok",
+      sessionEpoch: 4,
+      holderUserId: "user_1",
+      leaseExpiresAt: Date.now() + 60_000,
+      lastAckedOpSeq: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    await expect(
+      service.commitVersion("doc_1", "manual save", "user_1", {
+        sessionId: "session_commit_ok",
+        sessionEpoch: 4,
+      }),
+    ).resolves.toMatchObject({
       docId: "doc_1",
       committed: true,
       version: 4,
       draftRevision: 12,
     });
+  });
+
+  it("rejects commit beyond the server-acknowledged operation cursor", async () => {
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 3,
+      publishedHead: 2,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    syncSessions.push({
+      docId: "doc_1",
+      sessionId: "session_commit_cursor",
+      sessionEpoch: 6,
+      holderUserId: "user_1",
+      leaseExpiresAt: Date.now() + 60_000,
+      lastAckedOpSeq: 8,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    await expect(
+      service.commitVersion("doc_1", "manual save", "user_1", {
+        sessionId: "session_commit_cursor",
+        sessionEpoch: 6,
+        ackedThroughOpSeq: 9,
+      }),
+    ).rejects.toThrow("SYNC_SESSION_ACK_NOT_REACHED");
+    expect((documentDraftService as any).commitDraft).not.toHaveBeenCalled();
+  });
+
+  it("rejects commit when the sync session lease has already expired", async () => {
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 3,
+      publishedHead: 2,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    syncSessions.push({
+      docId: "doc_1",
+      sessionId: "session_expired",
+      sessionEpoch: 5,
+      holderUserId: "user_1",
+      leaseExpiresAt: Date.now() - 1,
+      lastAckedOpSeq: 6,
+      createdAt: Date.now() - 1000,
+      updatedAt: Date.now() - 1000,
+    });
+
+    await expect(
+      service.commitVersion("doc_1", "manual save", "user_1", {
+        sessionId: "session_expired",
+        sessionEpoch: 5,
+      }),
+    ).rejects.toThrow("SYNC_SESSION_EXPIRED");
   });
 
   it("preserves draft before revert when requested", async () => {
@@ -595,7 +837,10 @@ describe("DocumentsService", () => {
     );
     expect(first.source).toBe("draft");
 
-    await (service as any).discardDraft("doc_1", "user_1");
+    await (service as any).discardDraft("doc_1", "user_1", {
+      sessionId: first.syncSession.sessionId,
+      sessionEpoch: first.syncSession.sessionEpoch,
+    });
 
     const second = await (service as any).getEditContent(
       "doc_1",

@@ -3,9 +3,12 @@
   IsEnum,
   ValidateNested,
   IsOptional,
+  IsDefined,
   IsString,
   IsNumber,
   IsBoolean,
+  ArrayMinSize,
+  IsNotEmpty,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -124,6 +127,7 @@ export type BatchOperation =
 export class BatchBlockDto {
   @ApiProperty({ description: '文档ID', example: 'doc_1234567890_abc123' })
   @IsString()
+  @IsNotEmpty()
   docId: string;
 
   @ApiProperty({
@@ -139,6 +143,7 @@ export class BatchBlockDto {
     },
   })
   @IsArray()
+  @ArrayMinSize(1)
   @ValidateNested({ each: true })
   @Type(() => Object, {
     discriminator: {
@@ -163,11 +168,11 @@ export class BatchBlockDto {
   @IsBoolean()
   createVersion?: boolean;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     description: '客户端所基于的文档版本号',
     example: 3,
   })
-  @IsOptional()
+  @IsDefined()
   @IsNumber()
   baseVersion?: number;
 
@@ -179,12 +184,13 @@ export class BatchBlockDto {
   @IsNumber()
   draftRevision?: number;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     description: '客户端批次ID（用于幂等和 ack 对应）',
     example: 'batch_20260519_001',
   })
-  @IsOptional()
+  @IsDefined()
   @IsString()
+  @IsNotEmpty()
   clientBatchId?: string;
 
   @ApiPropertyOptional({
@@ -195,4 +201,29 @@ export class BatchBlockDto {
   @IsOptional()
   @IsEnum(BatchSourceType)
   source?: BatchSourceType;
+
+  @ApiPropertyOptional({
+    description: '当前编辑会话ID（session skeleton）',
+    example: 'session_20260604_001',
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  sessionId?: string;
+
+  @ApiPropertyOptional({
+    description: '当前编辑会话纪元（session skeleton）',
+    example: 1,
+  })
+  @IsOptional()
+  @IsNumber()
+  sessionEpoch?: number;
+
+  @ApiPropertyOptional({
+    description: '本批次已覆盖到的客户端操作序号高水位',
+    example: 42,
+  })
+  @IsOptional()
+  @IsNumber()
+  ackedThroughOpSeq?: number;
 }

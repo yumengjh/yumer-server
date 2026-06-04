@@ -1,0 +1,51 @@
+import { Column, Entity, Index, PrimaryGeneratedColumn } from "typeorm";
+import { isSqlite } from "../common/db-type";
+
+@Entity("sync_batch_receipts")
+@Index(["docId", "clientBatchId"], { unique: true })
+export class SyncBatchReceipt {
+  @PrimaryGeneratedColumn()
+  id: number;
+
+  @Column()
+  docId: string;
+
+  @Column({ length: 120 })
+  clientBatchId: string;
+
+  @Column({ type: isSqlite() ? "text" : "text" })
+  requestFingerprint: string;
+
+  @Column({ length: 120 })
+  acceptedBatchId: string;
+
+  @Column({ type: "bigint" })
+  appliedAt: number;
+
+  @Column()
+  serverHead: number;
+
+  @Column()
+  draftRevision: number;
+
+  @Column({ type: "bigint", nullable: true })
+  ackedThroughOpSeq: number | null;
+
+  @Column({ default: false })
+  needsReload: boolean;
+
+  @Column({ type: isSqlite() ? "simple-json" : "jsonb" })
+  conflicts: Array<Record<string, unknown>>;
+
+  @Column({ type: isSqlite() ? "simple-json" : "jsonb" })
+  results: Array<Record<string, unknown>>;
+
+  @Column()
+  createdBy: string;
+
+  @Column({ type: "bigint" })
+  createdAt: number;
+
+  @Column({ type: "bigint" })
+  updatedAt: number;
+}

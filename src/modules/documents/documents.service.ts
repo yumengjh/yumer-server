@@ -14,6 +14,7 @@ import { Block } from "../../entities/block.entity";
 import { BlockVersion } from "../../entities/block-version.entity";
 import { DocRevision } from "../../entities/doc-revision.entity";
 import { DocSnapshot } from "../../entities/doc-snapshot.entity";
+import { DocumentSyncSession } from "../../entities/document-sync-session.entity";
 import { Tag } from "../../entities/tag.entity";
 import { User } from "../../entities/user.entity";
 import { WorkspacesService } from "../workspaces/workspaces.service";
@@ -85,6 +86,12 @@ type PublishRestoreState = {
   source?: unknown;
 };
 
+type SyncSessionInput = {
+  sessionId?: string;
+  sessionEpoch?: number;
+  ackedThroughOpSeq?: number;
+};
+
 function toSafeISOString(value: unknown): string | null {
   if (value === null || value === undefined) {
     return null;
@@ -116,6 +123,7 @@ function normalizeDocumentEditorState(
 @Injectable()
 export class DocumentsService {
   private readonly logger = new Logger(DocumentsService.name);
+  private readonly syncSessionLeaseMs = 5 * 60 * 1000;
 
   constructor(
     @InjectRepository(Document)
@@ -141,6 +149,92 @@ export class DocumentsService {
     private activitiesService: ActivitiesService,
     private documentRenderService?: DocumentRenderService,
   ) {}
+
+  private getDocumentSyncSessionRepository() {
+    return this.dataSource.getRepository(DocumentSyncSession);
+  }
+
+  private buildSyncSessionResponse(session: DocumentSyncSession) {
+    return {
+      sessionId: session.sessionId,
+      sessionEpoch: session.sessionEpoch,
+      leaseExpiresAt: new Date(session.leaseExpiresAt).toISOString(),
+      lastAckedOpSeq: session.lastAckedOpSeq ?? null,
+    };
+  }
+
+  private async acquireDocumentSyncSession(docId: string, userId: string) {
+    const repo = this.getDocumentSyncSessionRepository();
+    const existing = await repo.findOne({ where: { docId } });
+    const now = Date.now();
+    if (
+      existing &&
+      existing.holderUserId === userId &&
+      existing.leaseExpiresAt >= now
+    ) {
+      existing.leaseExpiresAt = now + this.syncSessionLeaseMs;
+      existing.updatedAt = now;
+      const renewed = await repo.save(existing);
+      return renewed as DocumentSyncSession;
+    }
+    const nextSession = repo.create({
+      ...(existing ? { id: existing.id, createdAt: existing.createdAt } : { createdAt: now }),
+      docId,
+      sessionId: `sync_${randomBytes(12).toString("hex")}`,
+      sessionEpoch: (existing?.sessionEpoch ?? 0) + 1,
+      holderUserId: userId,
+      leaseExpiresAt: now + this.syncSessionLeaseMs,
+      lastAckedOpSeq: existing?.lastAckedOpSeq ?? null,
+      updatedAt: now,
+    });
+    const saved = await repo.save(nextSession);
+    return saved as DocumentSyncSession;
+  }
+
+  private async validateDocumentSyncSession(
+    docId: string,
+    syncSession?: SyncSessionInput,
+  ): Promise<DocumentSyncSession | null> {
+    const repo = this.getDocumentSyncSessionRepository();
+    const current = await repo.findOne({ where: { docId } });
+    if (!current) {
+      if (!syncSession?.sessionId && typeof syncSession?.sessionEpoch !== "number") {
+        return null;
+      }
+      throw new BadRequestException("SYNC_SESSION_MISMATCH");
+    }
+    if (!syncSession?.sessionId || typeof syncSession.sessionEpoch !== "number") {
+      throw new BadRequestException("SYNC_SESSION_REQUIRED");
+    }
+    if (
+      current.sessionId !== syncSession.sessionId ||
+      current.sessionEpoch !== syncSession.sessionEpoch
+    ) {
+      throw new BadRequestException("SYNC_SESSION_MISMATCH");
+    }
+
+    const now = Date.now();
+    if (current.leaseExpiresAt < now) {
+      throw new BadRequestException("SYNC_SESSION_EXPIRED");
+    }
+    current.leaseExpiresAt = now + this.syncSessionLeaseMs;
+    current.updatedAt = now;
+    await repo.save(current);
+    return current;
+  }
+
+  async renewSyncSession(
+    docId: string,
+    userId: string,
+    syncSession: { sessionId?: string; sessionEpoch?: number },
+  ) {
+    await this.assertAccessWithoutViewIncrement(docId, userId);
+    const renewed = await this.validateDocumentSyncSession(docId, syncSession);
+    if (!renewed) {
+      throw new BadRequestException("SYNC_SESSION_REQUIRED");
+    }
+    return this.buildSyncSessionResponse(renewed);
+  }
 
   /**
    * 创建文档
@@ -1065,8 +1159,9 @@ export class DocumentsService {
     startBlockId?: string,
     limit?: number,
   ) {
-    const document = await this.findOne(docId, userId);
+    const document = await this.assertAccessWithoutViewIncrement(docId, userId);
     const draft = await this.documentDraftService.findByDocId(docId);
+    const syncSession = await this.acquireDocumentSyncSession(docId, userId);
 
     if (draft) {
       const result = await this.buildContentTreeFromVersionMap(
@@ -1087,6 +1182,7 @@ export class DocumentsService {
         source: "draft" as const,
         head: document.head,
         publishedHead: document.publishedHead,
+        syncSession: this.buildSyncSessionResponse(syncSession),
         editorState: normalizeDocumentEditorState(document.editorState),
         draft: {
           exists: true,
@@ -1125,6 +1221,7 @@ export class DocumentsService {
       source: "head" as const,
       head: document.head,
       publishedHead: document.publishedHead,
+      syncSession: this.buildSyncSessionResponse(syncSession),
       editorState: normalizeDocumentEditorState(document.editorState),
       draft: {
         exists: false,
@@ -1144,9 +1241,14 @@ export class DocumentsService {
     };
   }
 
-  async discardDraft(docId: string, userId: string) {
-    const document = await this.findOne(docId, userId);
+  async discardDraft(
+    docId: string,
+    userId: string,
+    syncSession?: { sessionId?: string; sessionEpoch?: number },
+  ) {
+    const document = await this.assertAccessWithoutViewIncrement(docId, userId);
     await this.checkDocumentEditPermission(document, userId);
+    await this.validateDocumentSyncSession(docId, syncSession);
     return this.documentDraftService.discardDraft(docId);
   }
 
@@ -1969,9 +2071,25 @@ export class DocumentsService {
   /**
    * ????????????????????
    */
-  async commitVersion(docId: string, message: string | undefined, userId: string) {
-    const document = await this.findOne(docId, userId);
+  async commitVersion(
+    docId: string,
+    message: string | undefined,
+    userId: string,
+    syncSession?: {
+      sessionId?: string;
+      sessionEpoch?: number;
+      ackedThroughOpSeq?: number;
+    },
+  ) {
+    const document = await this.assertAccessWithoutViewIncrement(docId, userId);
     await this.checkDocumentEditPermission(document, userId);
+    const activeSession = await this.validateDocumentSyncSession(docId, syncSession);
+    if (
+      typeof syncSession?.ackedThroughOpSeq === "number" &&
+      syncSession.ackedThroughOpSeq > (activeSession?.lastAckedOpSeq ?? 0)
+    ) {
+      throw new BadRequestException("SYNC_SESSION_ACK_NOT_REACHED");
+    }
     return this.documentDraftService.commitDraft(docId, userId, message);
   }
 

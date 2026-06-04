@@ -1,4 +1,6 @@
 /* cspell:words AUTOSYNC */
+import fs from "node:fs";
+import path from "node:path";
 import { Logger } from "@nestjs/common";
 import { BlocksService } from "./blocks.service";
 import { BatchCreateOperation, BatchOperationType, BatchSourceType } from "./dto/batch-block.dto";
@@ -6,12 +8,15 @@ import { CreateBlockDto } from "./dto/create-block.dto";
 import { MoveBlockDto } from "./dto/move-block.dto";
 import { Block } from "../../entities/block.entity";
 import { BlockVersion } from "../../entities/block-version.entity";
+import { DocRevision } from "../../entities/doc-revision.entity";
 import { Document } from "../../entities/document.entity";
+import { DocumentSyncSession } from "../../entities/document-sync-session.entity";
+import { SyncBatchReceipt } from "../../entities/sync-batch-receipt.entity";
 
 type PersistedValue = Partial<Block> & Partial<BlockVersion> & Partial<Document>;
 type BlocksServiceConstructorArgs = ConstructorParameters<typeof BlocksService>;
 
-function createBlocksServiceWithInMemoryRepositories() {
+function createBlocksServiceWithInMemoryRepositories(config?: { throwOnLatestVersionsGetMany?: boolean }) {
   const doc = {
     docId: "doc_1",
     rootBlockId: "root_1",
@@ -42,6 +47,9 @@ function createBlocksServiceWithInMemoryRepositories() {
       refs: [],
     },
   ];
+  const revisions: Array<Record<string, unknown>> = [];
+  const receipts: Array<Record<string, unknown>> = [];
+  const syncSessions: Array<Record<string, unknown>> = [];
 
   const manager = {
     create: (_entity: unknown, value: Record<string, unknown>) => ({
@@ -104,9 +112,48 @@ function createBlocksServiceWithInMemoryRepositories() {
       return [];
     },
     getRepository: (entity: unknown) => ({
+      create: (value: Record<string, unknown>) => ({ ...value }),
+      save: async (value: Record<string, unknown>) => {
+        if (entity === DocRevision) {
+          revisions.push(value);
+        }
+        if ((entity as { name?: string })?.name === "SyncBatchReceipt") {
+          const index = receipts.findIndex(
+            (item) =>
+              item.docId === value.docId && item.clientBatchId === value.clientBatchId,
+          );
+          if (index >= 0) receipts[index] = { ...receipts[index], ...value };
+          else receipts.push(value);
+        }
+        if ((entity as { name?: string })?.name === "DocumentSyncSession") {
+          const index = syncSessions.findIndex((item) => item.docId === value.docId);
+          if (index >= 0) syncSessions[index] = { ...syncSessions[index], ...value };
+          else syncSessions.push(value);
+        }
+        return value;
+      },
+      findOne: async (options: { where?: Record<string, unknown> }) => {
+        const where = options.where ?? {};
+        if ((entity as { name?: string })?.name === "SyncBatchReceipt") {
+          return (
+            receipts.find((item) =>
+              Object.entries(where).every(([key, value]) => item[key] === value),
+            ) ?? null
+          );
+        }
+        if ((entity as { name?: string })?.name === "DocumentSyncSession") {
+          return (
+            syncSessions.find((item) =>
+              Object.entries(where).every(([key, value]) => item[key] === value),
+            ) ?? null
+          );
+        }
+        return null;
+      },
       createQueryBuilder: () => {
         const params: Record<string, unknown> = {};
         const query = {
+          select: () => query,
           setLock: () => query,
           where: (_condition: string, values?: Record<string, unknown>) => {
             Object.assign(params, values);
@@ -128,13 +175,35 @@ function createBlocksServiceWithInMemoryRepositories() {
                   version.docId === params.docId &&
                   block?.latestVer === version.ver &&
                   block.isDeleted === false &&
-                  attrs.clientBatchId === params.clientBatchId &&
-                  attrs.clientId === params.clientId
+                  ((typeof params.syncCreateId === "string" &&
+                    attrs.syncCreateId === params.syncCreateId) ||
+                    (typeof params.clientBatchId === "string" &&
+                      typeof params.clientId === "string" &&
+                      attrs.clientBatchId === params.clientBatchId &&
+                      attrs.clientId === params.clientId))
                 );
               }) ?? null
             );
           },
-          getMany: async () => versions,
+          getRawOne: async () => {
+            if (entity !== BlockVersion) return null;
+            const matched = versions.filter(
+              (item) => item.docId === params.docId && item.blockId === params.blockId,
+            );
+            const maxVer = matched.reduce((max, item) => Math.max(max, Number(item.ver ?? 0)), 0);
+            return { maxVer };
+          },
+          getMany: async () => {
+            if (
+              config?.throwOnLatestVersionsGetMany &&
+              entity === BlockVersion &&
+              typeof params.docId === "string" &&
+              typeof params.parentId !== "string"
+            ) {
+              throw new Error("latest version full scan is disabled in this test");
+            }
+            return versions;
+          },
         };
         return query;
       },
@@ -213,11 +282,332 @@ function createBlocksServiceWithInMemoryRepositories() {
     } as unknown as BlocksServiceConstructorArgs[7],
   );
 
-  return { service, blocks, versions };
+  return { service, blocks, versions, syncSessions };
 }
 
 describe("BlocksService sync idempotency", () => {
-  it("rejects a stale same-batch replay without creating a second block", async () => {
+  it("replays the stored response for the same clientBatchId", async () => {
+    const { service, blocks } = createBlocksServiceWithInMemoryRepositories();
+
+    const batch = {
+      docId: "doc_1",
+      baseVersion: 1,
+      clientBatchId: "batch_replay_same_key",
+      source: BatchSourceType.AUTOSYNC,
+      createVersion: true,
+      operations: [
+        {
+          type: BatchOperationType.CREATE,
+          clientId: "client_replay",
+          data: {
+            docId: "doc_1",
+            type: "paragraph",
+            parentId: "root_1",
+            sortKey: "001500",
+            payload: {
+              type: "paragraph",
+            },
+          },
+        } satisfies BatchCreateOperation,
+      ],
+    };
+
+    const first = await service.batch(batch, "user_1");
+    const second = await service.batch(batch, "user_1");
+
+    expect(first.needsReload).toBe(false);
+    expect(first.acceptedBatchId).toBe("batch_replay_same_key");
+    expect(first.serverHead).toBe(2);
+    expect(second).toEqual(first);
+    expect(blocks.filter((block) => block.type === "paragraph")).toHaveLength(1);
+  });
+
+  it("rejects reused clientBatchId with a different request fingerprint", async () => {
+    const { service, blocks } = createBlocksServiceWithInMemoryRepositories();
+
+    await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        clientBatchId: "batch_reused_with_different_body",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: true,
+        operations: [
+          {
+            type: BatchOperationType.CREATE,
+            clientId: "client_reused",
+            data: {
+              docId: "doc_1",
+              type: "paragraph",
+              parentId: "root_1",
+              sortKey: "001500",
+              payload: {
+                type: "paragraph",
+              },
+            },
+          } satisfies BatchCreateOperation,
+        ],
+      },
+      "user_1",
+    );
+
+    const response = await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        clientBatchId: "batch_reused_with_different_body",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: true,
+        operations: [
+          {
+            type: BatchOperationType.CREATE,
+            clientId: "client_reused",
+            data: {
+              docId: "doc_1",
+              type: "heading",
+              parentId: "root_1",
+              sortKey: "001500",
+              payload: {
+                type: "heading",
+                attrs: { level: 2 },
+              },
+            },
+          } satisfies BatchCreateOperation,
+        ],
+      },
+      "user_1",
+    );
+
+    expect(response.needsReload).toBe(true);
+    expect(response.conflicts).toEqual([
+      expect.objectContaining({ code: "CLIENT_BATCH_ID_REUSED" }),
+    ]);
+    expect(blocks.filter((block) => block.type !== "root")).toHaveLength(1);
+  });
+
+  it("reuses syncCreateId without relying on a latest-version full scan", async () => {
+    const { service } = createBlocksServiceWithInMemoryRepositories({
+      throwOnLatestVersionsGetMany: true,
+    });
+
+    const first = await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        draftRevision: 0,
+        clientBatchId: "batch_sync_create_first",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.CREATE,
+            clientId: "client_sync_create",
+            syncCreateId: "sync-create:client_sync_create",
+            data: {
+              docId: "doc_1",
+              type: "paragraph",
+              parentId: "root_1",
+              sortKey: "001500",
+              payload: {
+                type: "paragraph",
+                attrs: { clientId: "client_sync_create" },
+              },
+            },
+          } satisfies BatchCreateOperation,
+        ],
+      },
+      "user_1",
+    );
+
+    const second = await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        draftRevision: first.draftRevision,
+        clientBatchId: "batch_sync_create_retry",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.CREATE,
+            clientId: "client_sync_create",
+            syncCreateId: "sync-create:client_sync_create",
+            data: {
+              docId: "doc_1",
+              type: "paragraph",
+              parentId: "root_1",
+              sortKey: "001500",
+              payload: {
+                type: "paragraph",
+                attrs: { clientId: "client_sync_create" },
+              },
+            },
+          } satisfies BatchCreateOperation,
+        ],
+      },
+      "user_1",
+    );
+
+    expect(first.needsReload).toBe(false);
+    expect(second.needsReload).toBe(false);
+    expect(second.results[0]).toEqual(
+      expect.objectContaining({
+        operation: BatchOperationType.CREATE,
+        success: true,
+        clientId: "client_sync_create",
+      }),
+    );
+    expect(second.results[0].blockId).toBe(first.results[0].blockId);
+  });
+
+  it("rejects batch writes when baseVersion is missing", async () => {
+    const { service, blocks } = createBlocksServiceWithInMemoryRepositories();
+    jest.spyOn(service as any, "getCurrentDocumentSyncSession").mockResolvedValue({
+      docId: "doc_1",
+      sessionId: "session_required",
+      sessionEpoch: 1,
+      holderUserId: "user_1",
+      leaseExpiresAt: Date.now() + 60_000,
+      lastAckedOpSeq: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const response = await service.batch(
+      {
+        docId: "doc_1",
+        clientBatchId: "batch_missing_base_version",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.CREATE,
+            clientId: "client_missing_base",
+            data: {
+              docId: "doc_1",
+              type: "paragraph",
+              parentId: "root_1",
+              sortKey: "001500",
+              payload: {
+                type: "paragraph",
+              },
+            },
+          } satisfies BatchCreateOperation,
+        ],
+      } as any,
+      "user_1",
+    );
+
+    expect(response.needsReload).toBe(true);
+    expect(response.conflicts).toEqual([
+      expect.objectContaining({ code: "BASE_VERSION_REQUIRED" }),
+    ]);
+    expect(blocks.filter((block) => block.type === "paragraph")).toHaveLength(0);
+  });
+
+  it("guards batch writes behind sync session validation", () => {
+    const source = fs.readFileSync(
+      path.resolve(process.cwd(), "src/modules/blocks/blocks.service.ts"),
+      "utf8",
+    );
+
+    expect(source).toContain('code: "SYNC_SESSION_REQUIRED"');
+    expect(source).toContain("sessionId and sessionEpoch are required for sync batch writes");
+    expect(source).toContain('code: "SYNC_SESSION_MISMATCH"');
+  });
+
+  it("stores the batch ack high watermark in the active sync session", async () => {
+    const { service, syncSessions } = createBlocksServiceWithInMemoryRepositories();
+    syncSessions.push({
+      docId: "doc_1",
+      sessionId: "session_ack",
+      sessionEpoch: 2,
+      holderUserId: "user_1",
+      leaseExpiresAt: Date.now() + 60_000,
+      lastAckedOpSeq: 3,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const response = await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        draftRevision: 0,
+        clientBatchId: "batch_ack_seq",
+        source: BatchSourceType.AUTOSYNC,
+        sessionId: "session_ack",
+        sessionEpoch: 2,
+        ackedThroughOpSeq: 7,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.CREATE,
+            clientId: "client_ack",
+            data: {
+              docId: "doc_1",
+              type: "paragraph",
+              parentId: "root_1",
+              sortKey: "001500",
+              payload: { type: "paragraph" },
+            },
+          } satisfies BatchCreateOperation,
+        ],
+      } as any,
+      "user_1",
+    );
+
+    expect(syncSessions[0].lastAckedOpSeq).toBe(7);
+    expect(response.ackedThroughOpSeq).toBe(7);
+  });
+
+  it("does not advance head when a versioned batch contains failures", async () => {
+    const { service } = createBlocksServiceWithInMemoryRepositories();
+
+    const response = await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        clientBatchId: "batch_partial_failure",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: true,
+        operations: [
+          {
+            type: BatchOperationType.CREATE,
+            clientId: "client_ok",
+            data: {
+              docId: "doc_1",
+              type: "paragraph",
+              parentId: "root_1",
+              sortKey: "001500",
+              payload: { type: "paragraph" },
+            },
+          } satisfies BatchCreateOperation,
+          {
+            type: BatchOperationType.UPDATE,
+            blockId: "missing_block",
+            data: {
+              payload: {
+                type: "paragraph",
+                content: [{ type: "text", text: "broken" }],
+              },
+            },
+          },
+        ],
+      } as any,
+      "user_1",
+    );
+
+    expect(response.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ operation: BatchOperationType.CREATE, success: true }),
+        expect.objectContaining({ operation: BatchOperationType.UPDATE, success: false }),
+      ]),
+    );
+    expect(response.serverHead).toBe(1);
+  });
+
+  it("replays a same-batch draft write without creating a second block", async () => {
     const { service, blocks } = createBlocksServiceWithInMemoryRepositories();
 
     const batch = {
@@ -248,10 +638,7 @@ describe("BlocksService sync idempotency", () => {
     const second = await service.batch(batch, "user_1");
 
     expect(first.needsReload).toBe(false);
-    expect(second.needsReload).toBe(true);
-    expect(second.conflicts).toEqual([
-      expect.objectContaining({ code: "DRAFT_REVISION_MISMATCH" }),
-    ]);
+    expect(second).toEqual(first);
     expect(blocks.filter((block) => block.type === "paragraph")).toHaveLength(1);
   });
 
