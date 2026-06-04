@@ -168,6 +168,7 @@ export class DocumentDraftService {
     return {
       docId,
       version: newVersion,
+      draftRevision: document.draftRevision ?? 0,
       committed: true,
       draftRemoved: true,
     };

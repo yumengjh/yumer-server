@@ -68,4 +68,66 @@ describe("DocDraft entity wiring", () => {
       incrementDraftRevision.mock.invocationCallOrder[0],
     );
   });
+
+  it("returns the document revision when a draft is committed", async () => {
+    const document = {
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 3,
+      draftRevision: 12,
+      updatedBy: "user_1",
+    };
+    const draft = {
+      docId: "doc_1",
+      draftId: "draft_1",
+      rootBlockId: "root_1",
+      baseDocVer: 3,
+      baseSnapshotId: null,
+      blockVersionMap: { root_1: 1 },
+      changedBlocksCount: 1,
+    };
+    const deleteDraft = jest.fn().mockResolvedValue(undefined);
+    const save = jest.fn().mockImplementation(async (_entity: unknown, value: unknown) => value);
+    const manager = {
+      getRepository: jest.fn((entity: unknown) => {
+        if (entity === Document) {
+          return { findOne: jest.fn().mockResolvedValue(document) };
+        }
+        if (entity === DocDraft) {
+          return {
+            findOne: jest.fn().mockResolvedValue(draft),
+            delete: deleteDraft,
+          };
+        }
+        return {
+          create: jest.fn((value) => value),
+        };
+      }),
+      save,
+    };
+    const dataSource = {
+      options: { type: "better-sqlite3" },
+    };
+    const service = new (DocumentDraftService as any)(
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      dataSource,
+    ) as DocumentDraftService;
+
+    await expect(
+      service.commitDraftWithManager("doc_1", "user_1", "manual save", manager as any),
+    ).resolves.toMatchObject({
+      docId: "doc_1",
+      version: 4,
+      draftRevision: 12,
+      committed: true,
+      draftRemoved: true,
+    });
+    expect(deleteDraft).toHaveBeenCalledWith({ docId: "doc_1" });
+  });
 });

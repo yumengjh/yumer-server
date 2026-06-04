@@ -324,6 +324,7 @@ describe("DocumentsService", () => {
       docId: "doc_1",
       committed: true,
       version: 4,
+      draftRevision: 12,
       draftRemoved: true,
     });
 
@@ -331,6 +332,7 @@ describe("DocumentsService", () => {
       docId: "doc_1",
       committed: true,
       version: 4,
+      draftRevision: 12,
     });
   });
 
