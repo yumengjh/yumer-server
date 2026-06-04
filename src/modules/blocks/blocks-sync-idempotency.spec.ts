@@ -16,6 +16,7 @@ function createBlocksServiceWithInMemoryRepositories() {
     docId: "doc_1",
     rootBlockId: "root_1",
     head: 1,
+    draftRevision: 0,
     workspaceId: "workspace_1",
     updatedBy: "user_1",
   };
@@ -43,7 +44,9 @@ function createBlocksServiceWithInMemoryRepositories() {
   ];
 
   const manager = {
-    create: (_entity: unknown, value: Record<string, unknown>) => ({ ...value }),
+    create: (_entity: unknown, value: Record<string, unknown>) => ({
+      ...value,
+    }),
     save: async (entity: unknown, value: PersistedValue) => {
       if (entity === Block) {
         const index = blocks.findIndex((item) => item.blockId === value.blockId);
@@ -170,19 +173,40 @@ function createBlocksServiceWithInMemoryRepositories() {
     }),
   };
 
+  const draft = {
+    docId: "doc_1",
+    draftId: "draft_1",
+  };
+  let draftExists = false;
+  const pointDraft = async () => {
+    draftExists = true;
+    return draft;
+  };
+
   const service = new BlocksService(
     blockRepository as unknown as BlocksServiceConstructorArgs[0],
     blockVersionRepository as unknown as BlocksServiceConstructorArgs[1],
-    { createSnapshotForRevision: jest.fn() } as unknown as BlocksServiceConstructorArgs[2],
+    {
+      createSnapshotForRevision: jest.fn(),
+    } as unknown as BlocksServiceConstructorArgs[2],
     documentRepository as unknown as BlocksServiceConstructorArgs[3],
     dataSource as unknown as BlocksServiceConstructorArgs[4],
     {
       assertAccessWithoutViewIncrement: jest.fn().mockResolvedValue(undefined),
     } as unknown as BlocksServiceConstructorArgs[5],
     {
-      ensureDraftForMutation: jest.fn().mockResolvedValue({ docId: "doc_1", draftId: "draft_1" }),
-      pointBlockToVersion: jest.fn().mockResolvedValue(undefined),
-      pointBlockToDeletedVersion: jest.fn().mockResolvedValue(undefined),
+      lockDocumentForDraftMutation: jest.fn().mockResolvedValue(doc),
+      findByDocId: jest.fn().mockImplementation(async () => (draftExists ? draft : null)),
+      ensureDraftForMutation: jest.fn().mockImplementation(async () => {
+        draftExists = true;
+        return draft;
+      }),
+      pointBlockToVersion: jest.fn().mockImplementation(pointDraft),
+      pointBlockToDeletedVersion: jest.fn().mockImplementation(pointDraft),
+      incrementDraftRevision: jest.fn().mockImplementation(async () => {
+        doc.draftRevision = (doc.draftRevision ?? 0) + 1;
+        return doc.draftRevision;
+      }),
     } as unknown as BlocksServiceConstructorArgs[6],
     {
       record: jest.fn().mockResolvedValue(undefined),
@@ -193,7 +217,7 @@ function createBlocksServiceWithInMemoryRepositories() {
 }
 
 describe("BlocksService sync idempotency", () => {
-  it("does not create a second block when the same clientBatchId and clientId are replayed", async () => {
+  it("rejects a stale same-batch replay without creating a second block", async () => {
     const { service, blocks } = createBlocksServiceWithInMemoryRepositories();
 
     const batch = {
@@ -211,7 +235,10 @@ describe("BlocksService sync idempotency", () => {
             type: "paragraph",
             parentId: "root_1",
             sortKey: "001500",
-            payload: { type: "paragraph", attrs: { clientId: "client_inserted" } },
+            payload: {
+              type: "paragraph",
+              attrs: { clientId: "client_inserted" },
+            },
           },
         } satisfies BatchCreateOperation,
       ],
@@ -220,11 +247,15 @@ describe("BlocksService sync idempotency", () => {
     const first = await service.batch(batch, "user_1");
     const second = await service.batch(batch, "user_1");
 
-    expect(second.results[0].blockId).toBe(first.results[0].blockId);
+    expect(first.needsReload).toBe(false);
+    expect(second.needsReload).toBe(true);
+    expect(second.conflicts).toEqual([
+      expect.objectContaining({ code: "DRAFT_REVISION_MISMATCH" }),
+    ]);
     expect(blocks.filter((block) => block.type === "paragraph")).toHaveLength(1);
   });
 
-  it("does not create a second block when the same syncCreateId is replayed in another batch", async () => {
+  it("rejects a stale syncCreateId replay without creating a second block", async () => {
     const { service, blocks } = createBlocksServiceWithInMemoryRepositories();
 
     const first = await service.batch(
@@ -244,7 +275,10 @@ describe("BlocksService sync idempotency", () => {
               type: "paragraph",
               parentId: "root_1",
               sortKey: "001500",
-              payload: { type: "paragraph", attrs: { clientId: "client_inserted" } },
+              payload: {
+                type: "paragraph",
+                attrs: { clientId: "client_inserted" },
+              },
             },
           } satisfies BatchCreateOperation,
         ],
@@ -269,7 +303,10 @@ describe("BlocksService sync idempotency", () => {
               type: "paragraph",
               parentId: "root_1",
               sortKey: "001500",
-              payload: { type: "paragraph", attrs: { clientId: "client_inserted" } },
+              payload: {
+                type: "paragraph",
+                attrs: { clientId: "client_inserted" },
+              },
             },
           },
         ],
@@ -277,7 +314,11 @@ describe("BlocksService sync idempotency", () => {
       "user_1",
     );
 
-    expect(second.results[0].blockId).toBe(first.results[0].blockId);
+    expect(first.needsReload).toBe(false);
+    expect(second.needsReload).toBe(true);
+    expect(second.conflicts).toEqual([
+      expect.objectContaining({ code: "DRAFT_REVISION_MISMATCH" }),
+    ]);
     expect(blocks.filter((block) => block.type === "paragraph")).toHaveLength(1);
   });
 
@@ -318,7 +359,10 @@ describe("BlocksService sync idempotency", () => {
             type: "paragraph",
             parentId: "root_1",
             sortKey: "002000",
-            payload: { type: "paragraph", attrs: { clientId: `client_${suffix}` } },
+            payload: {
+              type: "paragraph",
+              attrs: { clientId: `client_${suffix}` },
+            },
           },
         })),
       },
@@ -327,6 +371,7 @@ describe("BlocksService sync idempotency", () => {
 
     const createdSortKeys = response.results.map((result) => result.sortKey);
 
+    expect(response.draftRevision).toBe(1);
     expect(new Set(createdSortKeys).size).toBe(2);
     expect(createdSortKeys.every((sortKey) => sortKey && sortKey < "002000")).toBe(true);
   });
@@ -358,7 +403,10 @@ describe("BlocksService sync idempotency", () => {
         type: "paragraph",
         parentId: "root_1",
         sortKey: "001000",
-        payload: { type: "paragraph", attrs: { clientId: "client_non_batch_create" } },
+        payload: {
+          type: "paragraph",
+          attrs: { clientId: "client_non_batch_create" },
+        },
         createVersion: false,
       } satisfies CreateBlockDto,
       "user_1",
@@ -452,7 +500,10 @@ describe("BlocksService sync idempotency", () => {
               type: "paragraph",
               parentId: "root_1",
               sortKey: "001500",
-              payload: { type: "paragraph", attrs: { clientId: "client_update" } },
+              payload: {
+                type: "paragraph",
+                attrs: { clientId: "client_update" },
+              },
             },
           } satisfies BatchCreateOperation,
         ],
@@ -461,7 +512,9 @@ describe("BlocksService sync idempotency", () => {
     );
 
     const blockId = created.results[0].blockId!;
-    const createdVersion = versions.find((version) => version.blockId === blockId && version.ver === 1);
+    const createdVersion = versions.find(
+      (version) => version.blockId === blockId && version.ver === 1,
+    );
     expect((createdVersion?.payload as { attrs?: Record<string, unknown> })?.attrs).toMatchObject({
       clientId: "client_update",
       syncCreateId: "sync-create:client_update",
@@ -474,6 +527,7 @@ describe("BlocksService sync idempotency", () => {
       {
         docId: "doc_1",
         baseVersion: 1,
+        draftRevision: created.draftRevision,
         clientBatchId: "batch_update",
         source: BatchSourceType.AUTOSYNC,
         createVersion: false,
@@ -541,6 +595,7 @@ describe("BlocksService sync idempotency", () => {
       {
         docId: "doc_1",
         baseVersion: 1,
+        draftRevision: created.draftRevision,
         clientBatchId: "batch_update_stale_sort",
         source: BatchSourceType.AUTOSYNC,
         createVersion: false,
@@ -551,7 +606,10 @@ describe("BlocksService sync idempotency", () => {
             data: {
               payload: {
                 type: "paragraph",
-                attrs: { clientId: "client_sort", sortKey: "stale-client-sort-key" },
+                attrs: {
+                  clientId: "client_sort",
+                  sortKey: "stale-client-sort-key",
+                },
                 content: [{ type: "text", text: "updated" }],
               },
             },
@@ -589,7 +647,10 @@ describe("BlocksService sync idempotency", () => {
               type: "paragraph",
               parentId: "root_1",
               sortKey: "001500",
-              payload: { type: "paragraph", attrs: { clientId: "client_orphan" } },
+              payload: {
+                type: "paragraph",
+                attrs: { clientId: "client_orphan" },
+              },
             },
           } satisfies BatchCreateOperation,
         ],
@@ -602,6 +663,7 @@ describe("BlocksService sync idempotency", () => {
       {
         docId: "doc_1",
         baseVersion: 1,
+        draftRevision: created.draftRevision,
         clientBatchId: "batch_delete_orphan",
         source: BatchSourceType.AUTOSYNC,
         createVersion: false,

@@ -110,6 +110,7 @@ describe("GcSweepService", () => {
     const savedDrafts: DocDraft[] = [];
     const savedBlocks: Array<Record<string, unknown>> = [];
     const savedPoolEntries: Array<Record<string, unknown>> = [];
+    const incrementDraftRevision = jest.fn().mockResolvedValue(undefined);
     const block = {
       blockId: "b_1",
       docId: "doc_1",
@@ -172,6 +173,16 @@ describe("GcSweepService", () => {
           };
         }
 
+        if (entity === Document) {
+          return {
+            increment: incrementDraftRevision,
+            findOne: jest.fn().mockResolvedValue({
+              docId: "doc_1",
+              workspaceId: "ws_1",
+            }),
+          };
+        }
+
         if (entity === GcCandidatePool) {
           return {
             save: jest.fn().mockImplementation(async (value: Record<string, unknown>) => {
@@ -185,6 +196,7 @@ describe("GcSweepService", () => {
       }),
     };
     const dataSource = {
+      options: { type: "better-sqlite3" },
       transaction: jest.fn(async (callback: (transactionManager: never) => Promise<void>) =>
         callback(manager as never),
       ),
@@ -243,6 +255,7 @@ describe("GcSweepService", () => {
       state: "swept",
       lastBlockers: [],
     });
+    expect(incrementDraftRevision).toHaveBeenCalledWith({ docId: "doc_1" }, "draftRevision", 1);
   });
 
   it("marks candidates blocked when fresh revalidation fails", async () => {

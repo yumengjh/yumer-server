@@ -38,6 +38,7 @@ export class DocumentDraftService {
     userId: string,
     manager: EntityManager,
   ): Promise<DocDraft> {
+    await this.lockDocumentForDraftMutation(docId, manager);
     const draftRepository = manager.getRepository(DocDraft);
     const existing = await draftRepository.findOne({ where: { docId } });
     if (existing) return existing;
@@ -74,7 +75,13 @@ export class DocumentDraftService {
   }
 
   async discardDraft(docId: string) {
-    await this.deleteDraft(docId);
+    return this.dataSource.transaction((manager) => this.discardDraftWithManager(docId, manager));
+  }
+
+  async discardDraftWithManager(docId: string, manager: EntityManager) {
+    await this.lockDocumentForDraftMutation(docId, manager);
+    await this.deleteDraft(docId, manager);
+    await this.incrementDraftRevision(docId, manager);
     return {
       docId,
       discarded: true,
@@ -82,13 +89,17 @@ export class DocumentDraftService {
     };
   }
 
-  async discardDraftWithManager(docId: string, manager: EntityManager) {
-    await this.deleteDraft(docId, manager);
-    return {
-      docId,
-      discarded: true,
-      fallbackSource: "head" as const,
-    };
+  async incrementDraftRevision(docId: string, manager: EntityManager): Promise<number> {
+    const documentRepository = manager.getRepository(Document);
+    await documentRepository.increment({ docId }, "draftRevision", 1);
+    const document = await documentRepository.findOne({
+      where: { docId },
+      select: ["draftRevision"],
+    });
+    if (!document) {
+      throw new NotFoundException(`文档 ${docId} 不存在`);
+    }
+    return document.draftRevision;
   }
 
   async commitDraft(docId: string, userId: string, message?: string) {
@@ -103,14 +114,10 @@ export class DocumentDraftService {
     message: string | undefined,
     manager: EntityManager,
   ) {
+    const document = await this.lockDocumentForDraftMutation(docId, manager);
     const draft = await manager.getRepository(DocDraft).findOne({ where: { docId } });
     if (!draft) {
       throw new BadRequestException("没有可提交的草稿");
-    }
-
-    const document = await manager.findOne(Document, { where: { docId } });
-    if (!document) {
-      throw new NotFoundException(`文档 ${docId} 不存在`);
     }
 
     const newVersion = document.head + 1;
@@ -268,5 +275,22 @@ export class DocumentDraftService {
   private async deleteDraft(docId: string, manager?: EntityManager) {
     const repository = manager ? manager.getRepository(DocDraft) : this.docDraftRepository;
     await repository.delete({ docId });
+  }
+
+  async lockDocumentForDraftMutation(
+    docId: string,
+    manager: EntityManager,
+  ): Promise<Document> {
+    const dbType = this.dataSource.options.type;
+    const document = await manager.getRepository(Document).findOne({
+      where: { docId },
+      ...(dbType !== "sqlite" && dbType !== "better-sqlite3"
+        ? { lock: { mode: "pessimistic_write" as const } }
+        : {}),
+    });
+    if (!document) {
+      throw new NotFoundException(`文档 ${docId} 不存在`);
+    }
+    return document;
   }
 }

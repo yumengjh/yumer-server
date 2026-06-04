@@ -97,6 +97,7 @@ describe("DocumentsService", () => {
       workspaceId: "ws_1",
       rootBlockId: "root_1",
       head: 3,
+      draftRevision: 12,
       publishedHead: 2,
       createdBy: "user_1",
       updatedBy: "user_1",
@@ -147,6 +148,9 @@ describe("DocumentsService", () => {
       (service as any).getEditContent("doc_1", "user_1", undefined, undefined, undefined),
     ).resolves.toMatchObject({
       source: "draft",
+      draft: {
+        draftRevision: 12,
+      },
       editorState: {
         mode: "edit",
         lastEditPosition: {
@@ -163,6 +167,7 @@ describe("DocumentsService", () => {
       workspaceId: "ws_1",
       rootBlockId: "root_1",
       head: 3,
+      draftRevision: 12,
       publishedHead: 2,
       createdBy: "user_1",
       updatedBy: "user_1",
@@ -227,6 +232,7 @@ describe("DocumentsService", () => {
       workspaceId: "ws_1",
       rootBlockId: "root_1",
       head: 3,
+      draftRevision: 12,
       publishedHead: 2,
       createdBy: "user_1",
       updatedBy: "user_1",
@@ -253,6 +259,10 @@ describe("DocumentsService", () => {
       (service as any).getEditContent("doc_1", "user_1", undefined, undefined, undefined),
     ).resolves.toMatchObject({
       source: "head",
+      draft: {
+        exists: false,
+        draftRevision: 12,
+      },
       editorState: {
         mode: "view",
         lastEditPosition: {
@@ -380,7 +390,9 @@ describe("DocumentsService", () => {
         .mockReturnValueOnce(blockRepo)
         .mockReturnValueOnce(revRepo),
     };
-    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+    jest
+      .mocked(dataSource.transaction)
+      .mockImplementation(async (callback: any) => callback(manager));
     jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
       snapshotId: "doc_1@snap@7",
     });
@@ -396,7 +408,10 @@ describe("DocumentsService", () => {
     expect(revRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "回退到 v2",
-        opSummary: expect.objectContaining({ revertedFrom: 2, draftStrategy: "preserve" }),
+        opSummary: expect.objectContaining({
+          revertedFrom: 2,
+          draftStrategy: "preserve",
+        }),
       }),
     );
   });
@@ -456,7 +471,9 @@ describe("DocumentsService", () => {
         .mockReturnValueOnce(blockRepo)
         .mockReturnValueOnce(revRepo),
     };
-    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+    jest
+      .mocked(dataSource.transaction)
+      .mockImplementation(async (callback: any) => callback(manager));
     jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
       snapshotId: "doc_1@snap@6",
     });
@@ -468,7 +485,10 @@ describe("DocumentsService", () => {
     expect(revRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "回退到 v2",
-        opSummary: expect.objectContaining({ revertedFrom: 2, draftStrategy: "discard" }),
+        opSummary: expect.objectContaining({
+          revertedFrom: 2,
+          draftStrategy: "discard",
+        }),
       }),
     );
   });
@@ -959,7 +979,9 @@ describe("DocumentsService", () => {
     const manager = {
       getRepository: jest.fn().mockReturnValue(docRepo),
     };
-    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+    jest
+      .mocked(dataSource.transaction)
+      .mockImplementation(async (callback: any) => callback(manager));
 
     const result = await service.publish("doc_36_abcd1234", "user_1");
 
@@ -1023,7 +1045,9 @@ describe("DocumentsService", () => {
     const manager = {
       getRepository: jest.fn().mockReturnValue(docRepo),
     };
-    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+    jest
+      .mocked(dataSource.transaction)
+      .mockImplementation(async (callback: any) => callback(manager));
 
     const result = await service.publish("doc_36_abcd1234", "user_1");
 
@@ -1080,7 +1104,9 @@ describe("DocumentsService", () => {
     const manager = {
       getRepository: jest.fn().mockReturnValue(docRepo),
     };
-    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+    jest
+      .mocked(dataSource.transaction)
+      .mockImplementation(async (callback: any) => callback(manager));
 
     await service.publish("doc_36_abcd1234", "user_1");
 
@@ -1122,7 +1148,9 @@ describe("DocumentsService", () => {
     const manager = {
       getRepository: jest.fn().mockReturnValue(docRepo),
     };
-    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+    jest
+      .mocked(dataSource.transaction)
+      .mockImplementation(async (callback: any) => callback(manager));
 
     await expect(service.publish("doc_36_abcd1234", "user_1")).resolves.toMatchObject({
       document: {
@@ -1175,7 +1203,9 @@ describe("DocumentsService", () => {
     const manager = {
       getRepository: jest.fn().mockReturnValue(docRepo),
     };
-    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+    jest
+      .mocked(dataSource.transaction)
+      .mockImplementation(async (callback: any) => callback(manager));
 
     await expect(service.publish("doc_36_abcd1234", "user_1")).resolves.toMatchObject({
       document: {
@@ -1230,7 +1260,10 @@ describe("DocumentsService", () => {
         ver: 1,
         parentId: "root_1",
         sortKey: "1",
-        payload: { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+        payload: {
+          type: "paragraph",
+          content: [{ type: "text", text: "hello" }],
+        },
       },
     ] as BlockVersion[]);
     documentRenderService.renderTree.mockRejectedValue(new Error("renderer unavailable"));
@@ -1247,7 +1280,10 @@ describe("DocumentsService", () => {
     expect(documentRenderService.renderTree).toHaveBeenCalled();
     expect(result.tree.children[0]).toMatchObject({
       blockId: "b_1",
-      payload: { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+      payload: {
+        type: "paragraph",
+        content: [{ type: "text", text: "hello" }],
+      },
     });
     expect(result.tree.children[0].html).toBeUndefined();
     expect(result.tree.children[0].blockVersionId).toBeUndefined();
@@ -1291,7 +1327,10 @@ describe("DocumentsService", () => {
         ver: 1,
         parentId: "root_1",
         sortKey: "1",
-        payload: { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+        payload: {
+          type: "paragraph",
+          content: [{ type: "text", text: "hello" }],
+        },
       },
     ] as BlockVersion[]);
     documentRenderService.renderTree.mockResolvedValue({
@@ -1303,7 +1342,10 @@ describe("DocumentsService", () => {
           {
             blockId: "b_1",
             type: "paragraph",
-            payload: { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+            payload: {
+              type: "paragraph",
+              content: [{ type: "text", text: "hello" }],
+            },
             html: "<p>hello</p>",
           },
         ],
@@ -1377,7 +1419,10 @@ describe("DocumentsService", () => {
         ver: 1,
         parentId: "root_1",
         sortKey: "1",
-        payload: { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+        payload: {
+          type: "paragraph",
+          content: [{ type: "text", text: "hello" }],
+        },
       },
     ] as BlockVersion[]);
     documentRenderService.renderTree.mockResolvedValue({
@@ -1389,7 +1434,10 @@ describe("DocumentsService", () => {
           {
             blockId: "b_1",
             type: "paragraph",
-            payload: { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+            payload: {
+              type: "paragraph",
+              content: [{ type: "text", text: "hello" }],
+            },
             html: "<p>hello</p>",
           },
         ],
@@ -1463,7 +1511,10 @@ describe("DocumentsService", () => {
         ver: 1,
         parentId: "root_1",
         sortKey: "1",
-        payload: { type: "codeBlock", content: [{ type: "text", text: "const x = 1" }] },
+        payload: {
+          type: "codeBlock",
+          content: [{ type: "text", text: "const x = 1" }],
+        },
       },
     ] as BlockVersion[]);
     documentRenderService.renderTree.mockResolvedValue({
@@ -1475,7 +1526,10 @@ describe("DocumentsService", () => {
           {
             blockId: "code_1",
             type: "codeBlock",
-            payload: { type: "codeBlock", content: [{ type: "text", text: "const x = 1" }] },
+            payload: {
+              type: "codeBlock",
+              content: [{ type: "text", text: "const x = 1" }],
+            },
           },
         ],
       },
@@ -1505,7 +1559,10 @@ describe("DocumentsService", () => {
     expect(result.tree.children[0]).toMatchObject({
       blockId: "code_1",
       type: "codeBlock",
-      payload: { type: "codeBlock", content: [{ type: "text", text: "const x = 1" }] },
+      payload: {
+        type: "codeBlock",
+        content: [{ type: "text", text: "const x = 1" }],
+      },
     });
     expect(result.tree.children[0].html).toBeUndefined();
   });
@@ -1548,7 +1605,10 @@ describe("DocumentsService", () => {
         ver: 1,
         parentId: "root_1",
         sortKey: "1",
-        payload: { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+        payload: {
+          type: "paragraph",
+          content: [{ type: "text", text: "hello" }],
+        },
       },
     ] as BlockVersion[]);
     documentRenderService.renderTree.mockResolvedValue({
@@ -1560,7 +1620,10 @@ describe("DocumentsService", () => {
           {
             blockId: "b_1",
             type: "paragraph",
-            payload: { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+            payload: {
+              type: "paragraph",
+              content: [{ type: "text", text: "hello" }],
+            },
             html: "<p>hello</p>",
           },
         ],
@@ -1592,7 +1655,10 @@ describe("DocumentsService", () => {
       blockId: "b_1",
       type: "paragraph",
       html: "<p>hello</p>",
-      payload: { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+      payload: {
+        type: "paragraph",
+        content: [{ type: "text", text: "hello" }],
+      },
     });
   });
 
@@ -1673,11 +1739,22 @@ describe("DocumentsService", () => {
       map: { root_1: 1, block_1: 2 },
       createdAt: 1690000000000,
     });
-    jest
-      .spyOn(service as any, "buildContentTreeFromVersionMap")
-      .mockResolvedValue({ tree: { blockId: "root_1" }, totalBlocks: 1, returnedBlocks: 1, hasMore: false });
+    jest.spyOn(service as any, "buildContentTreeFromVersionMap").mockResolvedValue({
+      tree: { blockId: "root_1" },
+      totalBlocks: 1,
+      returnedBlocks: 1,
+      hasMore: false,
+    });
     jest.spyOn(service as any, "buildDiff").mockResolvedValue({
-      summary: { added: 0, deleted: 0, modified: 1, moved: 0, reordered: 0, indentChanged: 0, unchanged: 1 },
+      summary: {
+        added: 0,
+        deleted: 0,
+        modified: 1,
+        moved: 0,
+        reordered: 0,
+        indentChanged: 0,
+        unchanged: 1,
+      },
       changes: [{ type: "modified", blockId: "block_1" }],
     });
 
@@ -1689,8 +1766,16 @@ describe("DocumentsService", () => {
 
     expect(result.fromVer).toBe(4);
     expect(result.toVer).toBeNull();
-    expect(result.fromRef).toEqual({ kind: "revision", label: "v4", version: 4 });
-    expect(result.toRef).toEqual({ kind: "draft", label: "draft", version: null });
+    expect(result.fromRef).toEqual({
+      kind: "revision",
+      label: "v4",
+      version: 4,
+    });
+    expect(result.toRef).toEqual({
+      kind: "draft",
+      label: "draft",
+      version: null,
+    });
     expect((documentDraftService as any).findByDocId).toHaveBeenCalledWith("doc_1");
   });
 
@@ -1717,12 +1802,26 @@ describe("DocumentsService", () => {
 
     const getBlockVersionMapForVersion = jest
       .spyOn(service as any, "getBlockVersionMapForVersion")
-      .mockResolvedValue({ map: { root_1: 1, block_1: 2 }, createdAt: 1690000000000 });
-    jest
-      .spyOn(service as any, "buildContentTreeFromVersionMap")
-      .mockResolvedValue({ tree: { blockId: "root_1" }, totalBlocks: 1, returnedBlocks: 1, hasMore: false });
+      .mockResolvedValue({
+        map: { root_1: 1, block_1: 2 },
+        createdAt: 1690000000000,
+      });
+    jest.spyOn(service as any, "buildContentTreeFromVersionMap").mockResolvedValue({
+      tree: { blockId: "root_1" },
+      totalBlocks: 1,
+      returnedBlocks: 1,
+      hasMore: false,
+    });
     jest.spyOn(service as any, "buildDiff").mockResolvedValue({
-      summary: { added: 0, deleted: 0, modified: 1, moved: 0, reordered: 0, indentChanged: 0, unchanged: 1 },
+      summary: {
+        added: 0,
+        deleted: 0,
+        modified: 1,
+        moved: 0,
+        reordered: 0,
+        indentChanged: 0,
+        unchanged: 1,
+      },
       changes: [{ type: "modified", blockId: "block_1" }],
     });
 
@@ -1734,7 +1833,11 @@ describe("DocumentsService", () => {
 
     expect(result.fromVer).toBeNull();
     expect(result.toVer).toBe(5);
-    expect(result.fromRef).toEqual({ kind: "draft", label: "draft", version: null });
+    expect(result.fromRef).toEqual({
+      kind: "draft",
+      label: "draft",
+      version: null,
+    });
     expect(result.toRef).toEqual({ kind: "revision", label: "v5", version: 5 });
     expect(getBlockVersionMapForVersion).toHaveBeenCalledWith("doc_1", 5);
   });
@@ -1787,9 +1890,12 @@ describe("DocumentsService", () => {
       map: { root_1: 1, block_a: 2 },
       createdAt: 1690000000000,
     });
-    jest
-      .spyOn(service as any, "buildContentTreeFromVersionMap")
-      .mockResolvedValue({ tree: { blockId: "root_1" }, totalBlocks: 2, returnedBlocks: 2, hasMore: false });
+    jest.spyOn(service as any, "buildContentTreeFromVersionMap").mockResolvedValue({
+      tree: { blockId: "root_1" },
+      totalBlocks: 2,
+      returnedBlocks: 2,
+      hasMore: false,
+    });
     jest.mocked(blockVersionRepository.find).mockResolvedValue([
       {
         blockId: "root_1",
@@ -1806,7 +1912,11 @@ describe("DocumentsService", () => {
         parentId: "root_1",
         sortKey: "001000",
         indent: 0,
-        payload: { type: "paragraph", attrs: {}, content: [{ type: "text", text: "hello" }] },
+        payload: {
+          type: "paragraph",
+          attrs: {},
+          content: [{ type: "text", text: "hello" }],
+        },
         hash: "same",
       },
       {
@@ -1815,7 +1925,11 @@ describe("DocumentsService", () => {
         parentId: "root_1",
         sortKey: "002000",
         indent: 0,
-        payload: { type: "paragraph", attrs: { deleted: true }, content: [{ type: "text", text: "ghost" }] },
+        payload: {
+          type: "paragraph",
+          attrs: { deleted: true },
+          content: [{ type: "text", text: "ghost" }],
+        },
         hash: "deleted",
       },
     ] as BlockVersion[]);
@@ -1864,9 +1978,12 @@ describe("DocumentsService", () => {
       map: { root_1: 1, block_a: 2 },
       createdAt: 1690000000000,
     });
-    jest
-      .spyOn(service as any, "buildContentTreeFromVersionMap")
-      .mockResolvedValue({ tree: { blockId: "root_1" }, totalBlocks: 2, returnedBlocks: 2, hasMore: false });
+    jest.spyOn(service as any, "buildContentTreeFromVersionMap").mockResolvedValue({
+      tree: { blockId: "root_1" },
+      totalBlocks: 2,
+      returnedBlocks: 2,
+      hasMore: false,
+    });
     jest.mocked(blockVersionRepository.find).mockResolvedValue([
       {
         blockId: "root_1",
@@ -1883,7 +2000,11 @@ describe("DocumentsService", () => {
         parentId: "root_1",
         sortKey: "001000",
         indent: 0,
-        payload: { type: "paragraph", attrs: {}, content: [{ type: "text", text: "hello" }] },
+        payload: {
+          type: "paragraph",
+          attrs: {},
+          content: [{ type: "text", text: "hello" }],
+        },
         hash: "same",
       },
       {
@@ -1892,7 +2013,11 @@ describe("DocumentsService", () => {
         parentId: "root_1",
         sortKey: "001000",
         indent: 0,
-        payload: { type: "paragraph", attrs: { deleted: true }, content: [{ type: "text", text: "hello" }] },
+        payload: {
+          type: "paragraph",
+          attrs: { deleted: true },
+          content: [{ type: "text", text: "hello" }],
+        },
         hash: "deleted",
       },
     ] as BlockVersion[]);
@@ -1911,5 +2036,4 @@ describe("DocumentsService", () => {
       }),
     ]);
   });
-
 });

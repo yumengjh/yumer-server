@@ -98,6 +98,12 @@ export class BlocksService {
 
     // 使用事务创建块和初始版本
     const result = await this.dataSource.transaction(async (manager) => {
+      if (createBlockDto.createVersion === false) {
+        await this.documentDraftService.lockDocumentForDraftMutation(
+          createBlockDto.docId,
+          manager,
+        );
+      }
       const now = Date.now();
       const blockId = generateBlockId();
       const sortKey = createBlockDto.sortKey
@@ -168,6 +174,7 @@ export class BlocksService {
           userId,
           manager,
         );
+        await this.documentDraftService.incrementDraftRevision(createBlockDto.docId, manager);
       }
 
       return {
@@ -191,7 +198,10 @@ export class BlocksService {
         "block",
         result.blockId,
         userId,
-        { docId: createBlockDto.docId, type: createBlockDto.type },
+        {
+          docId: createBlockDto.docId,
+          type: createBlockDto.type,
+        },
       );
     return result;
   }
@@ -225,6 +235,9 @@ export class BlocksService {
     const result = await this.executeWithRetry(
       async () =>
         this.dataSource.transaction(async (manager) => {
+          if (updateBlockDto.createVersion === false) {
+            await this.documentDraftService.lockDocumentForDraftMutation(docId, manager);
+          }
           const now = Date.now();
           const hash = this.calculateHash(updateBlockDto.payload);
 
@@ -316,6 +329,7 @@ export class BlocksService {
               userId,
               manager,
             );
+            await this.documentDraftService.incrementDraftRevision(lockedBlock.docId, manager);
           }
 
           return {
@@ -368,7 +382,9 @@ export class BlocksService {
           throw error;
         }
 
-        const driverError = error as { driverError?: { code?: string; constraint?: string } };
+        const driverError = error as {
+          driverError?: { code?: string; constraint?: string };
+        };
         const dbCode = driverError.driverError?.code;
         const constraint = driverError.driverError?.constraint;
         const backoff = attempt === 1 ? 20 : 60;
@@ -463,9 +479,7 @@ export class BlocksService {
       ...(previousAttrs.clientId && incomingAttrs.clientId == null
         ? { clientId: previousAttrs.clientId }
         : {}),
-      ...(shouldPreserveLegacyClientBatchId
-        ? { clientBatchId: previousAttrs.clientBatchId }
-        : {}),
+      ...(shouldPreserveLegacyClientBatchId ? { clientBatchId: previousAttrs.clientBatchId } : {}),
       ...(previousAttrs.syncCreateId && incomingAttrs.syncCreateId == null
         ? { syncCreateId: previousAttrs.syncCreateId }
         : {}),
@@ -674,6 +688,9 @@ export class BlocksService {
 
     // 使用事务更新块位置
     const result = await this.dataSource.transaction(async (manager) => {
+      if (moveBlockDto.createVersion === false) {
+        await this.documentDraftService.lockDocumentForDraftMutation(block.docId, manager);
+      }
       const now = Date.now();
       const latestVersion = await manager.findOne(BlockVersion, {
         where: { blockId, ver: block.latestVer },
@@ -738,6 +755,7 @@ export class BlocksService {
           userId,
           manager,
         );
+        await this.documentDraftService.incrementDraftRevision(block.docId, manager);
       }
 
       return {
@@ -759,7 +777,10 @@ export class BlocksService {
         "block",
         blockId,
         userId,
-        { docId: block.docId, parentId: moveBlockDto.parentId },
+        {
+          docId: block.docId,
+          parentId: moveBlockDto.parentId,
+        },
       );
     return result;
   }
@@ -805,7 +826,9 @@ export class BlocksService {
         "block",
         blockId,
         userId,
-        { docId: block.docId },
+        {
+          docId: block.docId,
+        },
       );
     return result;
   }
@@ -935,11 +958,14 @@ export class BlocksService {
         serverHead: number;
         successCount: number;
         needsReload: boolean;
+        draftRevision: number;
         conflicts: Array<{
           code: string;
           message: string;
           serverHead: number;
           clientBaseVersion?: number;
+          serverDraftRevision?: number;
+          clientDraftRevision?: number;
         }>;
         createDeleteCompensations: SyncCreateDeleteCompensation[];
       }> => {
@@ -956,6 +982,10 @@ export class BlocksService {
           throw new NotFoundException("Document not found");
         }
 
+        const shouldCreateVersion = batchBlockDto.createVersion !== false;
+        const serverDraftRevision = docInTx.draftRevision ?? 0;
+        const clientDraftRevision = batchBlockDto.draftRevision ?? 0;
+
         if (
           typeof batchBlockDto.baseVersion === "number" &&
           batchBlockDto.baseVersion !== docInTx.head
@@ -965,6 +995,7 @@ export class BlocksService {
             serverHead: docInTx.head,
             successCount: 0,
             needsReload: true,
+            draftRevision: serverDraftRevision,
             createDeleteCompensations: [],
             conflicts: [
               {
@@ -977,9 +1008,29 @@ export class BlocksService {
           };
         }
 
+        if (!shouldCreateVersion && clientDraftRevision !== serverDraftRevision) {
+          return {
+            results: [],
+            serverHead: docInTx.head,
+            successCount: 0,
+            needsReload: true,
+            draftRevision: serverDraftRevision,
+            createDeleteCompensations: [],
+            conflicts: [
+              {
+                code: "DRAFT_REVISION_MISMATCH",
+                message: `draftRevision(${clientDraftRevision}) does not match serverDraftRevision(${serverDraftRevision})`,
+                serverHead: docInTx.head,
+                serverDraftRevision,
+                clientDraftRevision,
+              },
+            ],
+          };
+        }
+
         const results: SyncOperationResultDto[] = [];
         const now = Date.now();
-        const shouldCreateVersion = batchBlockDto.createVersion !== false;
+        let draftRevision = serverDraftRevision;
         const reservedSortKeysByParent = new Map<string, Set<string>>();
         const draftMutations: Array<{
           type: "point" | "deleted";
@@ -1128,6 +1179,10 @@ export class BlocksService {
               );
             }
           }
+          docInTx.draftRevision = serverDraftRevision + 1;
+          docInTx.updatedBy = userId;
+          await manager.save(Document, docInTx);
+          draftRevision = docInTx.draftRevision;
         }
 
         const docAfterBatch = await manager.findOne(Document, {
@@ -1140,6 +1195,7 @@ export class BlocksService {
           serverHead: docAfterBatch?.head ?? docInTx.head,
           successCount,
           needsReload: false,
+          draftRevision,
           conflicts: [],
           createDeleteCompensations,
         };
@@ -1151,6 +1207,7 @@ export class BlocksService {
         acceptedBatchId,
         appliedAt: Date.now(),
         serverHead: txResult.serverHead,
+        draftRevision: txResult.draftRevision,
         needsReload: true,
         conflicts: txResult.conflicts,
         results: [],
@@ -1184,13 +1241,16 @@ export class BlocksService {
         "block",
         batchBlockDto.docId,
         userId,
-        { count: batchBlockDto.operations.length },
+        {
+          count: batchBlockDto.operations.length,
+        },
       );
 
     return {
       acceptedBatchId,
       appliedAt: Date.now(),
       serverHead: txResult.serverHead,
+      draftRevision: txResult.draftRevision,
       needsReload: false,
       conflicts: [],
       results: txResult.results,
@@ -1239,7 +1299,11 @@ export class BlocksService {
       operation.syncCreateId,
     );
     if (existing) {
-      return { blockId: existing.blockId, version: existing.ver, sortKey: existing.sortKey };
+      return {
+        blockId: existing.blockId,
+        version: existing.ver,
+        sortKey: existing.sortKey,
+      };
     }
 
     const blockId = generateBlockId();
@@ -1257,9 +1321,7 @@ export class BlocksService {
           ...(((operation.data.payload as Record<string, unknown>).attrs as
             | Record<string, unknown>
             | undefined) ?? {}),
-          ...(!operation.syncCreateId && operation.clientId
-            ? { clientBatchId }
-            : {}),
+          ...(!operation.syncCreateId && operation.clientId ? { clientBatchId } : {}),
           ...(operation.clientId ? { clientId: operation.clientId } : {}),
           ...(operation.syncCreateId ? { syncCreateId: operation.syncCreateId } : {}),
         },
@@ -1482,7 +1544,11 @@ export class BlocksService {
     block.latestBy = userId;
     await manager.save(Block, block);
 
-    return { blockId: operation.blockId, version: newVer, createDeleteCompensation };
+    return {
+      blockId: operation.blockId,
+      version: newVer,
+      createDeleteCompensation,
+    };
   }
 
   private async getNextBlockVersionNumber(
@@ -1613,6 +1679,10 @@ export class BlocksService {
     block.latestBy = userId;
     await manager.save(Block, block);
 
-    return { blockId: operation.blockId, version: newVer, sortKey: resolvedSortKey };
+    return {
+      blockId: operation.blockId,
+      version: newVer,
+      sortKey: resolvedSortKey,
+    };
   }
 }

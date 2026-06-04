@@ -646,10 +646,22 @@ export class GcSweepService {
       const draftRepository = manager.getRepository(DocDraft);
       const snapshotRepository = manager.getRepository(DocSnapshot);
       const poolRepository = manager.getRepository(GcCandidatePool);
+      const documentRepository = manager.getRepository(Document);
       const rootRef = this.readRootRef(candidate);
 
       if (rootRef.rootRefType !== "draft" || !rootRef.rootRefId) {
         throw new Error(`Draft root ref is missing for ${candidate.candidateKey}`);
+      }
+
+      const dbType = this.dataSource.options.type;
+      const document = await documentRepository.findOne({
+        where: { docId: candidate.docId ?? "" },
+        ...(dbType !== "sqlite" && dbType !== "better-sqlite3"
+          ? { lock: { mode: "pessimistic_write" as const } }
+          : {}),
+      });
+      if (!document) {
+        throw new Error(`Document ${candidate.docId ?? ""} disappeared before draft compaction`);
       }
 
       const draft = await draftRepository.findOne({
@@ -677,6 +689,7 @@ export class GcSweepService {
       draft.updatedAt = now.getTime();
       draft.updatedBy = triggeredBy;
       await draftRepository.save(draft);
+      await documentRepository.increment({ docId: draft.docId }, "draftRevision", 1);
       await this.syncBlockDeletionAfterTombstoneCompaction(
         candidate,
         triggeredBy,

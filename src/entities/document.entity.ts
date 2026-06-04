@@ -41,6 +41,9 @@ export class Document {
   head: number;
 
   @Column({ default: 0 })
+  draftRevision: number;
+
+  @Column({ default: 0 })
   publishedHead: number;
 
   @Column({ type: "varchar", nullable: true })

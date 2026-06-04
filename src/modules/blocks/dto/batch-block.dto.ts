@@ -25,7 +25,11 @@ export enum BatchSourceType {
 }
 
 export class BatchCreateOperation {
-  @ApiProperty({ description: '操作类型', example: 'create', enum: BatchOperationType })
+  @ApiProperty({
+    description: '操作类型',
+    example: 'create',
+    enum: BatchOperationType,
+  })
   @IsEnum(BatchOperationType)
   type: BatchOperationType.CREATE;
 
@@ -52,7 +56,11 @@ export class BatchCreateOperation {
 }
 
 export class BatchUpdateOperation {
-  @ApiProperty({ description: '操作类型', example: 'update', enum: BatchOperationType })
+  @ApiProperty({
+    description: '操作类型',
+    example: 'update',
+    enum: BatchOperationType,
+  })
   @IsEnum(BatchOperationType)
   type: BatchOperationType.UPDATE;
 
@@ -67,7 +75,11 @@ export class BatchUpdateOperation {
 }
 
 export class BatchDeleteOperation {
-  @ApiProperty({ description: '操作类型', example: 'delete', enum: BatchOperationType })
+  @ApiProperty({
+    description: '操作类型',
+    example: 'delete',
+    enum: BatchOperationType,
+  })
   @IsEnum(BatchOperationType)
   type: BatchOperationType.DELETE;
 
@@ -77,7 +89,11 @@ export class BatchDeleteOperation {
 }
 
 export class BatchMoveOperation {
-  @ApiProperty({ description: '操作类型', example: 'move', enum: BatchOperationType })
+  @ApiProperty({
+    description: '操作类型',
+    example: 'move',
+    enum: BatchOperationType,
+  })
   @IsEnum(BatchOperationType)
   type: BatchOperationType.MOVE;
 
@@ -154,6 +170,14 @@ export class BatchBlockDto {
   @IsOptional()
   @IsNumber()
   baseVersion?: number;
+
+  @ApiPropertyOptional({
+    description: '客户端所基于的文档草稿修订号',
+    example: 12,
+  })
+  @IsOptional()
+  @IsNumber()
+  draftRevision?: number;
 
   @ApiPropertyOptional({
     description: '客户端批次ID（用于幂等和 ack 对应）',

@@ -16,7 +16,12 @@ export class SyncStateResponseDto {
   @ApiProperty({ description: '待提交变更数量', example: 2 })
   pendingCount: number;
 
-  @ApiProperty({ description: '文档最后更新时间', example: '2026-05-19T00:00:00.000Z' })
+  @ApiProperty({ description: '当前文档草稿修订号', example: 12 })
+  draftRevision: number;
+
+  @ApiProperty({
+    description: '文档最后更新时间',
+    example: '2026-05-19T00:00:00.000Z',
+  })
   updatedAt: Date;
 }
-

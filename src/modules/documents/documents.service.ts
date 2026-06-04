@@ -288,7 +288,9 @@ export class DocumentsService {
       "document",
       result.docId,
       userId,
-      { title: result.title },
+      {
+        title: result.title,
+      },
     );
     return result;
   }
@@ -321,7 +323,9 @@ export class DocumentsService {
 
     // 工作空间过滤
     if (workspaceId) {
-      queryBuilder.andWhere("document.workspaceId = :workspaceId", { workspaceId });
+      queryBuilder.andWhere("document.workspaceId = :workspaceId", {
+        workspaceId,
+      });
     } else {
       // 如果没有指定工作空间，查询用户有权限的所有工作空间的文档
       const userWorkspaces = await this.getUserWorkspaceIds(userId);
@@ -338,12 +342,16 @@ export class DocumentsService {
       queryBuilder.andWhere("document.status = :status", { status });
     } else {
       // 默认不显示已删除的文档
-      queryBuilder.andWhere("document.status != :deleted", { deleted: "deleted" });
+      queryBuilder.andWhere("document.status != :deleted", {
+        deleted: "deleted",
+      });
     }
 
     // 可见性过滤
     if (visibility) {
-      queryBuilder.andWhere("document.visibility = :visibility", { visibility });
+      queryBuilder.andWhere("document.visibility = :visibility", {
+        visibility,
+      });
     }
 
     // 父文档过滤
@@ -438,7 +446,10 @@ export class DocumentsService {
    */
   private async getUserWorkspaceIds(userId: string): Promise<string[]> {
     // 这里可以优化，使用工作空间服务的方法
-    const workspaces = await this.workspacesService.findAll(userId, { page: 1, pageSize: 1000 });
+    const workspaces = await this.workspacesService.findAll(userId, {
+      page: 1,
+      pageSize: 1000,
+    });
     return workspaces.items.map((ws: any) => ws.workspaceId);
   }
 
@@ -602,7 +613,9 @@ export class DocumentsService {
         ensuredSnapshot.metadata = this.buildPublishMetadata(ensuredSnapshot);
         await snapshotRepo.save(ensuredSnapshot);
       } else {
-        const targetSnapshot = await snapshotRepo.findOne({ where: { docId, docVer: version } });
+        const targetSnapshot = await snapshotRepo.findOne({
+          where: { docId, docVer: version },
+        });
         if (!targetSnapshot) {
           throw new NotFoundException(`Version snapshot ${docId}@${version} not found`);
         }
@@ -708,12 +721,16 @@ export class DocumentsService {
     snapshotRepository: Repository<DocSnapshot>,
     snapshotId: string,
   ) {
-    const snapshot = await snapshotRepository.findOne({ where: { snapshotId } });
+    const snapshot = await snapshotRepository.findOne({
+      where: { snapshotId },
+    });
     if (!snapshot) {
       return;
     }
 
-    const metadata = { ...(((snapshot.metadata as Record<string, unknown> | null) ?? {})) };
+    const metadata = {
+      ...((snapshot.metadata as Record<string, unknown> | null) ?? {}),
+    };
     const restore = (metadata.publishRestore ?? {}) as PublishRestoreState;
     delete metadata.publishRestore;
 
@@ -773,9 +790,7 @@ export class DocumentsService {
     }
 
     try {
-      this.logger.log(
-        `公开文档缓存失效请求: docId=${document.docId}, slug=${slug}, url=${url}`,
-      );
+      this.logger.log(`公开文档缓存失效请求: docId=${document.docId}, slug=${slug}, url=${url}`);
       const response = await fetch(url, {
         method: "POST",
         headers: {
@@ -1069,14 +1084,15 @@ export class DocumentsService {
 
       return {
         docId,
-      source: "draft" as const,
-      head: document.head,
-      publishedHead: document.publishedHead,
-      editorState: normalizeDocumentEditorState(document.editorState),
-      draft: {
+        source: "draft" as const,
+        head: document.head,
+        publishedHead: document.publishedHead,
+        editorState: normalizeDocumentEditorState(document.editorState),
+        draft: {
           exists: true,
           draftId: draft.draftId,
           baseDocVer: draft.baseDocVer,
+          draftRevision: document.draftRevision ?? 0,
           updatedAt: toSafeISOString(draft.updatedAt),
           updatedBy: draft.updatedBy,
         },
@@ -1114,6 +1130,7 @@ export class DocumentsService {
         exists: false,
         draftId: null,
         baseDocVer: null,
+        draftRevision: document.draftRevision ?? 0,
         updatedAt: null,
         updatedBy: null,
       },
@@ -1133,7 +1150,11 @@ export class DocumentsService {
     return this.documentDraftService.discardDraft(docId);
   }
 
-  async updateEditorState(docId: string, updateEditorStateDto: UpdateEditorStateDto, userId: string) {
+  async updateEditorState(
+    docId: string,
+    updateEditorStateDto: UpdateEditorStateDto,
+    userId: string,
+  ) {
     const document = await this.documentRepository.findOne({
       where: { docId },
     });
@@ -1210,7 +1231,9 @@ export class DocumentsService {
       .andWhere("document.publishedHead > 0");
 
     if (visibility) {
-      queryBuilder.andWhere("document.visibility = :visibility", { visibility });
+      queryBuilder.andWhere("document.visibility = :visibility", {
+        visibility,
+      });
     }
 
     if (parentId !== undefined) {
@@ -1462,10 +1485,7 @@ export class DocumentsService {
     try {
       const rendered = await this.documentRenderService.renderTree(response.tree);
       const publicTree = this.stripRenderMetadata(rendered.tree);
-      const tree =
-        mode === "html"
-          ? this.stripRenderedPayloadForHtmlMode(publicTree)
-          : publicTree;
+      const tree = mode === "html" ? this.stripRenderedPayloadForHtmlMode(publicTree) : publicTree;
 
       return {
         ...response,
@@ -1543,8 +1563,14 @@ export class DocumentsService {
   }
 
   /* eslint-disable @typescript-eslint/no-explicit-any */
-  private ensureHeadingAnchorIds(node: any): { node: any; updates: Array<{ blockId: string; payload: Record<string, unknown> }> } {
-    const updates: Array<{ blockId: string; payload: Record<string, unknown> }> = [];
+  private ensureHeadingAnchorIds(node: any): {
+    node: any;
+    updates: Array<{ blockId: string; payload: Record<string, unknown> }>;
+  } {
+    const updates: Array<{
+      blockId: string;
+      payload: Record<string, unknown>;
+    }> = [];
 
     const walk = (n: any) => {
       if (!n || typeof n !== "object") return;
@@ -1569,7 +1595,9 @@ export class DocumentsService {
     return { node, updates };
   }
 
-  private async persistAnchorIds(updates: Array<{ blockId: string; payload: Record<string, unknown> }>): Promise<void> {
+  private async persistAnchorIds(
+    updates: Array<{ blockId: string; payload: Record<string, unknown> }>,
+  ): Promise<void> {
     if (updates.length === 0) return;
     for (const { blockId, payload } of updates) {
       try {
@@ -1644,11 +1672,15 @@ export class DocumentsService {
     const queryBuilder = this.documentRepository
       .createQueryBuilder("document")
       .where("document.searchVector @@ plainto_tsquery(:query)", { query })
-      .orWhere("document.title ILIKE :titleQuery", { titleQuery: `%${query}%` });
+      .orWhere("document.title ILIKE :titleQuery", {
+        titleQuery: `%${query}%`,
+      });
 
     // 工作空间过滤
     if (workspaceId) {
-      queryBuilder.andWhere("document.workspaceId = :workspaceId", { workspaceId });
+      queryBuilder.andWhere("document.workspaceId = :workspaceId", {
+        workspaceId,
+      });
     } else {
       // 查询用户有权限的所有工作空间的文档
       const userWorkspaces = await this.getUserWorkspaceIds(userId);
@@ -1664,7 +1696,9 @@ export class DocumentsService {
     if (status) {
       queryBuilder.andWhere("document.status = :status", { status });
     } else {
-      queryBuilder.andWhere("document.status != :deleted", { deleted: "deleted" });
+      queryBuilder.andWhere("document.status != :deleted", {
+        deleted: "deleted",
+      });
     }
 
     // 标签过滤
@@ -1713,11 +1747,7 @@ export class DocumentsService {
   /**
    * 版本对比：返回两个版本之间的内容差异
    */
-  async getDiff(
-    docId: string,
-    diffQuery: DiffVersionsDto,
-    userId: string,
-  ): Promise<DiffResponse> {
+  async getDiff(docId: string, diffQuery: DiffVersionsDto, userId: string): Promise<DiffResponse> {
     const document = await this.findOne(docId, userId);
     await this.checkDocumentEditPermission(document, userId);
 
@@ -1847,7 +1877,7 @@ export class DocumentsService {
       throw new NotFoundException("保存回退前草稿");
     }
     const existingDraft = await this.documentDraftService.findByDocId(docId);
-    const effectiveDraftStrategy = existingDraft ? draftStrategy ?? "preserve" : null;
+    const effectiveDraftStrategy = existingDraft ? (draftStrategy ?? "preserve") : null;
 
     return await this.dataSource.transaction(async (manager) => {
       const docRepo = manager.getRepository(Document);
@@ -1900,13 +1930,20 @@ export class DocumentsService {
         patches: [],
         rootBlockId: doc.rootBlockId,
         source: "api",
-        opSummary: { revertedFrom: version, draftStrategy: effectiveDraftStrategy },
+        opSummary: {
+          revertedFrom: version,
+          draftStrategy: effectiveDraftStrategy,
+        },
       });
       await revRepo.save(newRevision);
       await this.documentSnapshotService.createSnapshotForRevision(docId, doc.head, manager, {
         kind: "revision",
         pinned: false,
-        metadata: { source: "revert", revertedFrom: version, draftStrategy: effectiveDraftStrategy },
+        metadata: {
+          source: "revert",
+          revertedFrom: version,
+          draftStrategy: effectiveDraftStrategy,
+        },
       });
 
       return this.findOne(docId, userId);
@@ -1982,6 +2019,7 @@ export class DocumentsService {
         "docId",
         "workspaceId",
         "head",
+        "draftRevision",
         "publishedHead",
         "updatedAt",
         "status",
@@ -2006,6 +2044,7 @@ export class DocumentsService {
       publishedHead: document.publishedHead,
       pendingCount,
       hasPendingDraft,
+      draftRevision: document.draftRevision ?? 0,
       updatedAt: document.updatedAt,
     };
   }
@@ -2083,11 +2122,19 @@ export class DocumentsService {
       if (!fromVisible && toVisible) {
         // 新增块
         summary.added++;
-        changes.push({ type: "added", blockId, to: this.extractSnapshot(toBv!) });
+        changes.push({
+          type: "added",
+          blockId,
+          to: this.extractSnapshot(toBv!),
+        });
       } else if (fromVisible && !toVisible) {
         // 删除块
         summary.deleted++;
-        changes.push({ type: "deleted", blockId, from: this.extractSnapshot(fromBv!) });
+        changes.push({
+          type: "deleted",
+          blockId,
+          from: this.extractSnapshot(fromBv!),
+        });
       } else {
         // 两边都存在，比较差异
         if (!fromBv || !toBv) continue;
@@ -2198,7 +2245,9 @@ export class DocumentsService {
         Block,
         "b",
         'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)',
-        { delCutoff: revision.createdAt },
+        {
+          delCutoff: revision.createdAt,
+        },
       )
       .select("bv.blockId", "blockId")
       .addSelect("MAX(bv.ver)", "maxVer")
@@ -2242,7 +2291,9 @@ export class DocumentsService {
           .createQueryBuilder("bv")
           .where("bv.docId = :docId", { docId })
           .andWhere("bv.blockId = :blockId", { blockId: document.rootBlockId })
-          .andWhere("bv.createdAt <= :createdAt", { createdAt: revision.createdAt })
+          .andWhere("bv.createdAt <= :createdAt", {
+            createdAt: revision.createdAt,
+          })
           .orderBy("bv.ver", "DESC")
           .limit(1)
           .getOne();
@@ -2301,7 +2352,9 @@ export class DocumentsService {
         Block,
         "b",
         'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)',
-        { delCutoff: revisionCreatedAt },
+        {
+          delCutoff: revisionCreatedAt,
+        },
       )
       .where("bv.docId = :docId", { docId })
       .andWhere("bv.blockId = :blockId", { blockId: startBlockId })
@@ -2370,7 +2423,9 @@ export class DocumentsService {
         Block,
         "b",
         'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)',
-        { delCutoff: revisionCreatedAt },
+        {
+          delCutoff: revisionCreatedAt,
+        },
       )
       .where("bv.docId = :docId", { docId })
       .andWhere("bv.parentId = :parentId", { parentId: startBlockParentId })
@@ -2552,7 +2607,9 @@ export class DocumentsService {
         Block,
         "b",
         'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)',
-        { delCutoff: createdAt },
+        {
+          delCutoff: createdAt,
+        },
       )
       .where("bv.docId = :docId", { docId })
       .andWhere("bv.blockId = :blockId", { blockId })
@@ -2588,7 +2645,9 @@ export class DocumentsService {
         Block,
         "b",
         'bv.blockId = b.blockId AND (b."deletedAt" IS NULL OR b."deletedAt" > :delCutoff)',
-        { delCutoff: revisionCreatedAt },
+        {
+          delCutoff: revisionCreatedAt,
+        },
       )
       .where("bv.docId = :docId", { docId })
       .andWhere("bv.parentId = :parentId", { parentId })
@@ -2777,7 +2836,11 @@ export class DocumentsService {
     }
 
     const versions = await this.blockVersionRepository.find({
-      where: validEntries.map((e) => ({ docId, blockId: e.blockId, ver: e.ver })),
+      where: validEntries.map((e) => ({
+        docId,
+        blockId: e.blockId,
+        ver: e.ver,
+      })),
     });
 
     const byBlock = new Map<string, (typeof versions)[0]>();

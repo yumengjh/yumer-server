@@ -10,6 +10,9 @@ class EditDraftMetaDto {
   @ApiProperty({ required: false, nullable: true })
   baseDocVer?: number | null;
 
+  @ApiProperty()
+  draftRevision: number;
+
   @ApiProperty({ required: false, nullable: true })
   updatedAt?: string | null;
 

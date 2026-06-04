@@ -17,6 +17,7 @@ function createDraftAwareBlocksService() {
     docId: "doc_1",
     rootBlockId: "root_1",
     head: 1,
+    draftRevision: 0,
     workspaceId: "workspace_1",
     updatedBy: "user_1",
   } as Partial<Document>;
@@ -71,18 +72,35 @@ function createDraftAwareBlocksService() {
     },
   ];
 
+  const draft = {
+    docId: "doc_1",
+    draftId: "draft_1",
+    blockVersionMap: { root_1: 1, block_1: 1 },
+  };
+  let draftExists = false;
+  const pointDraft = async () => {
+    draftExists = true;
+    return draft;
+  };
   const documentDraftService = {
-    ensureDraftForMutation: jest.fn().mockResolvedValue({
-      docId: "doc_1",
-      draftId: "draft_1",
-      blockVersionMap: { root_1: 1, block_1: 1 },
+    lockDocumentForDraftMutation: jest.fn().mockResolvedValue(document),
+    findByDocId: jest.fn().mockImplementation(async () => (draftExists ? draft : null)),
+    ensureDraftForMutation: jest.fn().mockImplementation(async () => {
+      draftExists = true;
+      return draft;
     }),
-    pointBlockToVersion: jest.fn().mockResolvedValue(undefined),
-    pointBlockToDeletedVersion: jest.fn().mockResolvedValue(undefined),
+    pointBlockToVersion: jest.fn().mockImplementation(pointDraft),
+    pointBlockToDeletedVersion: jest.fn().mockImplementation(pointDraft),
+    incrementDraftRevision: jest.fn().mockImplementation(async () => {
+      document.draftRevision = (document.draftRevision ?? 0) + 1;
+      return document.draftRevision;
+    }),
   } as unknown as jest.Mocked<DocumentDraftService>;
 
   const manager = {
-    create: (_entity: unknown, value: Record<string, unknown>) => ({ ...value }),
+    create: (_entity: unknown, value: Record<string, unknown>) => ({
+      ...value,
+    }),
     save: async (entity: unknown, value: Record<string, unknown>) => {
       if (entity === Block) {
         const index = blocks.findIndex((item) => item.blockId === value.blockId);
@@ -211,7 +229,9 @@ function createDraftAwareBlocksService() {
   const service = new BlocksService(
     blockRepository as unknown as Parameters<typeof BlocksService>[0],
     blockVersionRepository as unknown as Parameters<typeof BlocksService>[1],
-    { createSnapshotForRevision: jest.fn() } as unknown as DocumentSnapshotService,
+    {
+      createSnapshotForRevision: jest.fn(),
+    } as unknown as DocumentSnapshotService,
     documentRepository as unknown as Parameters<typeof BlocksService>[3],
     dataSource as unknown as DataSource,
     documentsService as unknown as Parameters<typeof BlocksService>[5],
@@ -232,7 +252,10 @@ describe("BlocksService draft writes", () => {
       {
         docId: "doc_1",
         type: "paragraph",
-        payload: { type: "paragraph", content: [{ type: "text", text: "new" }] },
+        payload: {
+          type: "paragraph",
+          content: [{ type: "text", text: "new" }],
+        },
         parentId: "root_1",
         sortKey: "002000",
         createVersion: false,
@@ -260,7 +283,10 @@ describe("BlocksService draft writes", () => {
     await service.updateContent(
       "block_1",
       {
-        payload: { type: "paragraph", content: [{ type: "text", text: "updated" }] },
+        payload: {
+          type: "paragraph",
+          content: [{ type: "text", text: "updated" }],
+        },
         createVersion: false,
       },
       "user_1",
@@ -337,7 +363,7 @@ describe("BlocksService draft writes", () => {
     );
   });
 
-  it("clears deleted marker when a draft-deleted block is updated again", async () => {
+  it("rejects an update based on the stale revision from before a draft delete", async () => {
     const { service, documentDraftService, versions } = createDraftAwareBlocksService();
 
     await service.batch(
@@ -357,7 +383,7 @@ describe("BlocksService draft writes", () => {
       "user_1",
     );
 
-    await service.batch(
+    const response = await service.batch(
       {
         docId: "doc_1",
         baseVersion: 1,
@@ -380,19 +406,13 @@ describe("BlocksService draft writes", () => {
       "user_1",
     );
 
-    expect(documentDraftService.pointBlockToVersion).toHaveBeenCalledWith(
-      "doc_1",
-      "block_1",
-      3,
-      "user_1",
-      expect.any(Object),
-    );
-
+    expect(response.needsReload).toBe(true);
+    expect(response.conflicts).toEqual([
+      expect.objectContaining({ code: "DRAFT_REVISION_MISMATCH" }),
+    ]);
+    expect(documentDraftService.pointBlockToVersion).not.toHaveBeenCalled();
     const latestVersion = versions.find((item) => item.blockId === "block_1" && item.ver === 3);
-    expect(latestVersion).toBeDefined();
-    expect(
-      (latestVersion?.payload as { attrs?: Record<string, unknown> })?.attrs?.deleted,
-    ).toBeUndefined();
+    expect(latestVersion).toBeUndefined();
   });
 
   it("continues from the historical max block version after a revert-style latestVer rewind", async () => {
@@ -406,7 +426,10 @@ describe("BlocksService draft writes", () => {
       sortKey: "001000",
       indent: 0,
       collapsed: false,
-      payload: { type: "paragraph", content: [{ type: "text", text: "future" }] },
+      payload: {
+        type: "paragraph",
+        content: [{ type: "text", text: "future" }],
+      },
       hash: "future",
       plainText: "future",
       refs: [],
@@ -415,7 +438,10 @@ describe("BlocksService draft writes", () => {
     await service.updateContent(
       "block_1",
       {
-        payload: { type: "paragraph", content: [{ type: "text", text: "after revert" }] },
+        payload: {
+          type: "paragraph",
+          content: [{ type: "text", text: "after revert" }],
+        },
         createVersion: false,
       },
       "user_1",
