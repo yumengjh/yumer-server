@@ -34,6 +34,7 @@ import { SearchQueryDto } from "./dto/search-query.dto";
 import { CommitVersionDto } from "./dto/commit-version.dto";
 import { DiscardDraftDto } from "./dto/discard-draft.dto";
 import { SyncReconcileDto } from "./dto/sync-reconcile.dto";
+import { DraftCheckpointDto } from "./dto/draft-checkpoint.dto";
 import { QueryContentDto } from "./dto/query-content.dto";
 import { QueryEditContentDto } from "./dto/query-edit-content.dto";
 import { EditContentResponseDto } from "./dto/edit-content-response.dto";
@@ -46,6 +47,7 @@ import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import { AuditLog } from "../../common/decorators/audit-log.decorator";
 import { SitePublic, isSitePublicAnonymousUserId } from "../../common/decorators/public.decorator";
 import { DocumentExportService } from "./services/document-export.service";
+import { DraftCheckpointService } from "./draft-checkpoint.service";
 
 function encodeRFC5987Value(input: string): string {
   return encodeURIComponent(input).replace(/[!'()*]/g, (char) =>
@@ -76,6 +78,7 @@ export class DocumentsController {
   constructor(
     private readonly documentsService: DocumentsService,
     private readonly documentExportService: DocumentExportService,
+    private readonly draftCheckpointService: DraftCheckpointService,
   ) {}
 
   @Post()
@@ -195,6 +198,21 @@ export class DocumentsController {
     @CurrentUser() user: any,
   ) {
     return this.documentsService.reconcileSyncManifest(docId, user.userId, reconcileDto);
+  }
+
+  @Post(":docId/draft-checkpoint")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Apply a full editor checkpoint to the server draft" })
+  async applyDraftCheckpoint(
+    @Param("docId") docId: string,
+    @Body() checkpointDto: DraftCheckpointDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.draftCheckpointService.applyDraftCheckpoint(
+      docId,
+      user.userId,
+      checkpointDto,
+    );
   }
 
   private withRenderDiagnosticsHeaders(result: unknown, response: Response) {

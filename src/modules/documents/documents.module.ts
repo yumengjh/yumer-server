@@ -8,6 +8,7 @@ import { DocumentHtmlRendererService } from "./services/document-html-renderer.s
 import { DocumentRenderService } from "./services/document-render.service";
 import { DocumentDraftService } from "./services/document-draft.service";
 import { VersionControlService } from "./services/version-control.service";
+import { DraftCheckpointService } from "./draft-checkpoint.service";
 import { Document } from "../../entities/document.entity";
 import { Block } from "../../entities/block.entity";
 import { BlockVersion } from "../../entities/block-version.entity";
@@ -17,6 +18,9 @@ import { DocSnapshot } from "../../entities/doc-snapshot.entity";
 import { DocDraft } from "../../entities/doc-draft.entity";
 import { Tag } from "../../entities/tag.entity";
 import { User } from "../../entities/user.entity";
+import { SyncCheckpointReceipt } from "../../entities/sync-checkpoint-receipt.entity";
+import { DocumentSyncSession } from "../../entities/document-sync-session.entity";
+import { SyncCreateTombstone } from "../../entities/sync-create-tombstone.entity";
 import { WorkspacesModule } from "../workspaces/workspaces.module";
 import { ActivitiesModule } from "../activities/activities.module";
 
@@ -32,6 +36,9 @@ import { ActivitiesModule } from "../activities/activities.module";
       DocDraft,
       Tag,
       User,
+      SyncCheckpointReceipt,
+      DocumentSyncSession,
+      SyncCreateTombstone,
     ]),
     WorkspacesModule,
     ActivitiesModule,
@@ -45,6 +52,7 @@ import { ActivitiesModule } from "../activities/activities.module";
     DocumentSnapshotService,
     DocumentHtmlRendererService,
     DocumentRenderService,
+    DraftCheckpointService,
   ],
   exports: [
     DocumentsService,
