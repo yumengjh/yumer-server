@@ -177,8 +177,9 @@ export class DraftCheckpointService {
     }
 
     const currentMap = draft.blockVersionMap ?? {};
+    const rootBlockIds = new Set([draft.rootBlockId, dto.rootBlockId].filter(Boolean));
     for (const blockId of Object.keys(currentMap)) {
-      if (keptBlockIds.has(blockId)) continue;
+      if (keptBlockIds.has(blockId) || rootBlockIds.has(blockId)) continue;
       const version = await manager.getRepository(BlockVersion).findOne({
         where: { docId, blockId, ver: currentMap[blockId] },
       });

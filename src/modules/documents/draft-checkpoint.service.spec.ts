@@ -244,6 +244,7 @@ function createDraftCheckpointHarness(config?: {
   return {
     service,
     doc,
+    draft,
     blocks,
     versions,
     receipts,
@@ -378,6 +379,60 @@ describe("DraftCheckpointService", () => {
         syncCreateId: "sync-create:cid_delete",
       }),
     ]);
+  });
+
+
+
+  it("preserves the draft root block when applying top-level checkpoint coverage", async () => {
+    const harness = createDraftCheckpointHarness({
+      existingBlocks: [
+        { blockId: "block_keep", clientId: "cid_keep", sortKey: "001000", text: "keep" },
+      ],
+    });
+    harness.blocks.push({
+      docId: "doc_1",
+      blockId: "root_1",
+      type: "doc",
+      latestVer: 1,
+      isDeleted: false,
+      createdAt: Date.now(),
+      createdBy: "user_1",
+      latestAt: Date.now(),
+      latestBy: "user_1",
+    });
+    harness.versions.push({
+      versionId: "root_1_v1",
+      docId: "doc_1",
+      blockId: "root_1",
+      ver: 1,
+      parentId: null,
+      sortKey: "000000",
+      plainText: "",
+      payload: { type: "doc", attrs: { blockId: "root_1" } },
+      refs: [],
+    });
+    harness.draft.blockVersionMap!["root_1"] = 1;
+
+    const response = await harness.service.applyDraftCheckpoint("doc_1", "user_1", {
+      ...harness.baseCheckpoint("checkpoint_preserve_root"),
+      blocks: [
+        harness.block({
+          clientId: "cid_keep",
+          blockId: "block_keep",
+          orderKey: "001000",
+          text: "keep",
+        }),
+      ],
+    });
+
+    expect(response.tombstoned.map((item) => item.blockId)).not.toContain("root_1");
+    expect(harness.draft.blockVersionMap).toEqual(
+      expect.objectContaining({ root_1: 1, block_keep: expect.any(Number) }),
+    );
+    const rootVersion = harness.versions.find(
+      (version) => version.blockId === "root_1" && version.ver === harness.draft.blockVersionMap!["root_1"],
+    );
+    expect((rootVersion?.payload as { attrs?: { deleted?: boolean } })?.attrs?.deleted).not.toBe(true);
   });
 
   it("replays the original response for the same checkpoint fingerprint", async () => {

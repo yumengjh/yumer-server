@@ -5,6 +5,7 @@ import {
   IsInt,
   IsNotEmpty,
   IsNumber,
+  IsObject,
   IsOptional,
   IsString,
   ValidateNested,
@@ -43,6 +44,7 @@ export class DraftCheckpointBlockDto {
   orderKey: string;
 
   @ApiProperty({ type: Object })
+  @IsObject()
   payload: Record<string, unknown>;
 
   @ApiPropertyOptional({ example: "plain text" })
