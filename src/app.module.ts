@@ -58,6 +58,7 @@ import { Guestbook } from "./entities/guestbook.entity";
 import { GuestbookLike } from "./entities/guestbook-like.entity";
 import { SensitiveWord } from "./entities/sensitive-word.entity";
 import { SyncBatchReceipt } from "./entities/sync-batch-receipt.entity";
+import { SyncCheckpointReceipt } from "./entities/sync-checkpoint-receipt.entity";
 import { DocumentSyncSession } from "./entities/document-sync-session.entity";
 import { SyncCreateTombstone } from "./entities/sync-create-tombstone.entity";
 
@@ -92,6 +93,7 @@ export const databaseEntities = [
   GuestbookLike,
   SensitiveWord,
   SyncBatchReceipt,
+  SyncCheckpointReceipt,
   DocumentSyncSession,
   SyncCreateTombstone,
 ];
