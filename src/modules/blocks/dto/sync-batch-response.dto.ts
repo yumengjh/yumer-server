@@ -31,7 +31,7 @@ export class SyncOperationResultDto {
   success: boolean;
 
   @ApiPropertyOptional({
-    description: '客户端传入的 clientId（create 回填）',
+    description: '客户端传入的 clientId（create/delete ack 回填）',
     example: 'cid_01HZXFXXR93Z2',
   })
   clientId?: string;

@@ -1460,6 +1460,7 @@ export class BlocksService {
               results.push({
                 operation: BatchOperationType.DELETE,
                 success: true,
+                clientId: operation.clientId,
                 ...removedAck,
               });
             } else if (operation.type === BatchOperationType.MOVE) {
@@ -1490,6 +1491,8 @@ export class BlocksService {
               success: false,
               ...(operation.type === BatchOperationType.CREATE
                 ? { clientId: operation.clientId }
+                : operation.type === BatchOperationType.DELETE
+                  ? { clientId: operation.clientId }
                 : {}),
               ...(operation.type !== BatchOperationType.CREATE &&
               (operation as BatchUpdateOperation | BatchDeleteOperation | BatchMoveOperation).blockId

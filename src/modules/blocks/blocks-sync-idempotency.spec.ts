@@ -1195,6 +1195,7 @@ describe("BlocksService sync idempotency", () => {
     expect(deleted.results[0]).toMatchObject({
       operation: BatchOperationType.DELETE,
       success: true,
+      clientId: "client_missing_delete",
       matchBy: "not_found",
       diagnosticCode: "DELETE_TARGET_NOT_FOUND_BY_CLIENT_IDENTITY",
       tombstoned: true,
