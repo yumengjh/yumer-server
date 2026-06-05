@@ -3217,16 +3217,21 @@ export class DocumentsService {
     let validBlockIds = new Set<string>([rootBlockId]); // 根块始终有效
 
     if (nonRootBlockIds.length > 0) {
-      const validBlocks = await this.blockRepository.find({
-        where: {
-          docId,
-          blockId: In(nonRootBlockIds) as any,
-          deletedAt: revisionCreatedAt ? Or(IsNull(), MoreThan(revisionCreatedAt)) : IsNull(),
-        },
-        select: ["blockId"],
-      });
-      for (const b of validBlocks) {
-        validBlockIds.add(b.blockId);
+      // SQLite expression tree depth limit is 1000; chunk In() to stay safe
+      const CHUNK_SIZE = 400;
+      for (let i = 0; i < nonRootBlockIds.length; i += CHUNK_SIZE) {
+        const chunk = nonRootBlockIds.slice(i, i + CHUNK_SIZE);
+        const validBlocks = await this.blockRepository.find({
+          where: {
+            docId,
+            blockId: In(chunk) as any,
+            deletedAt: revisionCreatedAt ? Or(IsNull(), MoreThan(revisionCreatedAt)) : IsNull(),
+          },
+          select: ["blockId"],
+        });
+        for (const b of validBlocks) {
+          validBlockIds.add(b.blockId);
+        }
       }
     }
 
@@ -3246,13 +3251,20 @@ export class DocumentsService {
       return { tree: null, totalBlocks: 0, returnedBlocks: 0, hasMore: false };
     }
 
-    const versions = await this.blockVersionRepository.find({
-      where: validEntries.map((e) => ({
-        docId,
-        blockId: e.blockId,
-        ver: e.ver,
-      })),
-    });
+    // Chunk the OR-based query to avoid SQLite "Expression tree is too large (maximum depth 1000)"
+    const VERSION_QUERY_CHUNK = 200;
+    const versions: BlockVersion[] = [];
+    for (let i = 0; i < validEntries.length; i += VERSION_QUERY_CHUNK) {
+      const chunk = validEntries.slice(i, i + VERSION_QUERY_CHUNK);
+      const chunkVersions = await this.blockVersionRepository.find({
+        where: chunk.map((e) => ({
+          docId,
+          blockId: e.blockId,
+          ver: e.ver,
+        })),
+      });
+      versions.push(...chunkVersions);
+    }
 
     const byBlock = new Map<string, (typeof versions)[0]>();
     for (const v of versions) byBlock.set(v.blockId, v);
