@@ -8,6 +8,7 @@ import { Document } from "../../entities/document.entity";
 import { DocRevision } from "../../entities/doc-revision.entity";
 import { SyncBatchReceipt } from "../../entities/sync-batch-receipt.entity";
 import { DocumentSyncSession } from "../../entities/document-sync-session.entity";
+import { SyncCreateTombstone } from "../../entities/sync-create-tombstone.entity";
 import { DocumentsService } from "../documents/documents.service";
 import { DocumentDraftService } from "../documents/services/document-draft.service";
 import { DocumentSnapshotService } from "../documents/services/document-snapshot.service";
@@ -44,7 +45,18 @@ type SyncCreateDeleteCompensation = {
 type BatchDeleteResult = {
   blockId: string;
   version?: number;
+  matchBy?: "blockId" | "syncCreateId" | "clientId" | "not_found";
+  diagnosticCode?: string;
+  tombstoned?: boolean;
   createDeleteCompensation?: SyncCreateDeleteCompensation;
+};
+
+type BatchCreateResult = {
+  blockId?: string;
+  version?: number;
+  sortKey?: string;
+  tombstoned?: boolean;
+  diagnosticCode?: string;
 };
 
 type StoredBatchResponse = {
@@ -58,6 +70,7 @@ export class BlocksService {
   private readonly logger = new Logger(BlocksService.name);
   private readonly createDeleteCompensationWindowMs = 60_000;
   private readonly syncSessionLeaseMs = 5 * 60 * 1000;
+  private readonly syncCreateTombstoneTtlMs = 30 * 60 * 1000;
 
   constructor(
     @InjectRepository(Block)
@@ -1388,7 +1401,7 @@ export class BlocksService {
                 manager,
                 reservedSortKeysByParent,
               );
-              if (!shouldCreateVersion) {
+              if (!shouldCreateVersion && created.blockId && created.version) {
                 draftMutations.push({
                   type: "point",
                   blockId: created.blockId,
@@ -1430,6 +1443,8 @@ export class BlocksService {
                 now,
                 manager,
                 shouldCreateVersion,
+                batchBlockDto.sessionId,
+                batchBlockDto.sessionEpoch,
               );
               const { createDeleteCompensation, ...removedAck } = removed;
               if (createDeleteCompensation) {
@@ -1615,11 +1630,24 @@ export class BlocksService {
     now: number,
     manager: EntityManager,
     reservedSortKeysByParent: Map<string, Set<string>>,
-  ): Promise<{ blockId: string; version: number; sortKey: string }> {
+  ): Promise<BatchCreateResult> {
     if (operation.data.docId && operation.data.docId !== docId) {
       throw new BadRequestException(
         `Create operation docId mismatch: ${operation.data.docId} !== ${docId}`,
       );
+    }
+
+    const tombstone = await this.findActiveSyncCreateTombstone(
+      manager,
+      docId,
+      operation.clientId,
+      operation.syncCreateId,
+    );
+    if (tombstone) {
+      return {
+        tombstoned: true,
+        diagnosticCode: "CREATE_SUPPRESSED_BY_TOMBSTONE",
+      };
     }
 
     let parentId = operation.data.parentId;
@@ -1769,7 +1797,7 @@ export class BlocksService {
     docId: string,
     clientId: string | undefined,
     syncCreateId?: string,
-  ): Promise<BlockVersion | null> {
+  ): Promise<{ version: BlockVersion; matchBy: "syncCreateId" | "clientId" } | null> {
     if (!syncCreateId && !clientId) return null;
 
     if (syncCreateId) {
@@ -1783,12 +1811,14 @@ export class BlocksService {
           syncCreateId,
         })
         .getOne();
-      if (matchedBySyncCreateId) return matchedBySyncCreateId;
+      if (matchedBySyncCreateId) {
+        return { version: matchedBySyncCreateId, matchBy: "syncCreateId" };
+      }
     }
 
     if (!clientId) return null;
 
-    return manager
+    const matchedByClientId = await manager
       .getRepository(BlockVersion)
       .createQueryBuilder("bv")
       .innerJoin(Block, "b", "b.blockId = bv.blockId AND b.latestVer = bv.ver")
@@ -1798,6 +1828,72 @@ export class BlocksService {
         clientId,
       })
       .getOne();
+    return matchedByClientId ? { version: matchedByClientId, matchBy: "clientId" } : null;
+  }
+
+  private async findActiveSyncCreateTombstone(
+    manager: EntityManager,
+    docId: string,
+    clientId: string | undefined,
+    syncCreateId?: string,
+  ): Promise<SyncCreateTombstone | null> {
+    if (!syncCreateId && !clientId) return null;
+
+    const query = manager
+      .getRepository(SyncCreateTombstone)
+      .createQueryBuilder("t")
+      .where("t.docId = :docId", { docId })
+      .andWhere("t.expiresAt > :now", { now: Date.now() });
+
+    if (syncCreateId && clientId) {
+      query.andWhere("(t.syncCreateId = :syncCreateId OR t.clientId = :clientId)", {
+        syncCreateId,
+        clientId,
+      });
+    } else if (syncCreateId) {
+      query.andWhere("t.syncCreateId = :syncCreateId", { syncCreateId });
+    } else if (clientId) {
+      query.andWhere("t.clientId = :clientId", { clientId });
+    }
+
+    return query.getOne();
+  }
+
+  private async saveSyncCreateTombstone(params: {
+    manager: EntityManager;
+    docId: string;
+    clientId?: string;
+    syncCreateId?: string;
+    sessionId?: string;
+    sessionEpoch?: number;
+    deleteClientBatchId: string;
+    userId: string;
+    now: number;
+  }): Promise<SyncCreateTombstone | null> {
+    if (!params.clientId && !params.syncCreateId) return null;
+
+    const existing = await this.findActiveSyncCreateTombstone(
+      params.manager,
+      params.docId,
+      params.clientId,
+      params.syncCreateId,
+    );
+    if (existing) return existing;
+
+    const repository = params.manager.getRepository(SyncCreateTombstone);
+    const tombstone = repository.create({
+      docId: params.docId,
+      sessionId: params.sessionId ?? null,
+      sessionEpoch:
+        typeof params.sessionEpoch === "number" ? params.sessionEpoch : null,
+      clientId: params.clientId ?? null,
+      syncCreateId: params.syncCreateId ?? null,
+      deleteClientBatchId: params.deleteClientBatchId,
+      deletedAt: params.now,
+      expiresAt: params.now + this.syncCreateTombstoneTtlMs,
+      createdBy: params.userId,
+    });
+    return repository.save(tombstone);
   }
 
   private async handleBatchUpdate(
@@ -1866,8 +1962,11 @@ export class BlocksService {
     now: number,
     manager: EntityManager,
     shouldCreateVersion: boolean,
+    sessionId?: string,
+    sessionEpoch?: number,
   ): Promise<BatchDeleteResult> {
     let blockId = operation.blockId;
+    let matchBy: BatchDeleteResult["matchBy"] = blockId ? "blockId" : undefined;
     if (!blockId) {
       const matched = await this.findActiveBlockVersionByClientIdentity(
         manager,
@@ -1875,13 +1974,28 @@ export class BlocksService {
         operation.clientId,
         operation.syncCreateId,
       );
-      blockId = matched?.blockId;
+      blockId = matched?.version.blockId;
+      matchBy = matched?.matchBy;
     }
 
     if (!blockId) {
       if (operation.clientId || operation.syncCreateId) {
+        await this.saveSyncCreateTombstone({
+          manager,
+          docId,
+          clientId: operation.clientId,
+          syncCreateId: operation.syncCreateId,
+          sessionId,
+          sessionEpoch,
+          deleteClientBatchId: clientBatchId,
+          userId,
+          now,
+        });
         return {
           blockId: operation.clientId ?? operation.syncCreateId ?? "client-identity-not-found",
+          matchBy: "not_found",
+          diagnosticCode: "DELETE_TARGET_NOT_FOUND_BY_CLIENT_IDENTITY",
+          tombstoned: true,
         };
       }
       throw new BadRequestException("Delete operation requires blockId, clientId, or syncCreateId");
@@ -1912,7 +2026,7 @@ export class BlocksService {
       block.deletedAt = now;
       block.deletedBy = userId;
       await manager.save(Block, block);
-      return { blockId, createDeleteCompensation };
+      return { blockId, matchBy, createDeleteCompensation };
     }
 
     const latestVersion = await manager.findOne(BlockVersion, {
@@ -1972,6 +2086,7 @@ export class BlocksService {
     return {
       blockId,
       version: newVer,
+      matchBy,
       createDeleteCompensation,
     };
   }

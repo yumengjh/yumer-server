@@ -12,6 +12,7 @@ import { DocRevision } from "../../entities/doc-revision.entity";
 import { Document } from "../../entities/document.entity";
 import { DocumentSyncSession } from "../../entities/document-sync-session.entity";
 import { SyncBatchReceipt } from "../../entities/sync-batch-receipt.entity";
+import { SyncCreateTombstone } from "../../entities/sync-create-tombstone.entity";
 
 type PersistedValue = Partial<Block> & Partial<BlockVersion> & Partial<Document>;
 type BlocksServiceConstructorArgs = ConstructorParameters<typeof BlocksService>;
@@ -50,6 +51,7 @@ function createBlocksServiceWithInMemoryRepositories(config?: { throwOnLatestVer
   const revisions: Array<Record<string, unknown>> = [];
   const receipts: Array<Record<string, unknown>> = [];
   const syncSessions: Array<Record<string, unknown>> = [];
+  const tombstones: Array<Record<string, unknown>> = [];
 
   const manager = {
     create: (_entity: unknown, value: Record<string, unknown>) => ({
@@ -130,6 +132,14 @@ function createBlocksServiceWithInMemoryRepositories(config?: { throwOnLatestVer
           if (index >= 0) syncSessions[index] = { ...syncSessions[index], ...value };
           else syncSessions.push(value);
         }
+        if (entity === SyncCreateTombstone) {
+          const saved = {
+            id: value.id ?? tombstones.length + 1,
+            ...value,
+          };
+          tombstones.push(saved);
+          return saved;
+        }
         return value;
       },
       findOne: async (options: { where?: Record<string, unknown> }) => {
@@ -144,6 +154,13 @@ function createBlocksServiceWithInMemoryRepositories(config?: { throwOnLatestVer
         if ((entity as { name?: string })?.name === "DocumentSyncSession") {
           return (
             syncSessions.find((item) =>
+              Object.entries(where).every(([key, value]) => item[key] === value),
+            ) ?? null
+          );
+        }
+        if (entity === SyncCreateTombstone) {
+          return (
+            tombstones.find((item) =>
               Object.entries(where).every(([key, value]) => item[key] === value),
             ) ?? null
           );
@@ -166,6 +183,19 @@ function createBlocksServiceWithInMemoryRepositories(config?: { throwOnLatestVer
           innerJoin: () => query,
           getOne: async () => {
             if (entity === Document) return doc;
+            if (entity === SyncCreateTombstone) {
+              return (
+                tombstones.find((item) => {
+                  if (item.docId !== params.docId) return false;
+                  if (Number(item.expiresAt ?? 0) <= Number(params.now ?? Date.now())) return false;
+                  return (
+                    (typeof params.syncCreateId === "string" &&
+                      item.syncCreateId === params.syncCreateId) ||
+                    (typeof params.clientId === "string" && item.clientId === params.clientId)
+                  );
+                }) ?? null
+              );
+            }
             if (entity !== BlockVersion) return null;
             return (
               versions.find((version) => {
@@ -180,6 +210,9 @@ function createBlocksServiceWithInMemoryRepositories(config?: { throwOnLatestVer
                     (typeof params.clientBatchId === "string" &&
                       typeof params.clientId === "string" &&
                       attrs.clientBatchId === params.clientBatchId &&
+                      attrs.clientId === params.clientId) ||
+                    (!params.clientBatchId &&
+                      typeof params.clientId === "string" &&
                       attrs.clientId === params.clientId))
                 );
               }) ?? null
@@ -282,7 +315,7 @@ function createBlocksServiceWithInMemoryRepositories(config?: { throwOnLatestVer
     } as unknown as BlocksServiceConstructorArgs[7],
   );
 
-  return { service, blocks, versions, syncSessions };
+  return { service, blocks, versions, syncSessions, tombstones };
 }
 
 describe("BlocksService sync idempotency", () => {
@@ -1069,6 +1102,7 @@ describe("BlocksService sync idempotency", () => {
       success: true,
       blockId,
       version: 2,
+      matchBy: "blockId",
     });
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("sync create-delete compensation: docId=doc_1"),
@@ -1134,5 +1168,106 @@ describe("BlocksService sync idempotency", () => {
       success: true,
       blockId: created.results[0].blockId,
     });
+  });
+
+  it("records a tombstone when client identity delete does not find an active block", async () => {
+    const { service, tombstones } = createBlocksServiceWithInMemoryRepositories();
+
+    const deleted = await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        draftRevision: 0,
+        clientBatchId: "batch_delete_missing_client_identity",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.DELETE,
+            clientId: "client_missing_delete",
+            syncCreateId: "sync-create:client_missing_delete",
+          },
+        ],
+      },
+      "user_1",
+    );
+
+    expect(deleted.results[0]).toMatchObject({
+      operation: BatchOperationType.DELETE,
+      success: true,
+      matchBy: "not_found",
+      diagnosticCode: "DELETE_TARGET_NOT_FOUND_BY_CLIENT_IDENTITY",
+      tombstoned: true,
+    });
+    expect(tombstones).toEqual([
+      expect.objectContaining({
+        docId: "doc_1",
+        clientId: "client_missing_delete",
+        syncCreateId: "sync-create:client_missing_delete",
+        deleteClientBatchId: "batch_delete_missing_client_identity",
+      }),
+    ]);
+  });
+
+  it("suppresses a late create when its syncCreateId was already tombstoned", async () => {
+    const { service, blocks } = createBlocksServiceWithInMemoryRepositories();
+
+    await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        draftRevision: 0,
+        clientBatchId: "batch_delete_before_late_create",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.DELETE,
+            clientId: "client_late_create",
+            syncCreateId: "sync-create:client_late_create",
+          },
+        ],
+      },
+      "user_1",
+    );
+
+    const created = await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        draftRevision: 0,
+        clientBatchId: "batch_late_create",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.CREATE,
+            clientId: "client_late_create",
+            syncCreateId: "sync-create:client_late_create",
+            data: {
+              docId: "doc_1",
+              type: "paragraph",
+              parentId: "root_1",
+              sortKey: "001500",
+              payload: {
+                type: "paragraph",
+                attrs: { clientId: "client_late_create" },
+              },
+            },
+          } satisfies BatchCreateOperation,
+        ],
+      },
+      "user_1",
+    );
+
+    expect(created.results[0]).toMatchObject({
+      operation: BatchOperationType.CREATE,
+      success: true,
+      clientId: "client_late_create",
+      tombstoned: true,
+      diagnosticCode: "CREATE_SUPPRESSED_BY_TOMBSTONE",
+    });
+    expect(created.results[0].blockId).toBeUndefined();
+    expect(blocks.filter((block) => block.type === "paragraph")).toHaveLength(0);
   });
 });

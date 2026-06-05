@@ -53,6 +53,24 @@ export class SyncOperationResultDto {
 
   @ApiPropertyOptional({ description: '错误信息', example: 'Block not found' })
   error?: string;
+
+  @ApiPropertyOptional({
+    description: 'delete/create 诊断码',
+    example: 'DELETE_TARGET_NOT_FOUND_BY_CLIENT_IDENTITY',
+  })
+  diagnosticCode?: string;
+
+  @ApiPropertyOptional({
+    description: 'delete 操作目标命中方式',
+    example: 'syncCreateId',
+  })
+  matchBy?: string;
+
+  @ApiPropertyOptional({
+    description: '操作被 create tombstone 覆盖',
+    example: true,
+  })
+  tombstoned?: boolean;
 }
 
 export class SyncBatchResponseDto {
