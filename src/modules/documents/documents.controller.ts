@@ -33,6 +33,7 @@ import { RevertVersionDto } from "./dto/revert-version.dto";
 import { SearchQueryDto } from "./dto/search-query.dto";
 import { CommitVersionDto } from "./dto/commit-version.dto";
 import { DiscardDraftDto } from "./dto/discard-draft.dto";
+import { SyncReconcileDto } from "./dto/sync-reconcile.dto";
 import { QueryContentDto } from "./dto/query-content.dto";
 import { QueryEditContentDto } from "./dto/query-edit-content.dto";
 import { EditContentResponseDto } from "./dto/edit-content-response.dto";
@@ -183,6 +184,17 @@ export class DocumentsController {
     @CurrentUser() user: any,
   ) {
     return this.documentsService.renewSyncSession(docId, user.userId, syncSession);
+  }
+
+  @Post(":docId/sync-reconcile")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Reconcile idle editor manifest with the server draft" })
+  async reconcileSyncManifest(
+    @Param("docId") docId: string,
+    @Body() reconcileDto: SyncReconcileDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.documentsService.reconcileSyncManifest(docId, user.userId, reconcileDto);
   }
 
   private withRenderDiagnosticsHeaders(result: unknown, response: Response) {

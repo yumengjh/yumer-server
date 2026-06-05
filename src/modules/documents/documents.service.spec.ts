@@ -1,4 +1,4 @@
-import type { DataSource, Repository } from "typeorm";
+﻿import type { DataSource, Repository } from "typeorm";
 import type { Document } from "../../entities/document.entity";
 import type { Block } from "../../entities/block.entity";
 import type { BlockVersion } from "../../entities/block-version.entity";
@@ -35,6 +35,8 @@ describe("DocumentsService", () => {
   } as unknown as DocumentSnapshotService;
   const documentDraftService = {
     findByDocId: jest.fn(),
+    lockDocumentForDraftMutation: jest.fn(),
+    pointBlockToDeletedVersion: jest.fn(),
     discardDraft: jest.fn(),
     discardDraftWithManager: jest.fn(),
     commitDraft: jest.fn(),
@@ -2282,5 +2284,213 @@ describe("DocumentsService", () => {
         blockId: "block_a",
       }),
     ]);
+  });
+
+  it("reconciles idle manifest by tombstoning missing sync-created draft blocks", async () => {
+    const now = Date.now();
+    syncSessions.push({
+      docId: "doc_1",
+      sessionId: "session_1",
+      sessionEpoch: 1,
+      holderUserId: "user_1",
+      leaseExpiresAt: now + 60_000,
+      updatedAt: now,
+    });
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 3,
+      draftRevision: 7,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+
+    const docInTx = {
+      docId: "doc_1",
+      rootBlockId: "root_1",
+      draftRevision: 7,
+      updatedBy: "user_1",
+    } as Document;
+    jest.mocked((documentDraftService as any).lockDocumentForDraftMutation).mockResolvedValue(docInTx);
+    jest.mocked((documentDraftService as any).pointBlockToDeletedVersion).mockResolvedValue({
+      draftId: "draft_1",
+    });
+
+    const draftRepo = {
+      findOne: jest.fn().mockResolvedValue({
+        docId: "doc_1",
+        rootBlockId: "root_1",
+        blockVersionMap: {
+          root_1: 1,
+          block_live: 1,
+          block_orphan: 1,
+        },
+      }),
+    };
+    const blockVersionRepo = {
+      createQueryBuilder: jest.fn(() => ({
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getRawOne: jest.fn().mockResolvedValue({ maxVer: 1 }),
+      })),
+    };
+    const tombstoneRepo = {
+      createQueryBuilder: jest.fn(() => ({
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(null),
+      })),
+      create: jest.fn((value) => value),
+      save: jest.fn(async (value) => value),
+    };
+    const manager = {
+      getRepository: jest.fn((entity: { name?: string }) => {
+        if (entity?.name === "DocDraft") return draftRepo;
+        if (entity?.name === "BlockVersion") return blockVersionRepo;
+        if (entity?.name === "SyncCreateTombstone") return tombstoneRepo;
+        return {};
+      }),
+      find: jest.fn().mockResolvedValue([
+        {
+          docId: "doc_1",
+          blockId: "block_orphan",
+          ver: 1,
+          parentId: "root_1",
+          sortKey: "001000",
+          indent: 0,
+          collapsed: false,
+          payload: {
+            type: "paragraph",
+            attrs: {
+              clientId: "client_orphan",
+              syncCreateId: "sync-create:client_orphan",
+            },
+            content: [{ type: "text", text: "orphan" }],
+          },
+          plainText: "orphan",
+          refs: [],
+        },
+      ]),
+      findOne: jest.fn().mockResolvedValue({
+        docId: "doc_1",
+        blockId: "block_orphan",
+        latestVer: 1,
+      }),
+      create: jest.fn((_entity, value) => value),
+      save: jest.fn(async (_entity, value) => value),
+    };
+    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+
+    const result = await service.reconcileSyncManifest("doc_1", "user_1", {
+      draftRevision: 7,
+      sessionId: "session_1",
+      sessionEpoch: 1,
+      clientBatchId: "reconcile_1",
+      manifest: [{ blockId: "block_live", clientId: "client_live" }],
+    });
+
+    expect(result).toMatchObject({
+      docId: "doc_1",
+      draftRevision: 8,
+      needsReload: false,
+      tombstoned: [
+        {
+          blockId: "block_orphan",
+          version: 2,
+          clientId: "client_orphan",
+          syncCreateId: "sync-create:client_orphan",
+        },
+      ],
+    });
+    expect(manager.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        blockId: "block_orphan",
+        ver: 2,
+        payload: expect.objectContaining({
+          attrs: expect.objectContaining({ deleted: true }),
+        }),
+      }),
+    );
+    expect(documentDraftService.pointBlockToDeletedVersion).toHaveBeenCalledWith(
+      "doc_1",
+      "block_orphan",
+      2,
+      "user_1",
+      manager,
+    );
+    expect(tombstoneRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        docId: "doc_1",
+        clientId: "client_orphan",
+        syncCreateId: "sync-create:client_orphan",
+        deleteClientBatchId: "reconcile_1",
+      }),
+    );
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        docId: "doc_1",
+        draftRevision: 8,
+      }),
+    );
+  });
+
+  it("does not reconcile an idle manifest built on a stale draft revision", async () => {
+    const now = Date.now();
+    syncSessions.push({
+      docId: "doc_1",
+      sessionId: "session_1",
+      sessionEpoch: 1,
+      holderUserId: "user_1",
+      leaseExpiresAt: now + 60_000,
+      updatedAt: now,
+    });
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 3,
+      draftRevision: 8,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    const docInTx = { docId: "doc_1", draftRevision: 8 } as Document;
+    jest.mocked((documentDraftService as any).lockDocumentForDraftMutation).mockResolvedValue(docInTx);
+    const manager = {
+      getRepository: jest.fn(),
+      save: jest.fn(),
+    };
+    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+
+    const result = await service.reconcileSyncManifest("doc_1", "user_1", {
+      draftRevision: 7,
+      sessionId: "session_1",
+      sessionEpoch: 1,
+      clientBatchId: "reconcile_stale",
+      manifest: [],
+    });
+
+    expect(result).toMatchObject({
+      docId: "doc_1",
+      draftRevision: 8,
+      needsReload: true,
+      conflicts: [{ code: "DRAFT_REVISION_MISMATCH" }],
+      tombstoned: [],
+    });
+    expect(manager.getRepository).not.toHaveBeenCalled();
+    expect(manager.save).not.toHaveBeenCalled();
   });
 });

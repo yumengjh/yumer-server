@@ -8,13 +8,15 @@ import {
 import { randomBytes } from "crypto";
 import { InjectRepository } from "@nestjs/typeorm";
 import { InjectDataSource } from "@nestjs/typeorm";
-import { Repository, DataSource, In, Or, MoreThan, IsNull } from "typeorm";
+import { Repository, DataSource, EntityManager, In, Or, MoreThan, IsNull } from "typeorm";
 import { Document } from "../../entities/document.entity";
 import { Block } from "../../entities/block.entity";
 import { BlockVersion } from "../../entities/block-version.entity";
 import { DocRevision } from "../../entities/doc-revision.entity";
 import { DocSnapshot } from "../../entities/doc-snapshot.entity";
+import { DocDraft } from "../../entities/doc-draft.entity";
 import { DocumentSyncSession } from "../../entities/document-sync-session.entity";
+import { SyncCreateTombstone } from "../../entities/sync-create-tombstone.entity";
 import { Tag } from "../../entities/tag.entity";
 import { User } from "../../entities/user.entity";
 import { WorkspacesService } from "../workspaces/workspaces.service";
@@ -42,6 +44,7 @@ import { QueryRevisionsDto } from "./dto/query-revisions.dto";
 import type { RevertDraftStrategy } from "./dto/revert-version.dto";
 import { SearchQueryDto } from "./dto/search-query.dto";
 import { SyncStateResponseDto } from "./dto/sync-state-response.dto";
+import type { SyncReconcileDto } from "./dto/sync-reconcile.dto";
 import type { DiffRefKind } from "./dto/diff-versions.dto";
 import { DiffVersionsDto } from "./dto/diff-versions.dto";
 import { ActivitiesService } from "../activities/activities.service";
@@ -92,6 +95,19 @@ type SyncSessionInput = {
   ackedThroughOpSeq?: number;
 };
 
+type SyncManifestIdentity = {
+  blockId?: string | null;
+  clientId?: string | null;
+  syncCreateId?: string | null;
+};
+
+type SyncReconcileTombstone = {
+  blockId: string;
+  version: number;
+  clientId: string | null;
+  syncCreateId: string | null;
+};
+
 function toSafeISOString(value: unknown): string | null {
   if (value === null || value === undefined) {
     return null;
@@ -124,6 +140,7 @@ function normalizeDocumentEditorState(
 export class DocumentsService {
   private readonly logger = new Logger(DocumentsService.name);
   private readonly syncSessionLeaseMs = 5 * 60 * 1000;
+  private readonly syncCreateTombstoneTtlMs = 30 * 60 * 1000;
 
   constructor(
     @InjectRepository(Document)
@@ -2167,6 +2184,250 @@ export class DocumentsService {
     };
   }
 
+  async reconcileSyncManifest(docId: string, userId: string, dto: SyncReconcileDto) {
+    const document = await this.assertAccessWithoutViewIncrement(docId, userId);
+    await this.checkDocumentEditPermission(document, userId);
+    await this.validateDocumentSyncSession(docId, {
+      sessionId: dto.sessionId,
+      sessionEpoch: dto.sessionEpoch,
+    });
+
+    return this.dataSource.transaction(async (manager) => {
+      const docInTx = await this.documentDraftService.lockDocumentForDraftMutation(docId, manager);
+      const serverDraftRevision = docInTx.draftRevision ?? 0;
+      const clientDraftRevision = dto.draftRevision ?? 0;
+      const checkedAt = Date.now();
+
+      if (clientDraftRevision !== serverDraftRevision) {
+        return {
+          docId,
+          checkedAt,
+          draftRevision: serverDraftRevision,
+          needsReload: true,
+          conflicts: [
+            {
+              code: "DRAFT_REVISION_MISMATCH",
+              message: `draftRevision(${clientDraftRevision}) does not match serverDraftRevision(${serverDraftRevision})`,
+              serverDraftRevision,
+              clientDraftRevision,
+            },
+          ],
+          tombstoned: [],
+        };
+      }
+
+      const draft = await manager.getRepository(DocDraft).findOne({ where: { docId } });
+      if (!draft) {
+        return {
+          docId,
+          checkedAt,
+          draftRevision: serverDraftRevision,
+          needsReload: false,
+          conflicts: [],
+          tombstoned: [],
+        };
+      }
+
+      const tombstoned = await this.tombstoneMissingSyncManifestBlocks({
+        manager,
+        docId,
+        userId,
+        draft,
+        manifest: dto.manifest ?? [],
+        clientBatchId: dto.clientBatchId,
+        sessionId: dto.sessionId,
+        sessionEpoch: dto.sessionEpoch,
+        now: checkedAt,
+      });
+
+      let nextDraftRevision = serverDraftRevision;
+      if (tombstoned.length > 0) {
+        docInTx.draftRevision = serverDraftRevision + 1;
+        docInTx.updatedBy = userId;
+        await manager.save(Document, docInTx);
+        nextDraftRevision = docInTx.draftRevision;
+      }
+
+      return {
+        docId,
+        checkedAt,
+        draftRevision: nextDraftRevision,
+        needsReload: false,
+        conflicts: [],
+        tombstoned,
+      };
+    });
+  }
+
+  private async tombstoneMissingSyncManifestBlocks(params: {
+    manager: EntityManager;
+    docId: string;
+    userId: string;
+    draft: DocDraft;
+    manifest: SyncManifestIdentity[];
+    clientBatchId?: string;
+    sessionId?: string;
+    sessionEpoch?: number;
+    now: number;
+  }): Promise<SyncReconcileTombstone[]> {
+    const liveBlockIds = new Set<string>();
+    const liveClientIds = new Set<string>();
+    const liveSyncCreateIds = new Set<string>();
+    for (const item of params.manifest) {
+      const blockId = this.cleanSyncIdentity(item.blockId);
+      const clientId = this.cleanSyncIdentity(item.clientId);
+      const syncCreateId = this.cleanSyncIdentity(item.syncCreateId);
+      if (blockId) liveBlockIds.add(blockId);
+      if (clientId) liveClientIds.add(clientId);
+      if (syncCreateId) liveSyncCreateIds.add(syncCreateId);
+    }
+
+    const draftMap = (params.draft.blockVersionMap ?? {}) as Record<string, number>;
+    const candidates = Object.entries(draftMap)
+      .filter(([blockId]) => blockId !== params.draft.rootBlockId && !liveBlockIds.has(blockId))
+      .map(([blockId, ver]) => ({ blockId, ver }));
+    if (candidates.length === 0) return [];
+
+    const versions = await params.manager.find(BlockVersion, {
+      where: candidates.map((candidate) => ({
+        docId: params.docId,
+        blockId: candidate.blockId,
+        ver: candidate.ver,
+      })),
+    });
+    const byBlock = new Map(versions.map((version) => [version.blockId, version]));
+    const tombstoned: SyncReconcileTombstone[] = [];
+
+    for (const candidate of candidates) {
+      const latestVersion = byBlock.get(candidate.blockId);
+      if (!latestVersion || this.isDeletedSnapshotVersion(latestVersion)) continue;
+
+      const attrs = this.getPayloadAttrs(latestVersion.payload);
+      const clientId = this.cleanSyncIdentity(attrs.clientId);
+      const syncCreateId = this.cleanSyncIdentity(attrs.syncCreateId);
+      if (!clientId && !syncCreateId) continue;
+      if ((clientId && liveClientIds.has(clientId)) || (syncCreateId && liveSyncCreateIds.has(syncCreateId))) {
+        continue;
+      }
+
+      const block = await params.manager.findOne(Block, {
+        where: { docId: params.docId, blockId: candidate.blockId },
+      });
+      if (!block) continue;
+
+      const newVer = await this.getNextBlockVersionNumber(
+        params.manager,
+        params.docId,
+        candidate.blockId,
+        block.latestVer,
+      );
+      const deletedPayload = {
+        ...(latestVersion.payload as Record<string, unknown>),
+        attrs: {
+          ...attrs,
+          deleted: true,
+        },
+      };
+      const blockVersion = params.manager.create(BlockVersion, {
+        versionId: generateVersionId(candidate.blockId, newVer),
+        docId: params.docId,
+        blockId: candidate.blockId,
+        ver: newVer,
+        createdAt: params.now,
+        createdBy: params.userId,
+        parentId: latestVersion.parentId,
+        sortKey: latestVersion.sortKey,
+        indent: latestVersion.indent,
+        collapsed: latestVersion.collapsed,
+        payload: deletedPayload,
+        hash: this.calculateHash(deletedPayload),
+        plainText: latestVersion.plainText,
+        refs: latestVersion.refs,
+      });
+      await params.manager.save(BlockVersion, blockVersion);
+
+      block.latestVer = newVer;
+      block.latestAt = params.now;
+      block.latestBy = params.userId;
+      await params.manager.save(Block, block);
+
+      await this.documentDraftService.pointBlockToDeletedVersion(
+        params.docId,
+        candidate.blockId,
+        newVer,
+        params.userId,
+        params.manager,
+      );
+      await this.saveSyncCreateTombstoneForReconcile({
+        manager: params.manager,
+        docId: params.docId,
+        userId: params.userId,
+        clientId,
+        syncCreateId,
+        clientBatchId: params.clientBatchId,
+        sessionId: params.sessionId,
+        sessionEpoch: params.sessionEpoch,
+        now: params.now,
+      });
+
+      tombstoned.push({
+        blockId: candidate.blockId,
+        version: newVer,
+        clientId: clientId ?? null,
+        syncCreateId: syncCreateId ?? null,
+      });
+    }
+
+    return tombstoned;
+  }
+
+  private async saveSyncCreateTombstoneForReconcile(params: {
+    manager: EntityManager;
+    docId: string;
+    userId: string;
+    clientId: string | null;
+    syncCreateId: string | null;
+    clientBatchId?: string;
+    sessionId?: string;
+    sessionEpoch?: number;
+    now: number;
+  }): Promise<void> {
+    if (!params.clientId && !params.syncCreateId) return;
+
+    const query = params.manager
+      .getRepository(SyncCreateTombstone)
+      .createQueryBuilder("t")
+      .where("t.docId = :docId", { docId: params.docId })
+      .andWhere("t.expiresAt > :now", { now: params.now });
+    if (params.clientId && params.syncCreateId) {
+      query.andWhere("(t.clientId = :clientId OR t.syncCreateId = :syncCreateId)", {
+        clientId: params.clientId,
+        syncCreateId: params.syncCreateId,
+      });
+    } else if (params.clientId) {
+      query.andWhere("t.clientId = :clientId", { clientId: params.clientId });
+    } else if (params.syncCreateId) {
+      query.andWhere("t.syncCreateId = :syncCreateId", { syncCreateId: params.syncCreateId });
+    }
+    const existing = await query.getOne();
+    if (existing) return;
+
+    const repository = params.manager.getRepository(SyncCreateTombstone);
+    await repository.save(
+      repository.create({
+        docId: params.docId,
+        sessionId: params.sessionId ?? null,
+        sessionEpoch: typeof params.sessionEpoch === "number" ? params.sessionEpoch : null,
+        clientId: params.clientId,
+        syncCreateId: params.syncCreateId,
+        deleteClientBatchId: params.clientBatchId ?? `manifest-reconcile:${params.now}`,
+        deletedAt: params.now,
+        expiresAt: params.now + this.syncCreateTombstoneTtlMs,
+        createdBy: params.userId,
+      }),
+    );
+  }
+
   /**
    * 根据两个版本的块映射计算差异
    */
@@ -2305,6 +2566,38 @@ export class DocumentsService {
       return false;
     }
     return (attrs as Record<string, unknown>).deleted === true;
+  }
+
+  private getPayloadAttrs(payload: unknown): Record<string, unknown> {
+    if (!payload || typeof payload !== "object" || !("attrs" in payload)) {
+      return {};
+    }
+    const attrs = (payload as { attrs?: unknown }).attrs;
+    return attrs && typeof attrs === "object" ? (attrs as Record<string, unknown>) : {};
+  }
+
+  private cleanSyncIdentity(value: unknown): string | null {
+    return typeof value === "string" && value.trim() !== "" ? value : null;
+  }
+
+  private async getNextBlockVersionNumber(
+    manager: EntityManager,
+    docId: string,
+    blockId: string,
+    currentLatestVer: number,
+  ): Promise<number> {
+    const raw = await manager
+      .getRepository(BlockVersion)
+      .createQueryBuilder("bv")
+      .select("MAX(bv.ver)", "maxVer")
+      .where("bv.docId = :docId", { docId })
+      .andWhere("bv.blockId = :blockId", { blockId })
+      .getRawOne<{ maxVer?: number | string | null }>();
+    const maxHistoricalVer = Math.max(
+      currentLatestVer,
+      Number.isFinite(Number(raw?.maxVer)) ? Number(raw?.maxVer) : currentLatestVer,
+    );
+    return maxHistoricalVer + 1;
   }
 
   private extractSnapshot(bv: BlockVersion): BlockSnapshot {
