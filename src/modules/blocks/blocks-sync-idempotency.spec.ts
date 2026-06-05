@@ -1078,4 +1078,61 @@ describe("BlocksService sync idempotency", () => {
 
     warnSpy.mockRestore();
   });
+
+  it("deletes a recently created block by client identity when blockId is not available", async () => {
+    const { service } = createBlocksServiceWithInMemoryRepositories();
+
+    const created = await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        clientBatchId: "batch_create_client_tombstone",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.CREATE,
+            clientId: "client_tombstone",
+            syncCreateId: "sync-create:client_tombstone",
+            data: {
+              docId: "doc_1",
+              type: "paragraph",
+              parentId: "root_1",
+              sortKey: "001500",
+              payload: {
+                type: "paragraph",
+                attrs: { clientId: "client_tombstone" },
+              },
+            },
+          } satisfies BatchCreateOperation,
+        ],
+      },
+      "user_1",
+    );
+
+    const deleted = await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        draftRevision: created.draftRevision,
+        clientBatchId: "batch_delete_client_tombstone",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.DELETE,
+            clientId: "client_tombstone",
+            syncCreateId: "sync-create:client_tombstone",
+          },
+        ],
+      },
+      "user_1",
+    );
+
+    expect(deleted.results[0]).toMatchObject({
+      operation: BatchOperationType.DELETE,
+      success: true,
+      blockId: created.results[0].blockId,
+    });
+  });
 });

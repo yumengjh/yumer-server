@@ -86,9 +86,26 @@ export class BatchDeleteOperation {
   @IsEnum(BatchOperationType)
   type: BatchOperationType.DELETE;
 
-  @ApiProperty({ description: '块ID', example: 'b_1234567890_abc123' })
+  @ApiPropertyOptional({ description: '块ID', example: 'b_1234567890_abc123' })
+  @IsOptional()
   @IsString()
-  blockId: string;
+  blockId?: string;
+
+  @ApiPropertyOptional({
+    description: '客户端生成的 clientId（用于删除尚未回填 blockId 的 create）',
+    example: 'cid_01HZXFXXR93Z2',
+  })
+  @IsOptional()
+  @IsString()
+  clientId?: string;
+
+  @ApiPropertyOptional({
+    description: '稳定的创建幂等ID（用于删除尚未回填 blockId 的 create）',
+    example: 'sync-create:cid_01HZXFXXR93Z2',
+  })
+  @IsOptional()
+  @IsString()
+  syncCreateId?: string;
 }
 
 export class BatchMoveOperation {

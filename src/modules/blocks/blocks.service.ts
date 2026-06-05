@@ -1476,7 +1476,8 @@ export class BlocksService {
               ...(operation.type === BatchOperationType.CREATE
                 ? { clientId: operation.clientId }
                 : {}),
-              ...(operation.type !== BatchOperationType.CREATE
+              ...(operation.type !== BatchOperationType.CREATE &&
+              (operation as BatchUpdateOperation | BatchDeleteOperation | BatchMoveOperation).blockId
                 ? {
                     blockId: (
                       operation as BatchUpdateOperation | BatchDeleteOperation | BatchMoveOperation
@@ -1763,6 +1764,42 @@ export class BlocksService {
       .getOne();
   }
 
+  private async findActiveBlockVersionByClientIdentity(
+    manager: EntityManager,
+    docId: string,
+    clientId: string | undefined,
+    syncCreateId?: string,
+  ): Promise<BlockVersion | null> {
+    if (!syncCreateId && !clientId) return null;
+
+    if (syncCreateId) {
+      const matchedBySyncCreateId = await manager
+        .getRepository(BlockVersion)
+        .createQueryBuilder("bv")
+        .innerJoin(Block, "b", "b.blockId = bv.blockId AND b.latestVer = bv.ver")
+        .where("bv.docId = :docId", { docId })
+        .andWhere("b.isDeleted = false")
+        .andWhere(this.buildPayloadAttrEqualsCondition("bv", "syncCreateId", "syncCreateId"), {
+          syncCreateId,
+        })
+        .getOne();
+      if (matchedBySyncCreateId) return matchedBySyncCreateId;
+    }
+
+    if (!clientId) return null;
+
+    return manager
+      .getRepository(BlockVersion)
+      .createQueryBuilder("bv")
+      .innerJoin(Block, "b", "b.blockId = bv.blockId AND b.latestVer = bv.ver")
+      .where("bv.docId = :docId", { docId })
+      .andWhere("b.isDeleted = false")
+      .andWhere(this.buildPayloadAttrEqualsCondition("bv", "clientId", "clientId"), {
+        clientId,
+      })
+      .getOne();
+  }
+
   private async handleBatchUpdate(
     operation: BatchUpdateOperation,
     docId: string,
@@ -1830,17 +1867,37 @@ export class BlocksService {
     manager: EntityManager,
     shouldCreateVersion: boolean,
   ): Promise<BatchDeleteResult> {
+    let blockId = operation.blockId;
+    if (!blockId) {
+      const matched = await this.findActiveBlockVersionByClientIdentity(
+        manager,
+        docId,
+        operation.clientId,
+        operation.syncCreateId,
+      );
+      blockId = matched?.blockId;
+    }
+
+    if (!blockId) {
+      if (operation.clientId || operation.syncCreateId) {
+        return {
+          blockId: operation.clientId ?? operation.syncCreateId ?? "client-identity-not-found",
+        };
+      }
+      throw new BadRequestException("Delete operation requires blockId, clientId, or syncCreateId");
+    }
+
     const block = await manager.findOne(Block, {
-      where: { blockId: operation.blockId, docId, isDeleted: false },
+      where: { blockId, docId, isDeleted: false },
     });
 
     if (!block) {
-      throw new NotFoundException(`Block ${operation.blockId} not found`);
+      throw new NotFoundException(`Block ${blockId} not found`);
     }
 
     if (shouldCreateVersion) {
       const latestVersion = await manager.findOne(BlockVersion, {
-        where: { docId, blockId: operation.blockId, ver: block.latestVer },
+        where: { docId, blockId, ver: block.latestVer },
       });
       if (!latestVersion) {
         throw new NotFoundException("Block version not found");
@@ -1855,11 +1912,11 @@ export class BlocksService {
       block.deletedAt = now;
       block.deletedBy = userId;
       await manager.save(Block, block);
-      return { blockId: operation.blockId, createDeleteCompensation };
+      return { blockId, createDeleteCompensation };
     }
 
     const latestVersion = await manager.findOne(BlockVersion, {
-      where: { docId, blockId: operation.blockId, ver: block.latestVer },
+      where: { docId, blockId, ver: block.latestVer },
     });
 
     if (!latestVersion) {
@@ -1875,7 +1932,7 @@ export class BlocksService {
     const newVer = await this.getNextBlockVersionNumber(
       manager,
       block.docId,
-      operation.blockId,
+      blockId,
       block.latestVer,
     );
     const deletedPayload = {
@@ -1889,9 +1946,9 @@ export class BlocksService {
     };
 
     const blockVersion = manager.create(BlockVersion, {
-      versionId: generateVersionId(operation.blockId, newVer),
+      versionId: generateVersionId(blockId, newVer),
       docId: block.docId,
-      blockId: operation.blockId,
+      blockId,
       ver: newVer,
       createdAt: now,
       createdBy: userId,
@@ -1913,7 +1970,7 @@ export class BlocksService {
     await manager.save(Block, block);
 
     return {
-      blockId: operation.blockId,
+      blockId,
       version: newVer,
       createDeleteCompensation,
     };
