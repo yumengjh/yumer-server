@@ -1,5 +1,7 @@
 import { Injectable } from "@nestjs/common";
-import { DataSource, EntityManager } from "typeorm";
+import { createHash } from "crypto";
+import { DataSource, EntityManager, In } from "typeorm";
+import { generateBlockId } from "../../common/utils/id-generator.util";
 import { Block } from "../../entities/block.entity";
 import { BlockVersion } from "../../entities/block-version.entity";
 import { DocDraft } from "../../entities/doc-draft.entity";
@@ -12,16 +14,20 @@ import {
   DraftCheckpointDto,
   DraftCheckpointResponseDto,
 } from "./dto/draft-checkpoint.dto";
+import { DocumentDraftService } from "./services/document-draft.service";
 
 type DraftVersion = BlockVersion & {
   payload: { attrs?: Record<string, unknown> };
 };
 
+type DraftCandidate = { block: Block; version: BlockVersion };
+
 @Injectable()
 export class DraftCheckpointService {
-  private idCounter = 0;
-
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly documentDraftService: DocumentDraftService,
+  ) {}
 
   async applyDraftCheckpoint(
     docId: string,
@@ -39,8 +45,19 @@ export class DraftCheckpointService {
     userId: string,
     dto: DraftCheckpointDto,
   ): Promise<DraftCheckpointResponseDto> {
-    const clientCheckpointId = this.normalizeCheckpointId(dto.clientCheckpointId);
-    const fingerprint = this.buildRequestFingerprint({ ...dto, clientCheckpointId });
+    const clientCheckpointId = this.normalizeCheckpointId(
+      dto.clientCheckpointId,
+    );
+    const fingerprint = this.buildRequestFingerprint({
+      ...dto,
+      clientCheckpointId,
+    });
+    const document =
+      await this.documentDraftService.lockDocumentForDraftMutation(
+        docId,
+        manager,
+      );
+
     const receiptRepository = manager.getRepository(SyncCheckpointReceipt);
     const existingReceipt = await receiptRepository.findOne({
       where: { docId, clientCheckpointId },
@@ -49,29 +66,16 @@ export class DraftCheckpointService {
       if (existingReceipt.requestFingerprint === fingerprint) {
         return this.mapReceiptToResponse(existingReceipt);
       }
-      const doc = await manager.getRepository(Document).findOne({ where: { docId } });
       return this.conflictResponse({
         dto,
         acceptedCheckpointId: clientCheckpointId,
-        serverHead: doc?.head ?? dto.baseVersion,
-        draftRevision: doc?.draftRevision ?? dto.draftRevision,
+        serverHead: document.head,
+        draftRevision: document.draftRevision,
         code: "CHECKPOINT_FINGERPRINT_CONFLICT",
         message: "Checkpoint id was reused with different content",
       });
     }
 
-    const documentRepository = manager.getRepository(Document);
-    const document = await documentRepository.findOne({ where: { docId } });
-    if (!document) {
-      return this.conflictResponse({
-        dto,
-        acceptedCheckpointId: clientCheckpointId,
-        serverHead: dto.baseVersion,
-        draftRevision: dto.draftRevision,
-        code: "DOCUMENT_NOT_FOUND",
-        message: "Document not found",
-      });
-    }
     if (dto.mode !== "checkpoint" || dto.coverage !== "full") {
       return this.conflictResponse({
         dto,
@@ -80,6 +84,16 @@ export class DraftCheckpointService {
         draftRevision: document.draftRevision,
         code: "CHECKPOINT_COVERAGE_UNSUPPORTED",
         message: "Only full checkpoint coverage is supported",
+      });
+    }
+    if (!this.isCheckpointContentHashValid(docId, dto)) {
+      return this.conflictResponse({
+        dto,
+        acceptedCheckpointId: clientCheckpointId,
+        serverHead: document.head,
+        draftRevision: document.draftRevision,
+        code: "CONTENT_HASH_MISMATCH",
+        message: "Checkpoint content hash does not match the received content",
       });
     }
     if (document.head !== dto.baseVersion) {
@@ -123,7 +137,9 @@ export class DraftCheckpointService {
       });
     }
 
-    const draft = await manager.getRepository(DocDraft).findOne({ where: { docId } });
+    const draft = await manager
+      .getRepository(DocDraft)
+      .findOne({ where: { docId } });
     if (!draft) {
       return this.conflictResponse({
         dto,
@@ -140,9 +156,13 @@ export class DraftCheckpointService {
     const tombstoned: DraftCheckpointResponseDto["tombstoned"] = [];
     const nextMap = { ...(draft.blockVersionMap ?? {}) };
     const keptBlockIds = new Set<string>();
+    const candidates = await this.loadDraftCandidates(manager, draft);
+    const candidatesByBlockId = new Map(
+      candidates.map((candidate) => [candidate.block.blockId, candidate]),
+    );
 
     for (const checkpointBlock of dto.blocks) {
-      const matched = await this.findDraftBlock(manager, draft, checkpointBlock);
+      const matched = this.findDraftBlock(candidates, checkpointBlock);
       const block =
         matched?.block ??
         (await this.createBlock(manager, {
@@ -168,6 +188,7 @@ export class DraftCheckpointService {
       await manager.getRepository(Block).save(block);
       nextMap[block.blockId] = version.ver;
       keptBlockIds.add(block.blockId);
+      candidatesByBlockId.set(block.blockId, { block, version });
       mappings.push({
         clientId: checkpointBlock.clientId,
         blockId: block.blockId,
@@ -177,16 +198,17 @@ export class DraftCheckpointService {
     }
 
     const currentMap = draft.blockVersionMap ?? {};
-    const rootBlockIds = new Set([draft.rootBlockId, dto.rootBlockId].filter(Boolean));
+    const rootBlockIds = new Set(
+      [draft.rootBlockId, dto.rootBlockId].filter(Boolean),
+    );
     for (const blockId of Object.keys(currentMap)) {
       if (keptBlockIds.has(blockId) || rootBlockIds.has(blockId)) continue;
-      const version = await manager.getRepository(BlockVersion).findOne({
-        where: { docId, blockId, ver: currentMap[blockId] },
-      });
+      const candidate = candidatesByBlockId.get(blockId);
+      const version = candidate?.version;
       if (!version) continue;
       const attrs = this.readAttrs(version);
       if (attrs.deleted === true) continue;
-      const block = await manager.getRepository(Block).findOne({ where: { blockId } });
+      const block = candidate?.block;
       if (!block) continue;
       const deletedVersion = await this.writeDeletedVersion(manager, {
         docId,
@@ -200,7 +222,8 @@ export class DraftCheckpointService {
       block.latestBy = userId;
       await manager.getRepository(Block).save(block);
       nextMap[blockId] = deletedVersion.ver;
-      const clientId = typeof attrs.clientId === "string" ? attrs.clientId : null;
+      const clientId =
+        typeof attrs.clientId === "string" ? attrs.clientId : null;
       const syncCreateId =
         typeof attrs.syncCreateId === "string" ? attrs.syncCreateId : null;
       tombstoned.push({ blockId, clientId, syncCreateId });
@@ -277,7 +300,28 @@ export class DraftCheckpointService {
     });
   }
 
-  private mapReceiptToResponse(receipt: SyncCheckpointReceipt): DraftCheckpointResponseDto {
+  private isCheckpointContentHashValid(
+    docId: string,
+    dto: DraftCheckpointDto,
+  ): boolean {
+    const canonical = JSON.stringify({
+      docId,
+      rootBlockId: dto.rootBlockId,
+      blocks: dto.blocks,
+    });
+    const sha256 = `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+    if (dto.contentHash === sha256) return true;
+
+    let fallback = 0;
+    for (let index = 0; index < canonical.length; index += 1) {
+      fallback = (fallback * 31 + canonical.charCodeAt(index)) >>> 0;
+    }
+    return dto.contentHash === `sha256:fallback-${fallback.toString(16)}`;
+  }
+
+  private mapReceiptToResponse(
+    receipt: SyncCheckpointReceipt,
+  ): DraftCheckpointResponseDto {
     return {
       acceptedCheckpointId: receipt.acceptedCheckpointId,
       appliedAt: Number(receipt.appliedAt),
@@ -287,7 +331,8 @@ export class DraftCheckpointService {
       conflicts: receipt.conflicts as DraftCheckpointResponseDto["conflicts"],
       contentHash: receipt.contentHash,
       mappings: receipt.mappings as DraftCheckpointResponseDto["mappings"],
-      tombstoned: receipt.tombstoned as DraftCheckpointResponseDto["tombstoned"],
+      tombstoned:
+        receipt.tombstoned as DraftCheckpointResponseDto["tombstoned"],
     };
   }
 
@@ -349,7 +394,7 @@ export class DraftCheckpointService {
     },
   ): Promise<Block> {
     const block = manager.getRepository(Block).create({
-      blockId: this.createBlockId(),
+      blockId: generateBlockId(),
       docId: params.docId,
       type: params.checkpointBlock.type,
       createdAt: params.now,
@@ -364,21 +409,52 @@ export class DraftCheckpointService {
     return manager.getRepository(Block).save(block as Block);
   }
 
-  private async findDraftBlock(
+  private async loadDraftCandidates(
     manager: EntityManager,
     draft: DocDraft,
-    checkpointBlock: DraftCheckpointBlockDto,
-  ): Promise<{ block: Block; version: BlockVersion } | null> {
-    const blockVersionMap = draft.blockVersionMap ?? {};
-    const candidates: Array<{ block: Block; version: BlockVersion }> = [];
-    for (const [blockId, ver] of Object.entries(blockVersionMap)) {
-      const version = await manager.getRepository(BlockVersion).findOne({
-        where: { docId: draft.docId, blockId, ver },
+  ): Promise<DraftCandidate[]> {
+    const entries = Object.entries(draft.blockVersionMap ?? {}).filter(
+      (entry): entry is [string, number] => typeof entry[1] === "number",
+    );
+    if (entries.length === 0) return [];
+
+    const blocks: Block[] = [];
+    const BLOCK_QUERY_CHUNK = 400;
+    for (let i = 0; i < entries.length; i += BLOCK_QUERY_CHUNK) {
+      const blockIds = entries
+        .slice(i, i + BLOCK_QUERY_CHUNK)
+        .map(([blockId]) => blockId);
+      const chunkBlocks = await manager.getRepository(Block).find({
+        where: { docId: draft.docId, blockId: In(blockIds) },
       });
-      const block = await manager.getRepository(Block).findOne({ where: { blockId } });
-      if (version && block) candidates.push({ block, version });
+      blocks.push(...chunkBlocks);
+    }
+    const blockById = new Map(blocks.map((block) => [block.blockId, block]));
+
+    const versions: BlockVersion[] = [];
+    const VERSION_QUERY_CHUNK = 200;
+    for (let i = 0; i < entries.length; i += VERSION_QUERY_CHUNK) {
+      const chunk = entries.slice(i, i + VERSION_QUERY_CHUNK);
+      const chunkVersions = await manager.getRepository(BlockVersion).find({
+        where: chunk.map(([blockId, ver]) => ({
+          docId: draft.docId,
+          blockId,
+          ver,
+        })),
+      });
+      versions.push(...chunkVersions);
     }
 
+    return versions.flatMap((version) => {
+      const block = blockById.get(version.blockId);
+      return block ? [{ block, version }] : [];
+    });
+  }
+
+  private findDraftBlock(
+    candidates: DraftCandidate[],
+    checkpointBlock: DraftCheckpointBlockDto,
+  ): DraftCandidate | null {
     if (checkpointBlock.blockId) {
       const byBlock = candidates.find(
         (candidate) => candidate.block.blockId === checkpointBlock.blockId,
@@ -387,13 +463,17 @@ export class DraftCheckpointService {
     }
     if (checkpointBlock.syncCreateId) {
       const bySyncCreate = candidates.find(
-        (candidate) => this.readAttrs(candidate.version).syncCreateId === checkpointBlock.syncCreateId,
+        (candidate) =>
+          this.readAttrs(candidate.version).syncCreateId ===
+          checkpointBlock.syncCreateId,
       );
       if (bySyncCreate) return bySyncCreate;
     }
     return (
       candidates.find(
-        (candidate) => this.readAttrs(candidate.version).clientId === checkpointBlock.clientId,
+        (candidate) =>
+          this.readAttrs(candidate.version).clientId ===
+          checkpointBlock.clientId,
       ) ?? null
     );
   }
@@ -410,7 +490,10 @@ export class DraftCheckpointService {
       deleted: boolean;
     },
   ): Promise<BlockVersion> {
-    const payload = this.mergePayloadAttrs(params.checkpointBlock, params.block.blockId);
+    const payload = this.mergePayloadAttrs(
+      params.checkpointBlock,
+      params.block.blockId,
+    );
     const version = manager.getRepository(BlockVersion).create({
       versionId: `${params.block.blockId}_v${params.ver}`,
       docId: params.docId,
@@ -446,7 +529,8 @@ export class DraftCheckpointService {
       blockId: params.block.blockId,
       deleted: true,
     };
-    const ver = Number(params.block.latestVer ?? params.previousVersion.ver ?? 0) + 1;
+    const ver =
+      Number(params.block.latestVer ?? params.previousVersion.ver ?? 0) + 1;
     const payload = {
       ...((params.previousVersion.payload as Record<string, unknown>) ?? {}),
       attrs,
@@ -477,7 +561,9 @@ export class DraftCheckpointService {
   ): Record<string, unknown> {
     const payload = { ...checkpointBlock.payload };
     const attrs: Record<string, unknown> = {
-      ...((checkpointBlock.payload.attrs as Record<string, unknown> | undefined) ?? {}),
+      ...((checkpointBlock.payload.attrs as
+        | Record<string, unknown>
+        | undefined) ?? {}),
       clientId: checkpointBlock.clientId,
       blockId,
       "data-block-id": blockId,
@@ -493,12 +579,10 @@ export class DraftCheckpointService {
   }
 
   private readAttrs(version: BlockVersion): Record<string, unknown> {
-    return ((version as DraftVersion).payload?.attrs ?? {}) as Record<string, unknown>;
-  }
-
-  private createBlockId(): string {
-    this.idCounter += 1;
-    return `block_${Date.now()}_${this.idCounter}`;
+    return ((version as DraftVersion).payload?.attrs ?? {}) as Record<
+      string,
+      unknown
+    >;
   }
 
   private simpleHash(value: string): string {

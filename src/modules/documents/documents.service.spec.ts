@@ -12,6 +12,7 @@ import type { DocumentSnapshotService } from "./services/document-snapshot.servi
 import { VersionControlService } from "./services/version-control.service";
 import { WorkspacesService } from "../workspaces/workspaces.service";
 import { ActivitiesService } from "../activities/activities.service";
+import type { DraftCheckpointService } from "./draft-checkpoint.service";
 
 describe("DocumentsService", () => {
   const originalFetch = global.fetch;
@@ -58,17 +59,24 @@ describe("DocumentsService", () => {
     getRepository: jest.fn((entity: { name?: string }) => {
       if (entity?.name === "DocumentSyncSession") {
         return {
-          findOne: jest.fn(async ({ where }: { where?: Record<string, unknown> }) => {
-            return (
-              syncSessions.find((item) =>
-                Object.entries(where ?? {}).every(([key, value]) => item[key] === value),
-              ) ?? null
-            );
-          }),
+          findOne: jest.fn(
+            async ({ where }: { where?: Record<string, unknown> }) => {
+              return (
+                syncSessions.find((item) =>
+                  Object.entries(where ?? {}).every(
+                    ([key, value]) => item[key] === value,
+                  ),
+                ) ?? null
+              );
+            },
+          ),
           create: jest.fn((value) => ({ ...value })),
           save: jest.fn(async (value) => {
-            const index = syncSessions.findIndex((item) => item.docId === value.docId);
-            if (index >= 0) syncSessions[index] = { ...syncSessions[index], ...value };
+            const index = syncSessions.findIndex(
+              (item) => item.docId === value.docId,
+            );
+            if (index >= 0)
+              syncSessions[index] = { ...syncSessions[index], ...value };
             else syncSessions.push({ ...value });
             return value;
           }),
@@ -90,6 +98,9 @@ describe("DocumentsService", () => {
   const activitiesService = {
     record: jest.fn(),
   } as unknown as ActivitiesService;
+  const draftCheckpointService = {
+    applyDraftCheckpoint: jest.fn(),
+  } as unknown as DraftCheckpointService;
   const documentRenderService = {
     renderTree: jest.fn(),
   };
@@ -116,6 +127,7 @@ describe("DocumentsService", () => {
       dataSource,
       workspacesService,
       activitiesService,
+      draftCheckpointService,
       documentRenderService,
     );
   });
@@ -174,7 +186,13 @@ describe("DocumentsService", () => {
     ] as BlockVersion[]);
 
     await expect(
-      (service as any).getEditContent("doc_1", "user_1", undefined, undefined, undefined),
+      (service as any).getEditContent(
+        "doc_1",
+        "user_1",
+        undefined,
+        undefined,
+        undefined,
+      ),
     ).resolves.toMatchObject({
       source: "draft",
       syncSession: {
@@ -213,8 +231,12 @@ describe("DocumentsService", () => {
     } as Document;
     jest.mocked(documentRepository.findOne).mockResolvedValue(document);
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
-    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
-    jest.mocked(documentRepository.save).mockImplementation(async (value) => value as never);
+    jest
+      .mocked(workspacesService.checkEditPermission as any)
+      .mockResolvedValue(undefined);
+    jest
+      .mocked(documentRepository.save)
+      .mockImplementation(async (value) => value as never);
 
     const result = await (service as any).updateEditorState(
       "doc_1",
@@ -282,14 +304,22 @@ describe("DocumentsService", () => {
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
     jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
     jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
-    jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue(null);
+    jest
+      .mocked((documentDraftService as any).findByDocId)
+      .mockResolvedValue(null);
     jest.spyOn(service as any, "getContentByDocument").mockResolvedValue({
       tree: { blockId: "root_1", type: "root", children: [] },
       pagination: { totalBlocks: 1, returnedBlocks: 1, hasMore: false },
     });
 
     await expect(
-      (service as any).getEditContent("doc_1", "user_1", undefined, undefined, undefined),
+      (service as any).getEditContent(
+        "doc_1",
+        "user_1",
+        undefined,
+        undefined,
+        undefined,
+      ),
     ).resolves.toMatchObject({
       source: "head",
       draft: {
@@ -320,7 +350,9 @@ describe("DocumentsService", () => {
       viewCount: 0,
     } as Document);
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
-    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest
+      .mocked(workspacesService.checkEditPermission as any)
+      .mockResolvedValue(undefined);
     jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
     jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
     jest.mocked((documentDraftService as any).discardDraft).mockResolvedValue({
@@ -339,9 +371,9 @@ describe("DocumentsService", () => {
       updatedAt: Date.now(),
     });
 
-    await expect((service as any).discardDraft("doc_1", "user_1")).rejects.toThrow(
-      "SYNC_SESSION_REQUIRED",
-    );
+    await expect(
+      (service as any).discardDraft("doc_1", "user_1"),
+    ).rejects.toThrow("SYNC_SESSION_REQUIRED");
   });
 
   it("accepts discardDraft when the current sync session matches", async () => {
@@ -358,7 +390,9 @@ describe("DocumentsService", () => {
       viewCount: 0,
     } as Document);
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
-    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest
+      .mocked(workspacesService.checkEditPermission as any)
+      .mockResolvedValue(undefined);
     jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
     jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
     jest.mocked((documentDraftService as any).discardDraft).mockResolvedValue({
@@ -409,7 +443,9 @@ describe("DocumentsService", () => {
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
     jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
     jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
-    jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue(null);
+    jest
+      .mocked((documentDraftService as any).findByDocId)
+      .mockResolvedValue(null);
     jest.spyOn(service as any, "getContentByDocument").mockResolvedValue({
       tree: { blockId: "root_1", type: "root", children: [] },
       pagination: { totalBlocks: 1, returnedBlocks: 1, hasMore: false },
@@ -419,7 +455,9 @@ describe("DocumentsService", () => {
     const second = await (service as any).getEditContent("doc_1", "user_1");
 
     expect(first.syncSession.sessionId).toBe(second.syncSession.sessionId);
-    expect(first.syncSession.sessionEpoch).toBe(second.syncSession.sessionEpoch);
+    expect(first.syncSession.sessionEpoch).toBe(
+      second.syncSession.sessionEpoch,
+    );
   });
 
   it("commits the current draft through POST /documents/:docId/commit", async () => {
@@ -436,7 +474,9 @@ describe("DocumentsService", () => {
       viewCount: 0,
     } as Document);
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
-    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest
+      .mocked(workspacesService.checkEditPermission as any)
+      .mockResolvedValue(undefined);
     jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
     jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
     jest.mocked((documentDraftService as any).commitDraft).mockResolvedValue({
@@ -457,9 +497,9 @@ describe("DocumentsService", () => {
       updatedAt: Date.now(),
     });
 
-    await expect(service.commitVersion("doc_1", "manual save", "user_1")).rejects.toThrow(
-      "SYNC_SESSION_REQUIRED",
-    );
+    await expect(
+      service.commitVersion("doc_1", "manual save", "user_1"),
+    ).rejects.toThrow("SYNC_SESSION_REQUIRED");
   });
 
   it("commits when the provided sync session matches the active editor session", async () => {
@@ -476,7 +516,9 @@ describe("DocumentsService", () => {
       viewCount: 0,
     } as Document);
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
-    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest
+      .mocked(workspacesService.checkEditPermission as any)
+      .mockResolvedValue(undefined);
     jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
     jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
     jest.mocked((documentDraftService as any).commitDraft).mockResolvedValue({
@@ -524,7 +566,9 @@ describe("DocumentsService", () => {
       viewCount: 0,
     } as Document);
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
-    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest
+      .mocked(workspacesService.checkEditPermission as any)
+      .mockResolvedValue(undefined);
     syncSessions.push({
       docId: "doc_1",
       sessionId: "session_commit_cursor",
@@ -560,7 +604,9 @@ describe("DocumentsService", () => {
       viewCount: 0,
     } as Document);
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
-    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest
+      .mocked(workspacesService.checkEditPermission as any)
+      .mockResolvedValue(undefined);
     syncSessions.push({
       docId: "doc_1",
       sessionId: "session_expired",
@@ -594,11 +640,15 @@ describe("DocumentsService", () => {
       viewCount: 0,
     } as Document;
     jest.spyOn(service as any, "findOne").mockResolvedValue(document);
-    jest.spyOn(service as any, "checkDocumentEditPermission").mockResolvedValue(undefined);
-    jest.spyOn(service as any, "getBlockVersionMapForVersion").mockResolvedValue({
-      map: { root_1: 1, block_1: 2 },
-      createdAt: 1,
-    });
+    jest
+      .spyOn(service as any, "checkDocumentEditPermission")
+      .mockResolvedValue(undefined);
+    jest
+      .spyOn(service as any, "getBlockVersionMapForVersion")
+      .mockResolvedValue({
+        map: { root_1: 1, block_1: 2 },
+        createdAt: 1,
+      });
     jest.mocked(docRevisionRepository.findOne).mockResolvedValue({
       docId: "doc_1",
       docVer: 2,
@@ -607,12 +657,14 @@ describe("DocumentsService", () => {
     jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue({
       draftId: "doc_1@draft",
     });
-    jest.mocked((documentDraftService as any).commitDraftWithManager).mockResolvedValue({
-      docId: "doc_1",
-      version: 6,
-      committed: true,
-      draftRemoved: true,
-    });
+    jest
+      .mocked((documentDraftService as any).commitDraftWithManager)
+      .mockResolvedValue({
+        docId: "doc_1",
+        version: 6,
+        committed: true,
+        draftRemoved: true,
+      });
 
     const docRepo = {
       findOne: jest.fn().mockResolvedValue({ ...document, head: 6 }),
@@ -639,9 +691,11 @@ describe("DocumentsService", () => {
     jest
       .mocked(dataSource.transaction)
       .mockImplementation(async (callback: any) => callback(manager));
-    jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
-      snapshotId: "doc_1@snap@7",
-    });
+    jest
+      .mocked((documentSnapshotService as any).createSnapshotForRevision)
+      .mockResolvedValue({
+        snapshotId: "doc_1@snap@7",
+      });
 
     await service.revert("doc_1", 2, "user_1", "preserve");
 
@@ -676,11 +730,15 @@ describe("DocumentsService", () => {
       viewCount: 0,
     } as Document;
     jest.spyOn(service as any, "findOne").mockResolvedValue(document);
-    jest.spyOn(service as any, "checkDocumentEditPermission").mockResolvedValue(undefined);
-    jest.spyOn(service as any, "getBlockVersionMapForVersion").mockResolvedValue({
-      map: { root_1: 1, block_1: 2 },
-      createdAt: 1,
-    });
+    jest
+      .spyOn(service as any, "checkDocumentEditPermission")
+      .mockResolvedValue(undefined);
+    jest
+      .spyOn(service as any, "getBlockVersionMapForVersion")
+      .mockResolvedValue({
+        map: { root_1: 1, block_1: 2 },
+        createdAt: 1,
+      });
     jest.mocked(docRevisionRepository.findOne).mockResolvedValue({
       docId: "doc_1",
       docVer: 2,
@@ -689,11 +747,13 @@ describe("DocumentsService", () => {
     jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue({
       draftId: "doc_1@draft",
     });
-    jest.mocked((documentDraftService as any).discardDraftWithManager).mockResolvedValue({
-      docId: "doc_1",
-      discarded: true,
-      fallbackSource: "head",
-    });
+    jest
+      .mocked((documentDraftService as any).discardDraftWithManager)
+      .mockResolvedValue({
+        docId: "doc_1",
+        discarded: true,
+        fallbackSource: "head",
+      });
 
     const docRepo = {
       findOne: jest.fn().mockResolvedValue({ ...document }),
@@ -720,13 +780,18 @@ describe("DocumentsService", () => {
     jest
       .mocked(dataSource.transaction)
       .mockImplementation(async (callback: any) => callback(manager));
-    jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
-      snapshotId: "doc_1@snap@6",
-    });
+    jest
+      .mocked((documentSnapshotService as any).createSnapshotForRevision)
+      .mockResolvedValue({
+        snapshotId: "doc_1@snap@6",
+      });
 
     await service.revert("doc_1", 2, "user_1", "discard");
 
-    expect(documentDraftService.discardDraftWithManager).toHaveBeenCalledWith("doc_1", manager);
+    expect(documentDraftService.discardDraftWithManager).toHaveBeenCalledWith(
+      "doc_1",
+      manager,
+    );
     expect(documentDraftService.commitDraftWithManager).not.toHaveBeenCalled();
     expect(revRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -759,7 +824,9 @@ describe("DocumentsService", () => {
       draftId: "draft_1",
     });
 
-    await expect(service.getPendingVersions("doc_1", "user_1")).resolves.toEqual({
+    await expect(
+      service.getPendingVersions("doc_1", "user_1"),
+    ).resolves.toEqual({
       docId: "doc_1",
       pendingCount: 1,
       hasPending: true,
@@ -780,7 +847,9 @@ describe("DocumentsService", () => {
       viewCount: 0,
     } as Document);
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
-    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest
+      .mocked(workspacesService.checkEditPermission as any)
+      .mockResolvedValue(undefined);
     jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
     jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
     jest
@@ -801,11 +870,13 @@ describe("DocumentsService", () => {
       discarded: true,
       fallbackSource: "head",
     });
-    jest.mocked((documentSnapshotService as any).getSnapshotMapForVersion).mockResolvedValue({
-      map: { root_1: 1 },
-      rootBlockId: "root_1",
-      snapshot: { snapshotId: "doc_1@snap@3", createdAt: 1000 },
-    });
+    jest
+      .mocked((documentSnapshotService as any).getSnapshotMapForVersion)
+      .mockResolvedValue({
+        map: { root_1: 1 },
+        rootBlockId: "root_1",
+        snapshot: { snapshotId: "doc_1@snap@3", createdAt: 1000 },
+      });
     jest.mocked(docRevisionRepository.findOne).mockResolvedValue({
       docId: "doc_1",
       docVer: 3,
@@ -942,18 +1013,23 @@ describe("DocumentsService", () => {
   });
 
   it("读取历史版本映射时优先使用 doc_snapshots 中的精确块版本映射", async () => {
-    jest.mocked((documentSnapshotService as any).getSnapshotMapForVersion).mockResolvedValue({
-      map: { root_1: 1, b_1: 7 },
-      rootBlockId: "root_1",
-      snapshot: { snapshotId: "doc_1@snap@3", createdAt: 12345 },
-    });
+    jest
+      .mocked((documentSnapshotService as any).getSnapshotMapForVersion)
+      .mockResolvedValue({
+        map: { root_1: 1, b_1: 7 },
+        rootBlockId: "root_1",
+        snapshot: { snapshotId: "doc_1@snap@3", createdAt: 12345 },
+      });
     jest.mocked(docRevisionRepository.findOne).mockResolvedValue({
       docId: "doc_1",
       docVer: 3,
       createdAt: 10000,
     } as DocRevision);
 
-    const result = await (service as any).getBlockVersionMapForVersion("doc_1", 3);
+    const result = await (service as any).getBlockVersionMapForVersion(
+      "doc_1",
+      3,
+    );
 
     expect(result).toEqual({
       map: { root_1: 1, b_1: 7 },
@@ -972,15 +1048,19 @@ describe("DocumentsService", () => {
       updatedBy: "old_user",
     } as Document;
     jest.mocked(documentRepository.findOne).mockResolvedValue(document);
-    (service as any).checkDocumentEditPermission = jest.fn().mockResolvedValue(undefined);
+    (service as any).checkDocumentEditPermission = jest
+      .fn()
+      .mockResolvedValue(undefined);
     (service as any).findOne = jest.fn().mockResolvedValue({
       ...document,
       publishedHead: 5,
       publishedSnapshotId: "doc_1@snap@5",
     });
-    jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
-      snapshotId: "doc_1@snap@5",
-    });
+    jest
+      .mocked((documentSnapshotService as any).createSnapshotForRevision)
+      .mockResolvedValue({
+        snapshotId: "doc_1@snap@5",
+      });
 
     const docRepo = {
       findOne: jest.fn().mockResolvedValue({ ...document }),
@@ -995,7 +1075,9 @@ describe("DocumentsService", () => {
 
     await service.publish("doc_1", "user_1");
 
-    expect(documentSnapshotService.createSnapshotForRevision).toHaveBeenCalledWith(
+    expect(
+      documentSnapshotService.createSnapshotForRevision,
+    ).toHaveBeenCalledWith(
       "doc_1",
       5,
       manager,
@@ -1051,7 +1133,9 @@ describe("DocumentsService", () => {
       },
     } as unknown as DocSnapshot;
     jest.mocked(documentRepository.findOne).mockResolvedValue(document);
-    (service as any).checkDocumentEditPermission = jest.fn().mockResolvedValue(undefined);
+    (service as any).checkDocumentEditPermission = jest
+      .fn()
+      .mockResolvedValue(undefined);
     (service as any).findOne = jest.fn().mockResolvedValue({
       ...document,
       publishedHead: 3,
@@ -1077,7 +1161,8 @@ describe("DocumentsService", () => {
     const manager = {
       getRepository: jest.fn((entity: unknown) => {
         if ((entity as { name?: string })?.name === "Document") return docRepo;
-        if ((entity as { name?: string })?.name === "DocSnapshot") return snapshotRepo;
+        if ((entity as { name?: string })?.name === "DocSnapshot")
+          return snapshotRepo;
         return docRepo;
       }),
     };
@@ -1147,7 +1232,9 @@ describe("DocumentsService", () => {
       },
     } as unknown as DocSnapshot;
     jest.mocked(documentRepository.findOne).mockResolvedValue(document);
-    (service as any).checkDocumentEditPermission = jest.fn().mockResolvedValue(undefined);
+    (service as any).checkDocumentEditPermission = jest
+      .fn()
+      .mockResolvedValue(undefined);
     (service as any).findOne = jest.fn().mockResolvedValue({
       ...document,
       publishedHead: 0,
@@ -1165,7 +1252,8 @@ describe("DocumentsService", () => {
     const manager = {
       getRepository: jest.fn((entity: unknown) => {
         if ((entity as { name?: string })?.name === "Document") return docRepo;
-        if ((entity as { name?: string })?.name === "DocSnapshot") return snapshotRepo;
+        if ((entity as { name?: string })?.name === "DocSnapshot")
+          return snapshotRepo;
         return docRepo;
       }),
     };
@@ -1195,7 +1283,8 @@ describe("DocumentsService", () => {
   });
 
   it("公开文档发布成功后调用前端缓存失效接口", async () => {
-    process.env.PUBLIC_SITE_REVALIDATE_URL = "http://frontend.test/api/revalidate-doc";
+    process.env.PUBLIC_SITE_REVALIDATE_URL =
+      "http://frontend.test/api/revalidate-doc";
     process.env.PUBLIC_SITE_REVALIDATE_SECRET = "top-secret";
     const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200 });
     global.fetch = fetchMock as typeof fetch;
@@ -1211,15 +1300,19 @@ describe("DocumentsService", () => {
       updatedBy: "old_user",
     } as Document;
     jest.mocked(documentRepository.findOne).mockResolvedValue(document);
-    (service as any).checkDocumentEditPermission = jest.fn().mockResolvedValue(undefined);
+    (service as any).checkDocumentEditPermission = jest
+      .fn()
+      .mockResolvedValue(undefined);
     (service as any).findOne = jest.fn().mockResolvedValue({
       ...document,
       publishedHead: 5,
       publishedSnapshotId: "doc_36_abcd1234@snap@5",
     });
-    jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
-      snapshotId: "doc_36_abcd1234@snap@5",
-    });
+    jest
+      .mocked((documentSnapshotService as any).createSnapshotForRevision)
+      .mockResolvedValue({
+        snapshotId: "doc_36_abcd1234@snap@5",
+      });
 
     const docRepo = {
       findOne: jest.fn().mockResolvedValue({ ...document }),
@@ -1277,15 +1370,19 @@ describe("DocumentsService", () => {
       updatedBy: "old_user",
     } as Document;
     jest.mocked(documentRepository.findOne).mockResolvedValue(document);
-    (service as any).checkDocumentEditPermission = jest.fn().mockResolvedValue(undefined);
+    (service as any).checkDocumentEditPermission = jest
+      .fn()
+      .mockResolvedValue(undefined);
     (service as any).findOne = jest.fn().mockResolvedValue({
       ...document,
       publishedHead: 5,
       publishedSnapshotId: "doc_36_abcd1234@snap@5",
     });
-    jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
-      snapshotId: "doc_36_abcd1234@snap@5",
-    });
+    jest
+      .mocked((documentSnapshotService as any).createSnapshotForRevision)
+      .mockResolvedValue({
+        snapshotId: "doc_36_abcd1234@snap@5",
+      });
 
     const docRepo = {
       findOne: jest.fn().mockResolvedValue({ ...document }),
@@ -1319,9 +1416,12 @@ describe("DocumentsService", () => {
   });
 
   it("公开文档发布后缓存失效成功时记录生产可见日志", async () => {
-    process.env.PUBLIC_SITE_REVALIDATE_URL = "http://frontend.test/api/revalidate-doc";
+    process.env.PUBLIC_SITE_REVALIDATE_URL =
+      "http://frontend.test/api/revalidate-doc";
     process.env.PUBLIC_SITE_REVALIDATE_SECRET = "top-secret";
-    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 }) as typeof fetch;
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200 }) as typeof fetch;
     const loggerLog = jest.fn();
     (service as any).logger.log = loggerLog;
 
@@ -1336,15 +1436,19 @@ describe("DocumentsService", () => {
       updatedBy: "old_user",
     } as Document;
     jest.mocked(documentRepository.findOne).mockResolvedValue(document);
-    (service as any).checkDocumentEditPermission = jest.fn().mockResolvedValue(undefined);
+    (service as any).checkDocumentEditPermission = jest
+      .fn()
+      .mockResolvedValue(undefined);
     (service as any).findOne = jest.fn().mockResolvedValue({
       ...document,
       publishedHead: 5,
       publishedSnapshotId: "doc_36_abcd1234@snap@5",
     });
-    jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
-      snapshotId: "doc_36_abcd1234@snap@5",
-    });
+    jest
+      .mocked((documentSnapshotService as any).createSnapshotForRevision)
+      .mockResolvedValue({
+        snapshotId: "doc_36_abcd1234@snap@5",
+      });
 
     const docRepo = {
       findOne: jest.fn().mockResolvedValue({ ...document }),
@@ -1365,9 +1469,12 @@ describe("DocumentsService", () => {
   });
 
   it("前端缓存失效失败时不影响发布成功", async () => {
-    process.env.PUBLIC_SITE_REVALIDATE_URL = "http://frontend.test/api/revalidate-doc";
+    process.env.PUBLIC_SITE_REVALIDATE_URL =
+      "http://frontend.test/api/revalidate-doc";
     process.env.PUBLIC_SITE_REVALIDATE_SECRET = "top-secret";
-    global.fetch = jest.fn().mockRejectedValue(new Error("network")) as typeof fetch;
+    global.fetch = jest
+      .fn()
+      .mockRejectedValue(new Error("network")) as typeof fetch;
 
     const document = {
       docId: "doc_36_abcd1234",
@@ -1380,15 +1487,19 @@ describe("DocumentsService", () => {
       updatedBy: "old_user",
     } as Document;
     jest.mocked(documentRepository.findOne).mockResolvedValue(document);
-    (service as any).checkDocumentEditPermission = jest.fn().mockResolvedValue(undefined);
+    (service as any).checkDocumentEditPermission = jest
+      .fn()
+      .mockResolvedValue(undefined);
     (service as any).findOne = jest.fn().mockResolvedValue({
       ...document,
       publishedHead: 5,
       publishedSnapshotId: "doc_36_abcd1234@snap@5",
     });
-    jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
-      snapshotId: "doc_36_abcd1234@snap@5",
-    });
+    jest
+      .mocked((documentSnapshotService as any).createSnapshotForRevision)
+      .mockResolvedValue({
+        snapshotId: "doc_36_abcd1234@snap@5",
+      });
 
     const docRepo = {
       findOne: jest.fn().mockResolvedValue({ ...document }),
@@ -1401,7 +1512,9 @@ describe("DocumentsService", () => {
       .mocked(dataSource.transaction)
       .mockImplementation(async (callback: any) => callback(manager));
 
-    await expect(service.publish("doc_36_abcd1234", "user_1")).resolves.toMatchObject({
+    await expect(
+      service.publish("doc_36_abcd1234", "user_1"),
+    ).resolves.toMatchObject({
       document: {
         publishedHead: 5,
         publishedSnapshotId: "doc_36_abcd1234@snap@5",
@@ -1416,12 +1529,17 @@ describe("DocumentsService", () => {
   });
 
   it("前端缓存失效返回非 2xx 时发布响应包含状态码和前端响应体", async () => {
-    process.env.PUBLIC_SITE_REVALIDATE_URL = "http://frontend.test/api/revalidate-doc";
+    process.env.PUBLIC_SITE_REVALIDATE_URL =
+      "http://frontend.test/api/revalidate-doc";
     process.env.PUBLIC_SITE_REVALIDATE_SECRET = "top-secret";
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
       status: 401,
-      text: jest.fn().mockResolvedValue(JSON.stringify({ success: false, error: "Unauthorized" })),
+      text: jest
+        .fn()
+        .mockResolvedValue(
+          JSON.stringify({ success: false, error: "Unauthorized" }),
+        ),
     }) as typeof fetch;
 
     const document = {
@@ -1435,15 +1553,19 @@ describe("DocumentsService", () => {
       updatedBy: "old_user",
     } as Document;
     jest.mocked(documentRepository.findOne).mockResolvedValue(document);
-    (service as any).checkDocumentEditPermission = jest.fn().mockResolvedValue(undefined);
+    (service as any).checkDocumentEditPermission = jest
+      .fn()
+      .mockResolvedValue(undefined);
     (service as any).findOne = jest.fn().mockResolvedValue({
       ...document,
       publishedHead: 5,
       publishedSnapshotId: "doc_36_abcd1234@snap@5",
     });
-    jest.mocked((documentSnapshotService as any).createSnapshotForRevision).mockResolvedValue({
-      snapshotId: "doc_36_abcd1234@snap@5",
-    });
+    jest
+      .mocked((documentSnapshotService as any).createSnapshotForRevision)
+      .mockResolvedValue({
+        snapshotId: "doc_36_abcd1234@snap@5",
+      });
 
     const docRepo = {
       findOne: jest.fn().mockResolvedValue({ ...document }),
@@ -1456,7 +1578,9 @@ describe("DocumentsService", () => {
       .mocked(dataSource.transaction)
       .mockImplementation(async (callback: any) => callback(manager));
 
-    await expect(service.publish("doc_36_abcd1234", "user_1")).resolves.toMatchObject({
+    await expect(
+      service.publish("doc_36_abcd1234", "user_1"),
+    ).resolves.toMatchObject({
       document: {
         publishedHead: 5,
         publishedSnapshotId: "doc_36_abcd1234@snap@5",
@@ -1482,16 +1606,20 @@ describe("DocumentsService", () => {
       docVer: 2,
       createdAt: 1000,
     } as DocRevision);
-    jest.mocked((documentSnapshotService as any).getSnapshotMapForVersion).mockResolvedValue({
-      map: { root_1: 1, b_1: 1 },
-      rootBlockId: "root_1",
-      snapshot: { snapshotId: "doc_1@snap@2", createdAt: 1000 },
-    });
+    jest
+      .mocked((documentSnapshotService as any).getSnapshotMapForVersion)
+      .mockResolvedValue({
+        map: { root_1: 1, b_1: 1 },
+        rootBlockId: "root_1",
+        snapshot: { snapshotId: "doc_1@snap@2", createdAt: 1000 },
+      });
     (blockRepository as any).findOne = jest.fn().mockResolvedValue({
       blockId: "root_1",
       isDeleted: false,
     });
-    (blockRepository as any).find = jest.fn().mockResolvedValue([{ blockId: "b_1" }]);
+    (blockRepository as any).find = jest
+      .fn()
+      .mockResolvedValue([{ blockId: "b_1" }]);
     jest.mocked(blockVersionRepository.find).mockResolvedValue([
       {
         id: 1,
@@ -1515,7 +1643,9 @@ describe("DocumentsService", () => {
         },
       },
     ] as BlockVersion[]);
-    documentRenderService.renderTree.mockRejectedValue(new Error("renderer unavailable"));
+    documentRenderService.renderTree.mockRejectedValue(
+      new Error("renderer unavailable"),
+    );
 
     const result = await (service as any).getContentByDocument(
       document,
@@ -1549,16 +1679,20 @@ describe("DocumentsService", () => {
       docVer: 2,
       createdAt: 1000,
     } as DocRevision);
-    jest.mocked((documentSnapshotService as any).getSnapshotMapForVersion).mockResolvedValue({
-      map: { root_1: 1, b_1: 1 },
-      rootBlockId: "root_1",
-      snapshot: { snapshotId: "doc_1@snap@2", createdAt: 1000 },
-    });
+    jest
+      .mocked((documentSnapshotService as any).getSnapshotMapForVersion)
+      .mockResolvedValue({
+        map: { root_1: 1, b_1: 1 },
+        rootBlockId: "root_1",
+        snapshot: { snapshotId: "doc_1@snap@2", createdAt: 1000 },
+      });
     (blockRepository as any).findOne = jest.fn().mockResolvedValue({
       blockId: "root_1",
       isDeleted: false,
     });
-    (blockRepository as any).find = jest.fn().mockResolvedValue([{ blockId: "b_1" }]);
+    (blockRepository as any).find = jest
+      .fn()
+      .mockResolvedValue([{ blockId: "b_1" }]);
     jest.mocked(blockVersionRepository.find).mockResolvedValue([
       {
         id: 1,
@@ -1641,16 +1775,20 @@ describe("DocumentsService", () => {
       docVer: 2,
       createdAt: 1000,
     } as DocRevision);
-    jest.mocked((documentSnapshotService as any).getSnapshotMapForVersion).mockResolvedValue({
-      map: { root_1: 1, b_1: 1 },
-      rootBlockId: "root_1",
-      snapshot: { snapshotId: "doc_1@snap@2", createdAt: 1000 },
-    });
+    jest
+      .mocked((documentSnapshotService as any).getSnapshotMapForVersion)
+      .mockResolvedValue({
+        map: { root_1: 1, b_1: 1 },
+        rootBlockId: "root_1",
+        snapshot: { snapshotId: "doc_1@snap@2", createdAt: 1000 },
+      });
     (blockRepository as any).findOne = jest.fn().mockResolvedValue({
       blockId: "root_1",
       isDeleted: false,
     });
-    (blockRepository as any).find = jest.fn().mockResolvedValue([{ blockId: "b_1" }]);
+    (blockRepository as any).find = jest
+      .fn()
+      .mockResolvedValue([{ blockId: "b_1" }]);
     jest.mocked(blockVersionRepository.find).mockResolvedValue([
       {
         id: 1,
@@ -1733,16 +1871,20 @@ describe("DocumentsService", () => {
       docVer: 2,
       createdAt: 1000,
     } as DocRevision);
-    jest.mocked((documentSnapshotService as any).getSnapshotMapForVersion).mockResolvedValue({
-      map: { root_1: 1, code_1: 1 },
-      rootBlockId: "root_1",
-      snapshot: { snapshotId: "doc_1@snap@2", createdAt: 1000 },
-    });
+    jest
+      .mocked((documentSnapshotService as any).getSnapshotMapForVersion)
+      .mockResolvedValue({
+        map: { root_1: 1, code_1: 1 },
+        rootBlockId: "root_1",
+        snapshot: { snapshotId: "doc_1@snap@2", createdAt: 1000 },
+      });
     (blockRepository as any).findOne = jest.fn().mockResolvedValue({
       blockId: "root_1",
       isDeleted: false,
     });
-    (blockRepository as any).find = jest.fn().mockResolvedValue([{ blockId: "code_1" }]);
+    (blockRepository as any).find = jest
+      .fn()
+      .mockResolvedValue([{ blockId: "code_1" }]);
     jest.mocked(blockVersionRepository.find).mockResolvedValue([
       {
         id: 1,
@@ -1827,16 +1969,20 @@ describe("DocumentsService", () => {
       docVer: 2,
       createdAt: 1000,
     } as DocRevision);
-    jest.mocked((documentSnapshotService as any).getSnapshotMapForVersion).mockResolvedValue({
-      map: { root_1: 1, b_1: 1 },
-      rootBlockId: "root_1",
-      snapshot: { snapshotId: "doc_1@snap@2", createdAt: 1000 },
-    });
+    jest
+      .mocked((documentSnapshotService as any).getSnapshotMapForVersion)
+      .mockResolvedValue({
+        map: { root_1: 1, b_1: 1 },
+        rootBlockId: "root_1",
+        snapshot: { snapshotId: "doc_1@snap@2", createdAt: 1000 },
+      });
     (blockRepository as any).findOne = jest.fn().mockResolvedValue({
       blockId: "root_1",
       isDeleted: false,
     });
-    (blockRepository as any).find = jest.fn().mockResolvedValue([{ blockId: "b_1" }]);
+    (blockRepository as any).find = jest
+      .fn()
+      .mockResolvedValue([{ blockId: "b_1" }]);
     jest.mocked(blockVersionRepository.find).mockResolvedValue([
       {
         id: 1,
@@ -1919,7 +2065,9 @@ describe("DocumentsService", () => {
     } as Document;
     jest.mocked(documentRepository.findOne).mockResolvedValue(document);
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
-    jest.mocked((versionControlService as any).getPendingVersionCount).mockReturnValue(3);
+    jest
+      .mocked((versionControlService as any).getPendingVersionCount)
+      .mockReturnValue(3);
 
     const result = await service.getPendingVersions("doc_1", "user_1");
 
@@ -1984,16 +2132,20 @@ describe("DocumentsService", () => {
       blockVersionMap: { root_1: 1, block_1: 3 },
     });
 
-    jest.spyOn(service as any, "getBlockVersionMapForVersion").mockResolvedValue({
-      map: { root_1: 1, block_1: 2 },
-      createdAt: 1690000000000,
-    });
-    jest.spyOn(service as any, "buildContentTreeFromVersionMap").mockResolvedValue({
-      tree: { blockId: "root_1" },
-      totalBlocks: 1,
-      returnedBlocks: 1,
-      hasMore: false,
-    });
+    jest
+      .spyOn(service as any, "getBlockVersionMapForVersion")
+      .mockResolvedValue({
+        map: { root_1: 1, block_1: 2 },
+        createdAt: 1690000000000,
+      });
+    jest
+      .spyOn(service as any, "buildContentTreeFromVersionMap")
+      .mockResolvedValue({
+        tree: { blockId: "root_1" },
+        totalBlocks: 1,
+        returnedBlocks: 1,
+        hasMore: false,
+      });
     jest.spyOn(service as any, "buildDiff").mockResolvedValue({
       summary: {
         added: 0,
@@ -2025,7 +2177,9 @@ describe("DocumentsService", () => {
       label: "draft",
       version: null,
     });
-    expect((documentDraftService as any).findByDocId).toHaveBeenCalledWith("doc_1");
+    expect((documentDraftService as any).findByDocId).toHaveBeenCalledWith(
+      "doc_1",
+    );
   });
 
   it("supports diffing the current draft against a saved revision", async () => {
@@ -2055,12 +2209,14 @@ describe("DocumentsService", () => {
         map: { root_1: 1, block_1: 2 },
         createdAt: 1690000000000,
       });
-    jest.spyOn(service as any, "buildContentTreeFromVersionMap").mockResolvedValue({
-      tree: { blockId: "root_1" },
-      totalBlocks: 1,
-      returnedBlocks: 1,
-      hasMore: false,
-    });
+    jest
+      .spyOn(service as any, "buildContentTreeFromVersionMap")
+      .mockResolvedValue({
+        tree: { blockId: "root_1" },
+        totalBlocks: 1,
+        returnedBlocks: 1,
+        hasMore: false,
+      });
     jest.spyOn(service as any, "buildDiff").mockResolvedValue({
       summary: {
         added: 0,
@@ -2106,10 +2262,16 @@ describe("DocumentsService", () => {
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
     jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
     jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
-    jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue(null);
+    jest
+      .mocked((documentDraftService as any).findByDocId)
+      .mockResolvedValue(null);
 
     await expect(
-      service.getDiff("doc_1", { fromKind: "revision", fromVer: 4, toKind: "draft" }, "user_1"),
+      service.getDiff(
+        "doc_1",
+        { fromKind: "revision", fromVer: 4, toKind: "draft" },
+        "user_1",
+      ),
     ).rejects.toThrow("draft not found");
   });
 
@@ -2126,7 +2288,9 @@ describe("DocumentsService", () => {
       viewCount: 0,
     } as Document);
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
-    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest
+      .mocked(workspacesService.checkEditPermission as any)
+      .mockResolvedValue(undefined);
     jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
     jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
     jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue({
@@ -2135,16 +2299,20 @@ describe("DocumentsService", () => {
       blockVersionMap: { root_1: 1, block_a: 2, block_deleted: 9 },
     });
 
-    jest.spyOn(service as any, "getBlockVersionMapForVersion").mockResolvedValue({
-      map: { root_1: 1, block_a: 2 },
-      createdAt: 1690000000000,
-    });
-    jest.spyOn(service as any, "buildContentTreeFromVersionMap").mockResolvedValue({
-      tree: { blockId: "root_1" },
-      totalBlocks: 2,
-      returnedBlocks: 2,
-      hasMore: false,
-    });
+    jest
+      .spyOn(service as any, "getBlockVersionMapForVersion")
+      .mockResolvedValue({
+        map: { root_1: 1, block_a: 2 },
+        createdAt: 1690000000000,
+      });
+    jest
+      .spyOn(service as any, "buildContentTreeFromVersionMap")
+      .mockResolvedValue({
+        tree: { blockId: "root_1" },
+        totalBlocks: 2,
+        returnedBlocks: 2,
+        hasMore: false,
+      });
     jest.mocked(blockVersionRepository.find).mockResolvedValue([
       {
         blockId: "root_1",
@@ -2214,7 +2382,9 @@ describe("DocumentsService", () => {
       viewCount: 0,
     } as Document);
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
-    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest
+      .mocked(workspacesService.checkEditPermission as any)
+      .mockResolvedValue(undefined);
     jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
     jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
     jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue({
@@ -2223,16 +2393,20 @@ describe("DocumentsService", () => {
       blockVersionMap: { root_1: 1, block_a: 5 },
     });
 
-    jest.spyOn(service as any, "getBlockVersionMapForVersion").mockResolvedValue({
-      map: { root_1: 1, block_a: 2 },
-      createdAt: 1690000000000,
-    });
-    jest.spyOn(service as any, "buildContentTreeFromVersionMap").mockResolvedValue({
-      tree: { blockId: "root_1" },
-      totalBlocks: 2,
-      returnedBlocks: 2,
-      hasMore: false,
-    });
+    jest
+      .spyOn(service as any, "getBlockVersionMapForVersion")
+      .mockResolvedValue({
+        map: { root_1: 1, block_a: 2 },
+        createdAt: 1690000000000,
+      });
+    jest
+      .spyOn(service as any, "buildContentTreeFromVersionMap")
+      .mockResolvedValue({
+        tree: { blockId: "root_1" },
+        totalBlocks: 2,
+        returnedBlocks: 2,
+        hasMore: false,
+      });
     jest.mocked(blockVersionRepository.find).mockResolvedValue([
       {
         blockId: "root_1",
@@ -2309,7 +2483,9 @@ describe("DocumentsService", () => {
       viewCount: 0,
     } as Document);
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
-    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest
+      .mocked(workspacesService.checkEditPermission as any)
+      .mockResolvedValue(undefined);
 
     const docInTx = {
       docId: "doc_1",
@@ -2317,10 +2493,14 @@ describe("DocumentsService", () => {
       draftRevision: 7,
       updatedBy: "user_1",
     } as Document;
-    jest.mocked((documentDraftService as any).lockDocumentForDraftMutation).mockResolvedValue(docInTx);
-    jest.mocked((documentDraftService as any).pointBlockToDeletedVersion).mockResolvedValue({
-      draftId: "draft_1",
-    });
+    jest
+      .mocked((documentDraftService as any).lockDocumentForDraftMutation)
+      .mockResolvedValue(docInTx);
+    jest
+      .mocked((documentDraftService as any).pointBlockToDeletedVersion)
+      .mockResolvedValue({
+        draftId: "draft_1",
+      });
 
     const draftRepo = {
       findOne: jest.fn().mockResolvedValue({
@@ -2350,11 +2530,17 @@ describe("DocumentsService", () => {
       create: jest.fn((value) => value),
       save: jest.fn(async (value) => value),
     };
+    const reconcileReceiptRepo = {
+      findOne: jest.fn().mockResolvedValue(null),
+      save: jest.fn(async (value) => value),
+    };
     const manager = {
       getRepository: jest.fn((entity: { name?: string }) => {
         if (entity?.name === "DocDraft") return draftRepo;
         if (entity?.name === "BlockVersion") return blockVersionRepo;
         if (entity?.name === "SyncCreateTombstone") return tombstoneRepo;
+        if (entity?.name === "SyncReconcileReceipt")
+          return reconcileReceiptRepo;
         return {};
       }),
       find: jest.fn().mockResolvedValue([
@@ -2386,7 +2572,9 @@ describe("DocumentsService", () => {
       create: jest.fn((_entity, value) => value),
       save: jest.fn(async (_entity, value) => value),
     };
-    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+    jest
+      .mocked(dataSource.transaction)
+      .mockImplementation(async (callback: any) => callback(manager));
 
     const result = await service.reconcileSyncManifest("doc_1", "user_1", {
       draftRevision: 7,
@@ -2419,13 +2607,9 @@ describe("DocumentsService", () => {
         }),
       }),
     );
-    expect(documentDraftService.pointBlockToDeletedVersion).toHaveBeenCalledWith(
-      "doc_1",
-      "block_orphan",
-      2,
-      "user_1",
-      manager,
-    );
+    expect(
+      documentDraftService.pointBlockToDeletedVersion,
+    ).toHaveBeenCalledWith("doc_1", "block_orphan", 2, "user_1", manager);
     expect(tombstoneRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
         docId: "doc_1",
@@ -2439,6 +2623,14 @@ describe("DocumentsService", () => {
       expect.objectContaining({
         docId: "doc_1",
         draftRevision: 8,
+      }),
+    );
+    expect(reconcileReceiptRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        docId: "doc_1",
+        clientBatchId: "reconcile_1",
+        draftRevision: 8,
+        needsReload: false,
       }),
     );
   });
@@ -2466,14 +2658,28 @@ describe("DocumentsService", () => {
       viewCount: 0,
     } as Document);
     jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
-    jest.mocked(workspacesService.checkEditPermission as any).mockResolvedValue(undefined);
+    jest
+      .mocked(workspacesService.checkEditPermission as any)
+      .mockResolvedValue(undefined);
     const docInTx = { docId: "doc_1", draftRevision: 8 } as Document;
-    jest.mocked((documentDraftService as any).lockDocumentForDraftMutation).mockResolvedValue(docInTx);
+    jest
+      .mocked((documentDraftService as any).lockDocumentForDraftMutation)
+      .mockResolvedValue(docInTx);
     const manager = {
-      getRepository: jest.fn(),
+      getRepository: jest.fn((entity: { name?: string }) => {
+        if (entity?.name === "SyncReconcileReceipt") {
+          return {
+            findOne: jest.fn().mockResolvedValue(null),
+            save: jest.fn(async (value) => value),
+          };
+        }
+        return {};
+      }),
       save: jest.fn(),
     };
-    jest.mocked(dataSource.transaction).mockImplementation(async (callback: any) => callback(manager));
+    jest
+      .mocked(dataSource.transaction)
+      .mockImplementation(async (callback: any) => callback(manager));
 
     const result = await service.reconcileSyncManifest("doc_1", "user_1", {
       draftRevision: 7,
@@ -2490,7 +2696,137 @@ describe("DocumentsService", () => {
       conflicts: [{ code: "DRAFT_REVISION_MISMATCH" }],
       tombstoned: [],
     });
-    expect(manager.getRepository).not.toHaveBeenCalled();
     expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it("replays an existing sync-reconcile receipt for the same request fingerprint", async () => {
+    const now = Date.now();
+    syncSessions.push({
+      docId: "doc_1",
+      sessionId: "session_1",
+      sessionEpoch: 1,
+      holderUserId: "user_1",
+      leaseExpiresAt: now + 60_000,
+      updatedAt: now,
+    });
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 3,
+      draftRevision: 7,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest
+      .mocked(workspacesService.checkEditPermission as any)
+      .mockResolvedValue(undefined);
+    jest
+      .mocked((documentDraftService as any).lockDocumentForDraftMutation)
+      .mockResolvedValue({
+        docId: "doc_1",
+        draftRevision: 7,
+      } as Document);
+    const manifest = [{ blockId: "block_live", clientId: "client_live" }];
+    const request = {
+      draftRevision: 7,
+      sessionId: "session_1",
+      sessionEpoch: 1,
+      clientBatchId: "reconcile_replay",
+      manifest,
+    };
+    const requestFingerprint = JSON.stringify(request);
+    const receiptRepo = {
+      findOne: jest.fn().mockResolvedValue({
+        docId: "doc_1",
+        clientBatchId: "reconcile_replay",
+        requestFingerprint,
+        checkedAt: now,
+        draftRevision: 9,
+        needsReload: false,
+        conflicts: [],
+        tombstoned: [{ blockId: "block_old", version: 2 }],
+      }),
+      save: jest.fn(),
+    };
+    const manager = {
+      getRepository: jest.fn((entity: { name?: string }) =>
+        entity?.name === "SyncReconcileReceipt" ? receiptRepo : {},
+      ),
+      save: jest.fn(),
+    };
+    jest
+      .mocked(dataSource.transaction)
+      .mockImplementation(async (callback: any) => callback(manager));
+
+    const result = await service.reconcileSyncManifest(
+      "doc_1",
+      "user_1",
+      request,
+    );
+
+    expect(result).toMatchObject({
+      docId: "doc_1",
+      checkedAt: now,
+      draftRevision: 9,
+      needsReload: false,
+      tombstoned: [{ blockId: "block_old", version: 2 }],
+    });
+    expect(receiptRepo.save).not.toHaveBeenCalled();
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it("checks edit permission before applying a draft checkpoint", async () => {
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 3,
+      draftRevision: 7,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest
+      .mocked(workspacesService.checkEditPermission as any)
+      .mockResolvedValue(undefined);
+    jest
+      .mocked((draftCheckpointService as any).applyDraftCheckpoint)
+      .mockResolvedValue({
+        acceptedCheckpointId: "checkpoint_1",
+        needsReload: false,
+      });
+
+    await service.applyDraftCheckpoint("doc_1", "user_1", {
+      mode: "checkpoint",
+      coverage: "full",
+      clientCheckpointId: "checkpoint_1",
+      clientId: "client_1",
+      baseVersion: 3,
+      draftRevision: 7,
+      sessionId: "session_1",
+      sessionEpoch: 1,
+      contentHash: "sha256:test",
+      generatedAt: Date.now(),
+      rootBlockId: "root_1",
+      blocks: [],
+    });
+
+    expect(workspacesService.checkAccess).toHaveBeenCalledWith(
+      "ws_1",
+      "user_1",
+    );
+    expect(workspacesService.checkEditPermission).toHaveBeenCalledWith(
+      "ws_1",
+      "user_1",
+    );
+    expect(draftCheckpointService.applyDraftCheckpoint).toHaveBeenCalled();
   });
 });

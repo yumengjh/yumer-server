@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { Block } from "../../entities/block.entity";
 import { BlockVersion } from "../../entities/block-version.entity";
 import { DocDraft } from "../../entities/doc-draft.entity";
@@ -6,7 +7,10 @@ import { DocumentSyncSession } from "../../entities/document-sync-session.entity
 import { SyncCheckpointReceipt } from "../../entities/sync-checkpoint-receipt.entity";
 import { SyncCreateTombstone } from "../../entities/sync-create-tombstone.entity";
 import { DraftCheckpointService } from "./draft-checkpoint.service";
-import type { DraftCheckpointBlockDto, DraftCheckpointDto } from "./dto/draft-checkpoint.dto";
+import type {
+  DraftCheckpointBlockDto,
+  DraftCheckpointDto,
+} from "./dto/draft-checkpoint.dto";
 
 type ExistingBlockInput = {
   blockId: string;
@@ -46,6 +50,7 @@ function createDraftCheckpointHarness(config?: {
   const versions: Array<Partial<BlockVersion>> = [];
   const receipts: Array<Partial<SyncCheckpointReceipt>> = [];
   const tombstones: Array<Partial<SyncCreateTombstone>> = [];
+  const lockCalls = { count: 0 };
   const syncSessions: Array<Partial<DocumentSyncSession>> = [
     {
       docId: "doc_1",
@@ -93,13 +98,32 @@ function createDraftCheckpointHarness(config?: {
     draft.blockVersionMap![item.blockId] = 1;
   }
 
+  const matchesValue = (actual: unknown, expected: unknown) => {
+    if (
+      expected &&
+      typeof expected === "object" &&
+      "_type" in expected &&
+      (expected as { _type?: unknown })._type === "in"
+    ) {
+      return ((expected as { _value?: unknown[] })._value ?? []).includes(
+        actual,
+      );
+    }
+    return actual === expected;
+  };
+
   const findMatches = <T extends Record<string, unknown>>(
     items: T[],
-    where: Record<string, unknown>,
+    where: Record<string, unknown> | Array<Record<string, unknown>>,
   ) =>
-    items.filter((item) =>
-      Object.entries(where).every(([key, value]) => item[key] === value),
-    );
+    items.filter((item) => {
+      const clauses = Array.isArray(where) ? where : [where];
+      return clauses.some((clause) =>
+        Object.entries(clause).every(([key, value]) =>
+          matchesValue(item[key], value),
+        ),
+      );
+    });
 
   const repositoryFor = (entity: unknown) => ({
     create: (value: Record<string, unknown>) => ({ ...value }),
@@ -113,13 +137,17 @@ function createDraftCheckpointHarness(config?: {
         return draft;
       }
       if (entity === Block) {
-        const index = blocks.findIndex((item) => item.blockId === value.blockId);
+        const index = blocks.findIndex(
+          (item) => item.blockId === value.blockId,
+        );
         if (index >= 0) blocks[index] = { ...blocks[index], ...value };
         else blocks.push(value);
         return value;
       }
       if (entity === BlockVersion) {
-        const index = versions.findIndex((item) => item.versionId === value.versionId);
+        const index = versions.findIndex(
+          (item) => item.versionId === value.versionId,
+        );
         if (index >= 0) versions[index] = { ...versions[index], ...value };
         else versions.push(value);
         return value;
@@ -140,8 +168,11 @@ function createDraftCheckpointHarness(config?: {
         return saved;
       }
       if (entity === DocumentSyncSession) {
-        const index = syncSessions.findIndex((item) => item.docId === value.docId);
-        if (index >= 0) syncSessions[index] = { ...syncSessions[index], ...value };
+        const index = syncSessions.findIndex(
+          (item) => item.docId === value.docId,
+        );
+        if (index >= 0)
+          syncSessions[index] = { ...syncSessions[index], ...value };
         else syncSessions.push(value);
         return value;
       }
@@ -151,21 +182,36 @@ function createDraftCheckpointHarness(config?: {
       const where = options.where ?? {};
       if (entity === Document) return findMatches([doc], where)[0] ?? null;
       if (entity === DocDraft) return findMatches([draft], where)[0] ?? null;
-      if (entity === Block) return findMatches(blocks as Record<string, unknown>[], where)[0] ?? null;
+      if (entity === Block)
+        return (
+          findMatches(blocks as Record<string, unknown>[], where)[0] ?? null
+        );
       if (entity === BlockVersion) {
-        return findMatches(versions as Record<string, unknown>[], where)[0] ?? null;
+        return (
+          findMatches(versions as Record<string, unknown>[], where)[0] ?? null
+        );
       }
       if (entity === DocumentSyncSession) {
-        return findMatches(syncSessions as Record<string, unknown>[], where)[0] ?? null;
+        return (
+          findMatches(syncSessions as Record<string, unknown>[], where)[0] ??
+          null
+        );
       }
       if (entity === SyncCheckpointReceipt) {
-        return findMatches(receipts as Record<string, unknown>[], where)[0] ?? null;
+        return (
+          findMatches(receipts as Record<string, unknown>[], where)[0] ?? null
+        );
       }
       return null;
     },
-    find: async (options: { where?: Record<string, unknown> } = {}) => {
+    find: async (
+      options: {
+        where?: Record<string, unknown> | Array<Record<string, unknown>>;
+      } = {},
+    ) => {
       const where = options.where ?? {};
-      if (entity === Block) return findMatches(blocks as Record<string, unknown>[], where);
+      if (entity === Block)
+        return findMatches(blocks as Record<string, unknown>[], where);
       if (entity === BlockVersion) {
         return findMatches(versions as Record<string, unknown>[], where);
       }
@@ -177,11 +223,21 @@ function createDraftCheckpointHarness(config?: {
     getRepository: repositoryFor,
   };
   const dataSource = {
-    transaction: async <T>(callback: (txManager: typeof manager) => Promise<T>) =>
-      callback(manager),
+    transaction: async <T>(
+      callback: (txManager: typeof manager) => Promise<T>,
+    ) => callback(manager),
+  };
+  const documentDraftService = {
+    lockDocumentForDraftMutation: async (docId: string) => {
+      lockCalls.count += 1;
+      return doc.docId === docId ? doc : null;
+    },
   };
 
-  const service = new DraftCheckpointService(dataSource as never);
+  const service = new DraftCheckpointService(
+    dataSource as never,
+    documentDraftService as never,
+  );
 
   const baseCheckpoint = (
     clientCheckpointId: string,
@@ -228,6 +284,18 @@ function createDraftCheckpointHarness(config?: {
     },
   });
 
+  const withContentHash = (dto: DraftCheckpointDto): DraftCheckpointDto => {
+    const canonical = JSON.stringify({
+      docId: "doc_1",
+      rootBlockId: dto.rootBlockId,
+      blocks: dto.blocks,
+    });
+    return {
+      ...dto,
+      contentHash: `sha256:${createHash("sha256").update(canonical).digest("hex")}`,
+    };
+  };
+
   const visibleDraftBlocks = () =>
     Object.entries(draft.blockVersionMap ?? {})
       .flatMap(([blockId, ver]) => {
@@ -235,9 +303,12 @@ function createDraftCheckpointHarness(config?: {
           (item) => item.blockId === blockId && item.ver === ver,
         );
         if (!version) return [];
-        const attrs = (version.payload as { attrs?: Record<string, unknown> })?.attrs ?? {};
+        const attrs =
+          (version.payload as { attrs?: Record<string, unknown> })?.attrs ?? {};
         if (attrs.deleted === true) return [];
-        return [{ blockId, sortKey: version.sortKey, plainText: version.plainText }];
+        return [
+          { blockId, sortKey: version.sortKey, plainText: version.plainText },
+        ];
       })
       .sort((left, right) => Number(left.sortKey) - Number(right.sortKey));
 
@@ -250,8 +321,10 @@ function createDraftCheckpointHarness(config?: {
     receipts,
     tombstones,
     syncSessions,
+    lockCalls,
     baseCheckpoint,
     block,
+    withContentHash,
     visibleDraftBlocks,
   };
 }
@@ -260,16 +333,30 @@ describe("DraftCheckpointService", () => {
   it("creates draft blocks from a full checkpoint and returns mappings", async () => {
     const harness = createDraftCheckpointHarness();
 
-    const response = await harness.service.applyDraftCheckpoint("doc_1", "user_1", {
-      ...harness.baseCheckpoint("checkpoint_create_1"),
-      blocks: [harness.block({ clientId: "cid_1", orderKey: "001000", text: "hello" })],
-    });
+    const response = await harness.service.applyDraftCheckpoint(
+      "doc_1",
+      "user_1",
+      harness.withContentHash({
+        ...harness.baseCheckpoint("checkpoint_create_1"),
+        blocks: [
+          harness.block({
+            clientId: "cid_1",
+            orderKey: "001000",
+            text: "hello",
+          }),
+        ],
+      }),
+    );
 
     expect(response.needsReload).toBe(false);
     expect(response.draftRevision).toBe(1);
     expect(response.mappings).toHaveLength(1);
-    expect(response.mappings[0]).toMatchObject({ clientId: "cid_1", orderKey: "001000" });
-    expect(response.mappings[0].blockId).toMatch(/^block_/);
+    expect(response.mappings[0]).toMatchObject({
+      clientId: "cid_1",
+      orderKey: "001000",
+    });
+    expect(response.mappings[0].blockId).toMatch(/^b_/);
+    expect(harness.lockCalls.count).toBe(1);
     expect(harness.visibleDraftBlocks()).toEqual([
       expect.objectContaining({
         blockId: response.mappings[0].blockId,
@@ -282,21 +369,30 @@ describe("DraftCheckpointService", () => {
   it("updates an existing draft block matched by blockId", async () => {
     const harness = createDraftCheckpointHarness({
       existingBlocks: [
-        { blockId: "block_existing", clientId: "cid_existing", sortKey: "001000", text: "old" },
+        {
+          blockId: "block_existing",
+          clientId: "cid_existing",
+          sortKey: "001000",
+          text: "old",
+        },
       ],
     });
 
-    const response = await harness.service.applyDraftCheckpoint("doc_1", "user_1", {
-      ...harness.baseCheckpoint("checkpoint_update_1"),
-      blocks: [
-        harness.block({
-          clientId: "cid_existing",
-          blockId: "block_existing",
-          orderKey: "001000",
-          text: "new",
-        }),
-      ],
-    });
+    const response = await harness.service.applyDraftCheckpoint(
+      "doc_1",
+      "user_1",
+      harness.withContentHash({
+        ...harness.baseCheckpoint("checkpoint_update_1"),
+        blocks: [
+          harness.block({
+            clientId: "cid_existing",
+            blockId: "block_existing",
+            orderKey: "001000",
+            text: "new",
+          }),
+        ],
+      }),
+    );
 
     expect(response.draftRevision).toBe(1);
     expect(harness.visibleDraftBlocks()).toEqual([
@@ -316,15 +412,31 @@ describe("DraftCheckpointService", () => {
       ],
     });
 
-    await harness.service.applyDraftCheckpoint("doc_1", "user_1", {
-      ...harness.baseCheckpoint("checkpoint_reorder_1"),
-      blocks: [
-        harness.block({ clientId: "cid_b", blockId: "block_b", orderKey: "001000", text: "B" }),
-        harness.block({ clientId: "cid_a", blockId: "block_a", orderKey: "002000", text: "A" }),
-      ],
-    });
+    await harness.service.applyDraftCheckpoint(
+      "doc_1",
+      "user_1",
+      harness.withContentHash({
+        ...harness.baseCheckpoint("checkpoint_reorder_1"),
+        blocks: [
+          harness.block({
+            clientId: "cid_b",
+            blockId: "block_b",
+            orderKey: "001000",
+            text: "B",
+          }),
+          harness.block({
+            clientId: "cid_a",
+            blockId: "block_a",
+            orderKey: "002000",
+            text: "A",
+          }),
+        ],
+      }),
+    );
 
-    expect(harness.visibleDraftBlocks().map((item) => [item.blockId, item.sortKey])).toEqual([
+    expect(
+      harness.visibleDraftBlocks().map((item) => [item.blockId, item.sortKey]),
+    ).toEqual([
       ["block_b", "001000"],
       ["block_a", "002000"],
     ]);
@@ -350,18 +462,22 @@ describe("DraftCheckpointService", () => {
       ],
     });
 
-    const response = await harness.service.applyDraftCheckpoint("doc_1", "user_1", {
-      ...harness.baseCheckpoint("checkpoint_delete_1"),
-      blocks: [
-        harness.block({
-          clientId: "cid_keep",
-          blockId: "block_keep",
-          syncCreateId: "sync-create:cid_keep",
-          orderKey: "001000",
-          text: "keep",
-        }),
-      ],
-    });
+    const response = await harness.service.applyDraftCheckpoint(
+      "doc_1",
+      "user_1",
+      harness.withContentHash({
+        ...harness.baseCheckpoint("checkpoint_delete_1"),
+        blocks: [
+          harness.block({
+            clientId: "cid_keep",
+            blockId: "block_keep",
+            syncCreateId: "sync-create:cid_keep",
+            orderKey: "001000",
+            text: "keep",
+          }),
+        ],
+      }),
+    );
 
     expect(response.tombstoned).toEqual([
       expect.objectContaining({
@@ -370,7 +486,9 @@ describe("DraftCheckpointService", () => {
         syncCreateId: "sync-create:cid_delete",
       }),
     ]);
-    expect(harness.visibleDraftBlocks().map((item) => item.blockId)).toEqual(["block_keep"]);
+    expect(harness.visibleDraftBlocks().map((item) => item.blockId)).toEqual([
+      "block_keep",
+    ]);
     expect(harness.tombstones).toEqual([
       expect.objectContaining({
         docId: "doc_1",
@@ -381,12 +499,15 @@ describe("DraftCheckpointService", () => {
     ]);
   });
 
-
-
   it("preserves the draft root block when applying top-level checkpoint coverage", async () => {
     const harness = createDraftCheckpointHarness({
       existingBlocks: [
-        { blockId: "block_keep", clientId: "cid_keep", sortKey: "001000", text: "keep" },
+        {
+          blockId: "block_keep",
+          clientId: "cid_keep",
+          sortKey: "001000",
+          text: "keep",
+        },
       ],
     });
     harness.blocks.push({
@@ -413,37 +534,58 @@ describe("DraftCheckpointService", () => {
     });
     harness.draft.blockVersionMap!["root_1"] = 1;
 
-    const response = await harness.service.applyDraftCheckpoint("doc_1", "user_1", {
-      ...harness.baseCheckpoint("checkpoint_preserve_root"),
-      blocks: [
-        harness.block({
-          clientId: "cid_keep",
-          blockId: "block_keep",
-          orderKey: "001000",
-          text: "keep",
-        }),
-      ],
-    });
+    const response = await harness.service.applyDraftCheckpoint(
+      "doc_1",
+      "user_1",
+      harness.withContentHash({
+        ...harness.baseCheckpoint("checkpoint_preserve_root"),
+        blocks: [
+          harness.block({
+            clientId: "cid_keep",
+            blockId: "block_keep",
+            orderKey: "001000",
+            text: "keep",
+          }),
+        ],
+      }),
+    );
 
-    expect(response.tombstoned.map((item) => item.blockId)).not.toContain("root_1");
+    expect(response.tombstoned.map((item) => item.blockId)).not.toContain(
+      "root_1",
+    );
     expect(harness.draft.blockVersionMap).toEqual(
       expect.objectContaining({ root_1: 1, block_keep: expect.any(Number) }),
     );
     const rootVersion = harness.versions.find(
-      (version) => version.blockId === "root_1" && version.ver === harness.draft.blockVersionMap!["root_1"],
+      (version) =>
+        version.blockId === "root_1" &&
+        version.ver === harness.draft.blockVersionMap!["root_1"],
     );
-    expect((rootVersion?.payload as { attrs?: { deleted?: boolean } })?.attrs?.deleted).not.toBe(true);
+    expect(
+      (rootVersion?.payload as { attrs?: { deleted?: boolean } })?.attrs
+        ?.deleted,
+    ).not.toBe(true);
   });
 
   it("replays the original response for the same checkpoint fingerprint", async () => {
     const harness = createDraftCheckpointHarness();
-    const dto = {
+    const dto = harness.withContentHash({
       ...harness.baseCheckpoint("checkpoint_replay_1"),
-      blocks: [harness.block({ clientId: "cid_1", orderKey: "001000", text: "hello" })],
-    };
+      blocks: [
+        harness.block({ clientId: "cid_1", orderKey: "001000", text: "hello" }),
+      ],
+    });
 
-    const first = await harness.service.applyDraftCheckpoint("doc_1", "user_1", dto);
-    const second = await harness.service.applyDraftCheckpoint("doc_1", "user_1", dto);
+    const first = await harness.service.applyDraftCheckpoint(
+      "doc_1",
+      "user_1",
+      dto,
+    );
+    const second = await harness.service.applyDraftCheckpoint(
+      "doc_1",
+      "user_1",
+      dto,
+    );
 
     expect(second).toEqual(first);
     expect(harness.receipts).toHaveLength(1);
@@ -452,27 +594,66 @@ describe("DraftCheckpointService", () => {
 
   it("returns conflict when checkpoint id is reused with different content", async () => {
     const harness = createDraftCheckpointHarness();
-    await harness.service.applyDraftCheckpoint("doc_1", "user_1", {
-      ...harness.baseCheckpoint("checkpoint_conflict_1"),
-      blocks: [harness.block({ clientId: "cid_1", orderKey: "001000", text: "one" })],
-    });
+    await harness.service.applyDraftCheckpoint(
+      "doc_1",
+      "user_1",
+      harness.withContentHash({
+        ...harness.baseCheckpoint("checkpoint_conflict_1"),
+        blocks: [
+          harness.block({ clientId: "cid_1", orderKey: "001000", text: "one" }),
+        ],
+      }),
+    );
 
-    const response = await harness.service.applyDraftCheckpoint("doc_1", "user_1", {
-      ...harness.baseCheckpoint("checkpoint_conflict_1"),
-      blocks: [harness.block({ clientId: "cid_1", orderKey: "001000", text: "two" })],
-    });
+    const response = await harness.service.applyDraftCheckpoint(
+      "doc_1",
+      "user_1",
+      harness.withContentHash({
+        ...harness.baseCheckpoint("checkpoint_conflict_1"),
+        blocks: [
+          harness.block({ clientId: "cid_1", orderKey: "001000", text: "two" }),
+        ],
+      }),
+    );
 
     expect(response.needsReload).toBe(true);
     expect(response.conflicts[0]?.code).toBe("CHECKPOINT_FINGERPRINT_CONFLICT");
   });
 
+  it("rejects a checkpoint when contentHash does not match the received body", async () => {
+    const harness = createDraftCheckpointHarness();
+
+    const response = await harness.service.applyDraftCheckpoint(
+      "doc_1",
+      "user_1",
+      {
+        ...harness.baseCheckpoint("checkpoint_bad_hash", {
+          contentHash: "sha256:not-the-body",
+        }),
+        blocks: [
+          harness.block({ clientId: "cid_1", orderKey: "001000", text: "one" }),
+        ],
+      },
+    );
+
+    expect(response.needsReload).toBe(true);
+    expect(response.conflicts[0]?.code).toBe("CONTENT_HASH_MISMATCH");
+    expect(harness.visibleDraftBlocks()).toEqual([]);
+  });
+
   it("returns conflict when draftRevision is stale", async () => {
     const harness = createDraftCheckpointHarness({ documentDraftRevision: 2 });
 
-    const response = await harness.service.applyDraftCheckpoint("doc_1", "user_1", {
-      ...harness.baseCheckpoint("checkpoint_stale_revision", { draftRevision: 1 }),
-      blocks: [],
-    });
+    const response = await harness.service.applyDraftCheckpoint(
+      "doc_1",
+      "user_1",
+      harness.withContentHash({
+        ...harness.baseCheckpoint("checkpoint_stale_revision", {
+          draftRevision: 1,
+        }),
+        blocks: [],
+      }),
+    );
 
     expect(response.needsReload).toBe(true);
     expect(response.conflicts[0]?.code).toBe("DRAFT_REVISION_MISMATCH");
@@ -481,10 +662,16 @@ describe("DraftCheckpointService", () => {
   it("returns conflict when sync session does not match", async () => {
     const harness = createDraftCheckpointHarness();
 
-    const response = await harness.service.applyDraftCheckpoint("doc_1", "user_1", {
-      ...harness.baseCheckpoint("checkpoint_bad_session", { sessionId: "other_session" }),
-      blocks: [],
-    });
+    const response = await harness.service.applyDraftCheckpoint(
+      "doc_1",
+      "user_1",
+      harness.withContentHash({
+        ...harness.baseCheckpoint("checkpoint_bad_session", {
+          sessionId: "other_session",
+        }),
+        blocks: [],
+      }),
+    );
 
     expect(response.needsReload).toBe(true);
     expect(response.conflicts[0]?.code).toBe("SYNC_SESSION_MISMATCH");

@@ -19,6 +19,7 @@ import { DocDraft } from "../../entities/doc-draft.entity";
 import { Tag } from "../../entities/tag.entity";
 import { User } from "../../entities/user.entity";
 import { SyncCheckpointReceipt } from "../../entities/sync-checkpoint-receipt.entity";
+import { SyncReconcileReceipt } from "../../entities/sync-reconcile-receipt.entity";
 import { DocumentSyncSession } from "../../entities/document-sync-session.entity";
 import { SyncCreateTombstone } from "../../entities/sync-create-tombstone.entity";
 import { WorkspacesModule } from "../workspaces/workspaces.module";
@@ -37,6 +38,7 @@ import { ActivitiesModule } from "../activities/activities.module";
       Tag,
       User,
       SyncCheckpointReceipt,
+      SyncReconcileReceipt,
       DocumentSyncSession,
       SyncCreateTombstone,
     ]),

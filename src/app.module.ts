@@ -59,6 +59,7 @@ import { GuestbookLike } from "./entities/guestbook-like.entity";
 import { SensitiveWord } from "./entities/sensitive-word.entity";
 import { SyncBatchReceipt } from "./entities/sync-batch-receipt.entity";
 import { SyncCheckpointReceipt } from "./entities/sync-checkpoint-receipt.entity";
+import { SyncReconcileReceipt } from "./entities/sync-reconcile-receipt.entity";
 import { DocumentSyncSession } from "./entities/document-sync-session.entity";
 import { SyncCreateTombstone } from "./entities/sync-create-tombstone.entity";
 
@@ -94,6 +95,7 @@ export const databaseEntities = [
   SensitiveWord,
   SyncBatchReceipt,
   SyncCheckpointReceipt,
+  SyncReconcileReceipt,
   DocumentSyncSession,
   SyncCreateTombstone,
 ];
@@ -127,7 +129,9 @@ export const databaseEntities = [
           baseConfig.extra = {
             max: configService.get<number>("database.extra.max"),
             min: configService.get<number>("database.extra.min"),
-            idleTimeoutMillis: configService.get<number>("database.extra.idleTimeoutMillis"),
+            idleTimeoutMillis: configService.get<number>(
+              "database.extra.idleTimeoutMillis",
+            ),
             connectionTimeoutMillis: configService.get<number>(
               "database.extra.connectionTimeoutMillis",
             ),
@@ -151,7 +155,8 @@ export const databaseEntities = [
         {
           ttl: () => runtimeConfigService.getRateLimitConfigForGuard().ttlMs,
           limit: () => runtimeConfigService.getRateLimitConfigForGuard().limit,
-          skipIf: () => !runtimeConfigService.getRateLimitConfigForGuard().enabled,
+          skipIf: () =>
+            !runtimeConfigService.getRateLimitConfigForGuard().enabled,
         },
       ],
     }),

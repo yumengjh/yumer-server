@@ -22,7 +22,10 @@ import {
   ApiParam,
   ApiQuery,
 } from "@nestjs/swagger";
-import { DocumentsService, type ContentRenderDiagnostics } from "./documents.service";
+import {
+  DocumentsService,
+  type ContentRenderDiagnostics,
+} from "./documents.service";
 import { CreateDocumentDto } from "./dto/create-document.dto";
 import { UpdateDocumentDto } from "./dto/update-document.dto";
 import { MoveDocumentDto } from "./dto/move-document.dto";
@@ -45,13 +48,16 @@ import { PublishVersionDto } from "./dto/publish-version.dto";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import { AuditLog } from "../../common/decorators/audit-log.decorator";
-import { SitePublic, isSitePublicAnonymousUserId } from "../../common/decorators/public.decorator";
+import {
+  SitePublic,
+  isSitePublicAnonymousUserId,
+} from "../../common/decorators/public.decorator";
 import { DocumentExportService } from "./services/document-export.service";
-import { DraftCheckpointService } from "./draft-checkpoint.service";
 
 function encodeRFC5987Value(input: string): string {
-  return encodeURIComponent(input).replace(/[!'()*]/g, (char) =>
-    `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  return encodeURIComponent(input).replace(
+    /[!'()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
   );
 }
 
@@ -78,7 +84,6 @@ export class DocumentsController {
   constructor(
     private readonly documentsService: DocumentsService,
     private readonly documentExportService: DocumentExportService,
-    private readonly draftCheckpointService: DraftCheckpointService,
   ) {}
 
   @Post()
@@ -88,7 +93,10 @@ export class DocumentsController {
   @ApiResponse({ status: 201, description: "Created" })
   @ApiResponse({ status: 400, description: "Bad request" })
   @ApiResponse({ status: 403, description: "Forbidden" })
-  async create(@Body() createDocumentDto: CreateDocumentDto, @CurrentUser() user: any) {
+  async create(
+    @Body() createDocumentDto: CreateDocumentDto,
+    @CurrentUser() user: any,
+  ) {
     return this.documentsService.create(createDocumentDto, user.userId);
   }
 
@@ -96,7 +104,10 @@ export class DocumentsController {
   @SitePublic()
   @ApiOperation({ summary: "List documents" })
   @ApiResponse({ status: 200, description: "Success" })
-  async findAll(@Query() queryDto: QueryDocumentsDto, @CurrentUser() user: any) {
+  async findAll(
+    @Query() queryDto: QueryDocumentsDto,
+    @CurrentUser() user: any,
+  ) {
     if (isSitePublicAnonymousUserId(user?.userId)) {
       return this.documentsService.findAllSitePublic(queryDto);
     }
@@ -106,7 +117,10 @@ export class DocumentsController {
   @Get("search")
   @ApiOperation({ summary: "Search documents" })
   @ApiResponse({ status: 200, description: "Success" })
-  async search(@Query() searchQueryDto: SearchQueryDto, @CurrentUser() user: any) {
+  async search(
+    @Query() searchQueryDto: SearchQueryDto,
+    @CurrentUser() user: any,
+  ) {
     return this.documentsService.search(searchQueryDto, user.userId);
   }
 
@@ -163,7 +177,11 @@ export class DocumentsController {
   @Get(":docId/edit-content")
   @ApiOperation({ summary: "Get editor content" })
   @ApiParam({ name: "docId", description: "Document ID" })
-  @ApiResponse({ status: 200, description: "Success", type: EditContentResponseDto })
+  @ApiResponse({
+    status: 200,
+    description: "Success",
+    type: EditContentResponseDto,
+  })
   async getEditContent(
     @Param("docId") docId: string,
     @Query() queryDto: QueryEditContentDto,
@@ -186,29 +204,51 @@ export class DocumentsController {
     @Body() syncSession: DiscardDraftDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.renewSyncSession(docId, user.userId, syncSession);
+    return this.documentsService.renewSyncSession(
+      docId,
+      user.userId,
+      syncSession,
+    );
+  }
+
+  @Post(":docId/sync-session/acquire")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Acquire a document sync session lease" })
+  async acquireSyncSession(
+    @Param("docId") docId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.documentsService.acquireSyncSession(docId, user.userId);
   }
 
   @Post(":docId/sync-reconcile")
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: "Reconcile idle editor manifest with the server draft" })
+  @ApiOperation({
+    summary: "Reconcile idle editor manifest with the server draft",
+  })
   async reconcileSyncManifest(
     @Param("docId") docId: string,
     @Body() reconcileDto: SyncReconcileDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.reconcileSyncManifest(docId, user.userId, reconcileDto);
+    return this.documentsService.reconcileSyncManifest(
+      docId,
+      user.userId,
+      reconcileDto,
+    );
   }
 
   @Post(":docId/draft-checkpoint")
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: "Apply a full editor checkpoint to the server draft" })
+  @ApiOperation({
+    summary: "Apply a full editor checkpoint to the server draft",
+  })
   async applyDraftCheckpoint(
     @Param("docId") docId: string,
     @Body() checkpointDto: DraftCheckpointDto,
     @CurrentUser() user: any,
   ) {
-    return this.draftCheckpointService.applyDraftCheckpoint(
+    return this.documentsService.applyDraftCheckpoint(
       docId,
       user.userId,
       checkpointDto,
@@ -271,7 +311,11 @@ export class DocumentsController {
     @Body() updateEditorStateDto: UpdateEditorStateDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.updateEditorState(docId, updateEditorStateDto, user.userId);
+    return this.documentsService.updateEditorState(
+      docId,
+      updateEditorStateDto,
+      user.userId,
+    );
   }
 
   @Post(":docId/publish")
@@ -295,7 +339,11 @@ export class DocumentsController {
     @Body() publishVersionDto: PublishVersionDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.publishVersion(docId, publishVersionDto.version, user.userId);
+    return this.documentsService.publishVersion(
+      docId,
+      publishVersionDto.version,
+      user.userId,
+    );
   }
 
   @Post(":docId/unpublish")
@@ -325,7 +373,11 @@ export class DocumentsController {
 
   @Delete(":docId")
   @HttpCode(HttpStatus.OK)
-  @AuditLog({ action: "DELETE", resourceType: "document", resourceIdKey: "docId" })
+  @AuditLog({
+    action: "DELETE",
+    resourceType: "document",
+    resourceIdKey: "docId",
+  })
   @ApiOperation({ summary: "Delete document" })
   @ApiParam({ name: "docId", description: "Document ID" })
   @ApiResponse({ status: 200, description: "Success" })
@@ -345,7 +397,11 @@ export class DocumentsController {
     @Body() discardDraftDto: DiscardDraftDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.discardDraft(docId, user.userId, discardDraftDto);
+    return this.documentsService.discardDraft(
+      docId,
+      user.userId,
+      discardDraftDto,
+    );
   }
 
   @Get(":docId/revisions")
@@ -388,7 +444,12 @@ export class DocumentsController {
     @Body() revertDto: RevertVersionDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.revert(docId, revertDto.version, user.userId, revertDto.draftStrategy);
+    return this.documentsService.revert(
+      docId,
+      revertDto.version,
+      user.userId,
+      revertDto.draftStrategy,
+    );
   }
 
   @Post(":docId/snapshots")
@@ -398,7 +459,10 @@ export class DocumentsController {
   @ApiResponse({ status: 201, description: "Created" })
   @ApiResponse({ status: 404, description: "Document not found" })
   @ApiResponse({ status: 403, description: "Forbidden" })
-  async createSnapshot(@Param("docId") docId: string, @CurrentUser() user: any) {
+  async createSnapshot(
+    @Param("docId") docId: string,
+    @CurrentUser() user: any,
+  ) {
     return this.documentsService.createSnapshot(docId, user.userId);
   }
 
@@ -415,11 +479,16 @@ export class DocumentsController {
     @Body() commitDto: CommitVersionDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.commitVersion(docId, commitDto.message, user.userId, {
-      sessionId: commitDto.sessionId,
-      sessionEpoch: commitDto.sessionEpoch,
-      ackedThroughOpSeq: commitDto.ackedThroughOpSeq,
-    });
+    return this.documentsService.commitVersion(
+      docId,
+      commitDto.message,
+      user.userId,
+      {
+        sessionId: commitDto.sessionId,
+        sessionEpoch: commitDto.sessionEpoch,
+        ackedThroughOpSeq: commitDto.ackedThroughOpSeq,
+      },
+    );
   }
 
   @Get(":docId/export")
@@ -457,14 +526,21 @@ export class DocumentsController {
   @ApiResponse({ status: 200, description: "Success" })
   @ApiResponse({ status: 404, description: "Document not found" })
   @ApiResponse({ status: 403, description: "Forbidden" })
-  async getPendingVersions(@Param("docId") docId: string, @CurrentUser() user: any) {
+  async getPendingVersions(
+    @Param("docId") docId: string,
+    @CurrentUser() user: any,
+  ) {
     return this.documentsService.getPendingVersions(docId, user.userId);
   }
 
   @Get(":docId/sync-state")
   @ApiOperation({ summary: "Get document sync state" })
   @ApiParam({ name: "docId", description: "Document ID" })
-  @ApiResponse({ status: 200, description: "Success", type: SyncStateResponseDto })
+  @ApiResponse({
+    status: 200,
+    description: "Success",
+    type: SyncStateResponseDto,
+  })
   @ApiResponse({ status: 404, description: "Document not found" })
   @ApiResponse({ status: 403, description: "Forbidden" })
   async getSyncState(@Param("docId") docId: string, @CurrentUser() user: any) {

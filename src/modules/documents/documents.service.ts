@@ -8,7 +8,15 @@ import {
 import { randomBytes } from "crypto";
 import { InjectRepository } from "@nestjs/typeorm";
 import { InjectDataSource } from "@nestjs/typeorm";
-import { Repository, DataSource, EntityManager, In, Or, MoreThan, IsNull } from "typeorm";
+import {
+  Repository,
+  DataSource,
+  EntityManager,
+  In,
+  Or,
+  MoreThan,
+  IsNull,
+} from "typeorm";
 import { Document } from "../../entities/document.entity";
 import { Block } from "../../entities/block.entity";
 import { BlockVersion } from "../../entities/block-version.entity";
@@ -17,6 +25,7 @@ import { DocSnapshot } from "../../entities/doc-snapshot.entity";
 import { DocDraft } from "../../entities/doc-draft.entity";
 import { DocumentSyncSession } from "../../entities/document-sync-session.entity";
 import { SyncCreateTombstone } from "../../entities/sync-create-tombstone.entity";
+import { SyncReconcileReceipt } from "../../entities/sync-reconcile-receipt.entity";
 import { Tag } from "../../entities/tag.entity";
 import { User } from "../../entities/user.entity";
 import { WorkspacesService } from "../workspaces/workspaces.service";
@@ -45,6 +54,10 @@ import type { RevertDraftStrategy } from "./dto/revert-version.dto";
 import { SearchQueryDto } from "./dto/search-query.dto";
 import { SyncStateResponseDto } from "./dto/sync-state-response.dto";
 import type { SyncReconcileDto } from "./dto/sync-reconcile.dto";
+import type {
+  DraftCheckpointDto,
+  DraftCheckpointResponseDto,
+} from "./dto/draft-checkpoint.dto";
 import type { DiffRefKind } from "./dto/diff-versions.dto";
 import { DiffVersionsDto } from "./dto/diff-versions.dto";
 import { ActivitiesService } from "../activities/activities.service";
@@ -54,6 +67,7 @@ import {
   DocumentRenderService,
   type DocumentRenderDiagnostics,
 } from "./services/document-render.service";
+import { DraftCheckpointService } from "./draft-checkpoint.service";
 
 type DocumentActorSummary = {
   userId: string;
@@ -106,6 +120,15 @@ type SyncReconcileTombstone = {
   version: number;
   clientId: string | null;
   syncCreateId: string | null;
+};
+
+type SyncReconcileResponse = {
+  docId: string;
+  checkedAt: number;
+  draftRevision: number;
+  needsReload: boolean;
+  conflicts: Array<Record<string, unknown>>;
+  tombstoned: SyncReconcileTombstone[];
 };
 
 function toSafeISOString(value: unknown): string | null {
@@ -164,6 +187,7 @@ export class DocumentsService {
     private dataSource: DataSource,
     private workspacesService: WorkspacesService,
     private activitiesService: ActivitiesService,
+    private draftCheckpointService: DraftCheckpointService,
     private documentRenderService?: DocumentRenderService,
   ) {}
 
@@ -195,7 +219,9 @@ export class DocumentsService {
       return renewed as DocumentSyncSession;
     }
     const nextSession = repo.create({
-      ...(existing ? { id: existing.id, createdAt: existing.createdAt } : { createdAt: now }),
+      ...(existing
+        ? { id: existing.id, createdAt: existing.createdAt }
+        : { createdAt: now }),
       docId,
       sessionId: `sync_${randomBytes(12).toString("hex")}`,
       sessionEpoch: (existing?.sessionEpoch ?? 0) + 1,
@@ -215,12 +241,18 @@ export class DocumentsService {
     const repo = this.getDocumentSyncSessionRepository();
     const current = await repo.findOne({ where: { docId } });
     if (!current) {
-      if (!syncSession?.sessionId && typeof syncSession?.sessionEpoch !== "number") {
+      if (
+        !syncSession?.sessionId &&
+        typeof syncSession?.sessionEpoch !== "number"
+      ) {
         return null;
       }
       throw new BadRequestException("SYNC_SESSION_MISMATCH");
     }
-    if (!syncSession?.sessionId || typeof syncSession.sessionEpoch !== "number") {
+    if (
+      !syncSession?.sessionId ||
+      typeof syncSession.sessionEpoch !== "number"
+    ) {
       throw new BadRequestException("SYNC_SESSION_REQUIRED");
     }
     if (
@@ -253,12 +285,22 @@ export class DocumentsService {
     return this.buildSyncSessionResponse(renewed);
   }
 
+  async acquireSyncSession(docId: string, userId: string) {
+    const document = await this.assertAccessWithoutViewIncrement(docId, userId);
+    await this.checkDocumentEditPermission(document, userId);
+    const session = await this.acquireDocumentSyncSession(docId, userId);
+    return this.buildSyncSessionResponse(session);
+  }
+
   /**
    * 创建文档
    */
   async create(createDocumentDto: CreateDocumentDto, userId: string) {
     // 检查工作空间权限
-    await this.workspacesService.checkAccess(createDocumentDto.workspaceId, userId);
+    await this.workspacesService.checkAccess(
+      createDocumentDto.workspaceId,
+      userId,
+    );
 
     // 如果指定了父文档，验证父文档存在且在同一工作空间
     // 只有当 parentId 是有效的非空字符串时才检查
@@ -374,11 +416,16 @@ export class DocumentsService {
         opSummary: {},
       });
       await docRevisionRepo.save(initialRevision);
-      await this.documentSnapshotService.createSnapshotForRevision(docId, 1, manager, {
-        kind: "revision",
-        pinned: false,
-        metadata: { source: "initial" },
-      });
+      await this.documentSnapshotService.createSnapshotForRevision(
+        docId,
+        1,
+        manager,
+        {
+          kind: "revision",
+          pinned: false,
+          metadata: { source: "initial" },
+        },
+      );
 
       // 在事务内查询完整文档信息
       const savedDocumentWithDetails = await manager.findOne(Document, {
@@ -524,7 +571,8 @@ export class DocumentsService {
     document.viewCount += 1;
     await this.documentRepository.save(document);
 
-    const { creator, updater } = await this.resolveDocumentActorProfiles(document);
+    const { creator, updater } =
+      await this.resolveDocumentActorProfiles(document);
     return {
       ...document,
       creator,
@@ -535,7 +583,10 @@ export class DocumentsService {
   /**
    * 无副作用的文档访问校验（不递增 viewCount）
    */
-  async assertAccessWithoutViewIncrement(docId: string, userId: string): Promise<Document> {
+  async assertAccessWithoutViewIncrement(
+    docId: string,
+    userId: string,
+  ): Promise<Document> {
     const document = await this.documentRepository.findOne({
       where: { docId },
     });
@@ -567,7 +618,10 @@ export class DocumentsService {
   /**
    * 检查文档访问权限
    */
-  private async checkDocumentAccess(document: Document, userId: string): Promise<void> {
+  private async checkDocumentAccess(
+    document: Document,
+    userId: string,
+  ): Promise<void> {
     // 检查工作空间权限
     await this.workspacesService.checkAccess(document.workspaceId, userId);
 
@@ -587,7 +641,11 @@ export class DocumentsService {
   /**
    * 更新文档元数据
    */
-  async update(docId: string, updateDocumentDto: UpdateDocumentDto, userId: string) {
+  async update(
+    docId: string,
+    updateDocumentDto: UpdateDocumentDto,
+    userId: string,
+  ) {
     const document = await this.documentRepository.findOne({
       where: { docId },
     });
@@ -711,16 +769,17 @@ export class DocumentsService {
 
       let ensuredSnapshot: DocSnapshot;
       if (lockedDocument.head === version) {
-        ensuredSnapshot = await this.documentSnapshotService.createSnapshotForRevision(
-          docId,
-          lockedDocument.head,
-          manager,
-          {
-            kind: "publish",
-            pinned: true,
-            metadata: { source: "publish" },
-          },
-        );
+        ensuredSnapshot =
+          await this.documentSnapshotService.createSnapshotForRevision(
+            docId,
+            lockedDocument.head,
+            manager,
+            {
+              kind: "publish",
+              pinned: true,
+              metadata: { source: "publish" },
+            },
+          );
         ensuredSnapshot.metadata = this.buildPublishMetadata(ensuredSnapshot);
         await snapshotRepo.save(ensuredSnapshot);
       } else {
@@ -728,7 +787,9 @@ export class DocumentsService {
           where: { docId, docVer: version },
         });
         if (!targetSnapshot) {
-          throw new NotFoundException(`Version snapshot ${docId}@${version} not found`);
+          throw new NotFoundException(
+            `Version snapshot ${docId}@${version} not found`,
+          );
         }
         targetSnapshot.metadata = this.buildPublishMetadata(targetSnapshot);
         targetSnapshot.kind = "publish";
@@ -740,7 +801,10 @@ export class DocumentsService {
         lockedDocument.publishedSnapshotId &&
         lockedDocument.publishedSnapshotId !== ensuredSnapshot.snapshotId
       ) {
-        await this.restorePublishedSnapshotState(snapshotRepo, lockedDocument.publishedSnapshotId);
+        await this.restorePublishedSnapshotState(
+          snapshotRepo,
+          lockedDocument.publishedSnapshotId,
+        );
       }
 
       lockedDocument.publishedHead = version;
@@ -789,11 +853,17 @@ export class DocumentsService {
       if (!lockedDocument) {
         throw new NotFoundException("Document not found");
       }
-      if (lockedDocument.publishedHead <= 0 || !lockedDocument.publishedSnapshotId) {
+      if (
+        lockedDocument.publishedHead <= 0 ||
+        !lockedDocument.publishedSnapshotId
+      ) {
         throw new BadRequestException("Document is not currently published");
       }
 
-      await this.restorePublishedSnapshotState(snapshotRepo, lockedDocument.publishedSnapshotId);
+      await this.restorePublishedSnapshotState(
+        snapshotRepo,
+        lockedDocument.publishedSnapshotId,
+      );
       lockedDocument.publishedHead = 0;
       lockedDocument.publishedSnapshotId = null;
       lockedDocument.updatedBy = userId;
@@ -816,7 +886,8 @@ export class DocumentsService {
   }
 
   private buildPublishMetadata(snapshot: DocSnapshot): Record<string, unknown> {
-    const metadata = (snapshot.metadata as Record<string, unknown> | null) ?? {};
+    const metadata =
+      (snapshot.metadata as Record<string, unknown> | null) ?? {};
     return {
       ...metadata,
       source: "publish",
@@ -901,7 +972,9 @@ export class DocumentsService {
     }
 
     try {
-      this.logger.log(`公开文档缓存失效请求: docId=${document.docId}, slug=${slug}, url=${url}`);
+      this.logger.log(
+        `公开文档缓存失效请求: docId=${document.docId}, slug=${slug}, url=${url}`,
+      );
       const response = await fetch(url, {
         method: "POST",
         headers: {
@@ -950,7 +1023,9 @@ export class DocumentsService {
     }
   }
 
-  private async readRevalidateResponseBody(response: Response): Promise<string> {
+  private async readRevalidateResponseBody(
+    response: Response,
+  ): Promise<string> {
     if (typeof response.text !== "function") {
       return "<unavailable>";
     }
@@ -1111,23 +1186,38 @@ export class DocumentsService {
   /**
    * 检查文档编辑权限
    */
-  private async checkDocumentEditPermission(document: Document, userId: string): Promise<void> {
+  private async checkDocumentEditPermission(
+    document: Document,
+    userId: string,
+  ): Promise<void> {
     // 检查工作空间编辑权限
-    await this.workspacesService.checkEditPermission(document.workspaceId, userId);
+    await this.workspacesService.checkEditPermission(
+      document.workspaceId,
+      userId,
+    );
   }
 
   /**
    * 检查文档删除权限
    */
-  private async checkDocumentDeletePermission(document: Document, userId: string): Promise<void> {
+  private async checkDocumentDeletePermission(
+    document: Document,
+    userId: string,
+  ): Promise<void> {
     // 检查工作空间管理权限
-    await this.workspacesService.checkAdminPermission(document.workspaceId, userId);
+    await this.workspacesService.checkAdminPermission(
+      document.workspaceId,
+      userId,
+    );
   }
 
   /**
    * 检查移动操作是否会导致循环引用
    */
-  private async wouldCreateCycle(docId: string, newParentId: string): Promise<boolean> {
+  private async wouldCreateCycle(
+    docId: string,
+    newParentId: string,
+  ): Promise<boolean> {
     let currentParentId = newParentId;
     const visited = new Set<string>([docId]);
 
@@ -1166,7 +1256,14 @@ export class DocumentsService {
   ) {
     const document = await this.findOne(docId, userId);
     const docVer = version || document.head;
-    return this.getContentByDocument(document, docVer, maxDepth, startBlockId, limit, mode);
+    return this.getContentByDocument(
+      document,
+      docVer,
+      maxDepth,
+      startBlockId,
+      limit,
+      mode,
+    );
   }
 
   async getEditContent(
@@ -1190,7 +1287,9 @@ export class DocumentsService {
         limit || 1000,
       );
 
-      const { node: patchedTree, updates } = this.ensureHeadingAnchorIds(result.tree);
+      const { node: patchedTree, updates } = this.ensureHeadingAnchorIds(
+        result.tree,
+      );
       this.persistAnchorIds(updates).catch(() => {});
       result.tree = patchedTree;
 
@@ -1219,7 +1318,9 @@ export class DocumentsService {
           totalBlocks: result.totalBlocks,
           returnedBlocks: result.returnedBlocks,
           hasMore: result.hasMore,
-          ...(result.nextStartBlockId ? { nextStartBlockId: result.nextStartBlockId } : {}),
+          ...(result.nextStartBlockId
+            ? { nextStartBlockId: result.nextStartBlockId }
+            : {}),
         },
       };
     }
@@ -1290,7 +1391,9 @@ export class DocumentsService {
 
     document.editorState = {
       ...(document.editorState ?? {}),
-      ...((updateEditorStateDto?.editorState as Record<string, unknown> | undefined) ?? {}),
+      ...((updateEditorStateDto?.editorState as
+        | Record<string, unknown>
+        | undefined) ?? {}),
     };
     document.editorState = normalizeDocumentEditorState(document.editorState);
     document.updatedBy = userId;
@@ -1320,7 +1423,14 @@ export class DocumentsService {
   ) {
     const publicDocument = await this.getPublicDocumentEntity(docId);
     const docVer = publicDocument.publishedHead;
-    return this.getContentByDocument(publicDocument, docVer, maxDepth, startBlockId, limit, mode);
+    return this.getContentByDocument(
+      publicDocument,
+      docVer,
+      maxDepth,
+      startBlockId,
+      limit,
+      mode,
+    );
   }
 
   private async findAllForSitePublic(queryDto: QueryDocumentsDto) {
@@ -1337,10 +1447,15 @@ export class DocumentsService {
     } = queryDto;
 
     if (!workspaceId) {
-      throw new BadRequestException("workspaceId is required for site public document queries");
+      throw new BadRequestException(
+        "workspaceId is required for site public document queries",
+      );
     }
 
-    await this.workspacesService.findOne(workspaceId, SITE_PUBLIC_ANONYMOUS_USER_ID);
+    await this.workspacesService.findOne(
+      workspaceId,
+      SITE_PUBLIC_ANONYMOUS_USER_ID,
+    );
 
     const skip = (page - 1) * pageSize;
     const queryBuilder = this.documentRepository
@@ -1388,7 +1503,8 @@ export class DocumentsService {
     const document = await this.getPublicDocumentEntity(docId);
     document.viewCount += 1;
     await this.documentRepository.save(document);
-    const { creator, updater } = await this.resolveDocumentActorProfiles(document);
+    const { creator, updater } =
+      await this.resolveDocumentActorProfiles(document);
     return {
       ...this.toPublicDocumentMeta(document),
       creator,
@@ -1433,9 +1549,15 @@ export class DocumentsService {
     };
   }
 
-  private async resolveDocumentActorProfiles(document: Pick<Document, "createdBy" | "updatedBy">) {
+  private async resolveDocumentActorProfiles(
+    document: Pick<Document, "createdBy" | "updatedBy">,
+  ) {
     const actorIds = Array.from(
-      new Set([document.createdBy, document.updatedBy].filter((value): value is string => !!value)),
+      new Set(
+        [document.createdBy, document.updatedBy].filter(
+          (value): value is string => !!value,
+        ),
+      ),
     );
 
     if (actorIds.length === 0) {
@@ -1499,15 +1621,26 @@ export class DocumentsService {
         throw new NotFoundException("文档版本不存在");
       }
 
-      if (result.tree && typeof result.tree === "object" && "__rootBlockDeleted" in result.tree) {
-        throw new BadRequestException("根块已被删除，无法获取文档内容。请恢复根块或重新创建文档。");
+      if (
+        result.tree &&
+        typeof result.tree === "object" &&
+        "__rootBlockDeleted" in result.tree
+      ) {
+        throw new BadRequestException(
+          "根块已被删除，无法获取文档内容。请恢复根块或重新创建文档。",
+        );
       }
 
-      if (result.tree && typeof result.tree === "object" && "__rootBlockMissing" in result.tree) {
+      if (
+        result.tree &&
+        typeof result.tree === "object" &&
+        "__rootBlockMissing" in result.tree
+      ) {
         throw new NotFoundException("根块不存在，无法获取文档内容。");
       }
 
-      const { node: patchedTreeA, updates: updatesA } = this.ensureHeadingAnchorIds(result.tree);
+      const { node: patchedTreeA, updates: updatesA } =
+        this.ensureHeadingAnchorIds(result.tree);
       this.persistAnchorIds(updatesA).catch(() => {});
       result.tree = patchedTreeA;
 
@@ -1548,15 +1681,27 @@ export class DocumentsService {
       throw new NotFoundException("文档版本不存在");
     }
 
-    if (result.tree && typeof result.tree === "object" && "__rootBlockDeleted" in result.tree) {
-      throw new BadRequestException("根块已被删除，无法获取文档内容。请恢复根块或重新创建文档。");
+    if (
+      result.tree &&
+      typeof result.tree === "object" &&
+      "__rootBlockDeleted" in result.tree
+    ) {
+      throw new BadRequestException(
+        "根块已被删除，无法获取文档内容。请恢复根块或重新创建文档。",
+      );
     }
 
-    if (result.tree && typeof result.tree === "object" && "__rootBlockMissing" in result.tree) {
+    if (
+      result.tree &&
+      typeof result.tree === "object" &&
+      "__rootBlockMissing" in result.tree
+    ) {
       throw new NotFoundException("根块不存在，无法获取文档内容。");
     }
 
-    const { node: patchedTree, updates } = this.ensureHeadingAnchorIds(result.tree);
+    const { node: patchedTree, updates } = this.ensureHeadingAnchorIds(
+      result.tree,
+    );
     this.persistAnchorIds(updates).catch(() => {});
     result.tree = patchedTree;
 
@@ -1577,7 +1722,9 @@ export class DocumentsService {
     );
   }
 
-  private async withOptionalRenderedHtml<T extends { docId: string; tree: any }>(
+  private async withOptionalRenderedHtml<
+    T extends { docId: string; tree: any },
+  >(
     response: T,
     mode: "json" | "html" | "all",
   ): Promise<
@@ -1602,9 +1749,14 @@ export class DocumentsService {
     }
 
     try {
-      const rendered = await this.documentRenderService.renderTree(response.tree);
+      const rendered = await this.documentRenderService.renderTree(
+        response.tree,
+      );
       const publicTree = this.stripRenderMetadata(rendered.tree);
-      const tree = mode === "html" ? this.stripRenderedPayloadForHtmlMode(publicTree) : publicTree;
+      const tree =
+        mode === "html"
+          ? this.stripRenderedPayloadForHtmlMode(publicTree)
+          : publicTree;
 
       return {
         ...response,
@@ -1614,7 +1766,9 @@ export class DocumentsService {
           requestedMode: mode,
           ...rendered.diagnostics,
         },
-        ...(rendered.failures.length > 0 ? { renderFailures: rendered.failures } : {}),
+        ...(rendered.failures.length > 0
+          ? { renderFailures: rendered.failures }
+          : {}),
       };
     } catch (error) {
       this.logger.warn(
@@ -1694,7 +1848,11 @@ export class DocumentsService {
     const walk = (n: any) => {
       if (!n || typeof n !== "object") return;
 
-      if (n.type === "heading" && n.payload?.attrs && !n.payload.attrs.anchorId) {
+      if (
+        n.type === "heading" &&
+        n.payload?.attrs &&
+        !n.payload.attrs.anchorId
+      ) {
         const anchorId = this.generateAnchorId();
         n.payload = {
           ...n.payload,
@@ -1729,7 +1887,9 @@ export class DocumentsService {
           await this.blockVersionRepository.save(latest);
         }
       } catch (err) {
-        this.logger.warn(`Failed to persist anchorId for ${blockId}: ${(err as Error).message}`);
+        this.logger.warn(
+          `Failed to persist anchorId for ${blockId}: ${(err as Error).message}`,
+        );
       }
     }
   }
@@ -1753,7 +1913,10 @@ export class DocumentsService {
   /**
    * 构建块树（简化实现）
    */
-  private async buildBlockTree(rootBlockId: string, version: number): Promise<any> {
+  private async buildBlockTree(
+    rootBlockId: string,
+    version: number,
+  ): Promise<any> {
     // 获取根块版本
     const rootVersion = await this.blockVersionRepository.findOne({
       where: { blockId: rootBlockId, ver: version },
@@ -1779,7 +1942,14 @@ export class DocumentsService {
    * 搜索文档
    */
   async search(searchQueryDto: SearchQueryDto, userId: string) {
-    const { query, workspaceId, status, tags, page = 1, pageSize = 20 } = searchQueryDto;
+    const {
+      query,
+      workspaceId,
+      status,
+      tags,
+      page = 1,
+      pageSize = 20,
+    } = searchQueryDto;
     const skip = (page - 1) * pageSize;
 
     // 如果指定了工作空间，检查权限
@@ -1827,7 +1997,10 @@ export class DocumentsService {
 
     // 排序（按相关性）
     queryBuilder
-      .orderBy("ts_rank(document.searchVector, plainto_tsquery(:query))", "DESC")
+      .orderBy(
+        "ts_rank(document.searchVector, plainto_tsquery(:query))",
+        "DESC",
+      )
       .addOrderBy("document.updatedAt", "DESC");
 
     // 分页
@@ -1846,7 +2019,11 @@ export class DocumentsService {
   /**
    * 获取文档修订历史
    */
-  async getRevisions(docId: string, queryDto: QueryRevisionsDto, userId: string) {
+  async getRevisions(
+    docId: string,
+    queryDto: QueryRevisionsDto,
+    userId: string,
+  ) {
     const document = await this.findOne(docId, userId);
     await this.checkDocumentEditPermission(document, userId);
 
@@ -1866,7 +2043,11 @@ export class DocumentsService {
   /**
    * 版本对比：返回两个版本之间的内容差异
    */
-  async getDiff(docId: string, diffQuery: DiffVersionsDto, userId: string): Promise<DiffResponse> {
+  async getDiff(
+    docId: string,
+    diffQuery: DiffVersionsDto,
+    userId: string,
+  ): Promise<DiffResponse> {
     const document = await this.findOne(docId, userId);
     await this.checkDocumentEditPermission(document, userId);
 
@@ -1912,7 +2093,11 @@ export class DocumentsService {
       ),
     ]);
 
-    const { changes, summary } = await this.buildDiff(docId, fromResult.map, toResult.map);
+    const { changes, summary } = await this.buildDiff(
+      docId,
+      fromResult.map,
+      toResult.map,
+    );
 
     return {
       docId,
@@ -1988,7 +2173,10 @@ export class DocumentsService {
       throw new BadRequestException("当前已是该版本，无需回滚");
     }
 
-    const { map: blockVersionMap } = await this.getBlockVersionMapForVersion(docId, version);
+    const { map: blockVersionMap } = await this.getBlockVersionMapForVersion(
+      docId,
+      version,
+    );
     const revision = await this.docRevisionRepository.findOne({
       where: { docId, docVer: version },
     });
@@ -1996,7 +2184,9 @@ export class DocumentsService {
       throw new NotFoundException("保存回退前草稿");
     }
     const existingDraft = await this.documentDraftService.findByDocId(docId);
-    const effectiveDraftStrategy = existingDraft ? (draftStrategy ?? "preserve") : null;
+    const effectiveDraftStrategy = existingDraft
+      ? (draftStrategy ?? "preserve")
+      : null;
 
     return await this.dataSource.transaction(async (manager) => {
       const docRepo = manager.getRepository(Document);
@@ -2055,15 +2245,20 @@ export class DocumentsService {
         },
       });
       await revRepo.save(newRevision);
-      await this.documentSnapshotService.createSnapshotForRevision(docId, doc.head, manager, {
-        kind: "revision",
-        pinned: false,
-        metadata: {
-          source: "revert",
-          revertedFrom: version,
-          draftStrategy: effectiveDraftStrategy,
+      await this.documentSnapshotService.createSnapshotForRevision(
+        docId,
+        doc.head,
+        manager,
+        {
+          kind: "revision",
+          pinned: false,
+          metadata: {
+            source: "revert",
+            revertedFrom: version,
+            draftStrategy: effectiveDraftStrategy,
+          },
         },
-      });
+      );
 
       return this.findOne(docId, userId);
     });
@@ -2077,11 +2272,16 @@ export class DocumentsService {
     await this.checkDocumentEditPermission(document, userId);
 
     return this.dataSource.transaction((manager) =>
-      this.documentSnapshotService.createSnapshotForRevision(docId, document.head, manager, {
-        kind: "manual",
-        pinned: true,
-        metadata: { source: "manual-api" },
-      }),
+      this.documentSnapshotService.createSnapshotForRevision(
+        docId,
+        document.head,
+        manager,
+        {
+          kind: "manual",
+          pinned: true,
+          metadata: { source: "manual-api" },
+        },
+      ),
     );
   }
 
@@ -2100,7 +2300,10 @@ export class DocumentsService {
   ) {
     const document = await this.assertAccessWithoutViewIncrement(docId, userId);
     await this.checkDocumentEditPermission(document, userId);
-    const activeSession = await this.validateDocumentSyncSession(docId, syncSession);
+    const activeSession = await this.validateDocumentSyncSession(
+      docId,
+      syncSession,
+    );
     if (
       typeof syncSession?.ackedThroughOpSeq === "number" &&
       syncSession.ackedThroughOpSeq > (activeSession?.lastAckedOpSeq ?? 0)
@@ -2116,9 +2319,14 @@ export class DocumentsService {
   async getPendingVersions(docId: string, userId: string) {
     await this.assertAccessWithoutViewIncrement(docId, userId);
     const draft = await this.documentDraftService.findByDocId(docId);
-    const legacyPendingCount = this.versionControlService.getPendingVersionCount(docId);
+    const legacyPendingCount =
+      this.versionControlService.getPendingVersionCount(docId);
     const pendingCount =
-      typeof legacyPendingCount === "number" ? legacyPendingCount : draft ? 1 : 0;
+      typeof legacyPendingCount === "number"
+        ? legacyPendingCount
+        : draft
+          ? 1
+          : 0;
 
     return {
       docId,
@@ -2147,7 +2355,10 @@ export class DocumentsService {
   /**
    * 获取文档同步状态（head + pending draft）
    */
-  async getSyncState(docId: string, userId: string): Promise<SyncStateResponseDto> {
+  async getSyncState(
+    docId: string,
+    userId: string,
+  ): Promise<SyncStateResponseDto> {
     const document = await this.documentRepository.findOne({
       where: { docId },
       select: [
@@ -2184,22 +2395,63 @@ export class DocumentsService {
     };
   }
 
-  async reconcileSyncManifest(docId: string, userId: string, dto: SyncReconcileDto) {
+  async applyDraftCheckpoint(
+    docId: string,
+    userId: string,
+    dto: DraftCheckpointDto,
+  ): Promise<DraftCheckpointResponseDto> {
+    const document = await this.assertAccessWithoutViewIncrement(docId, userId);
+    await this.checkDocumentEditPermission(document, userId);
+    return this.draftCheckpointService.applyDraftCheckpoint(docId, userId, dto);
+  }
+
+  async reconcileSyncManifest(
+    docId: string,
+    userId: string,
+    dto: SyncReconcileDto,
+  ): Promise<SyncReconcileResponse> {
     const document = await this.assertAccessWithoutViewIncrement(docId, userId);
     await this.checkDocumentEditPermission(document, userId);
     await this.validateDocumentSyncSession(docId, {
       sessionId: dto.sessionId,
       sessionEpoch: dto.sessionEpoch,
     });
+    const clientBatchId = this.normalizeReconcileClientBatchId(
+      dto.clientBatchId,
+    );
+    const fingerprint = this.buildSyncReconcileFingerprint({
+      ...dto,
+      clientBatchId,
+    });
 
     return this.dataSource.transaction(async (manager) => {
-      const docInTx = await this.documentDraftService.lockDocumentForDraftMutation(docId, manager);
+      const docInTx =
+        await this.documentDraftService.lockDocumentForDraftMutation(
+          docId,
+          manager,
+        );
       const serverDraftRevision = docInTx.draftRevision ?? 0;
       const clientDraftRevision = dto.draftRevision ?? 0;
       const checkedAt = Date.now();
+      const receiptRepository = manager.getRepository(SyncReconcileReceipt);
+      const existingReceipt = await receiptRepository.findOne({
+        where: { docId, clientBatchId },
+      });
+      if (existingReceipt) {
+        if (existingReceipt.requestFingerprint === fingerprint) {
+          return this.mapSyncReconcileReceiptToResponse(docId, existingReceipt);
+        }
+        return this.buildSyncReconcileConflictResponse({
+          docId,
+          checkedAt,
+          draftRevision: serverDraftRevision,
+          code: "RECONCILE_FINGERPRINT_CONFLICT",
+          message: "Reconcile id was reused with different content",
+        });
+      }
 
       if (clientDraftRevision !== serverDraftRevision) {
-        return {
+        const response = {
           docId,
           checkedAt,
           draftRevision: serverDraftRevision,
@@ -2214,11 +2466,22 @@ export class DocumentsService {
           ],
           tombstoned: [],
         };
+        await this.saveSyncReconcileReceipt({
+          manager,
+          docId,
+          userId,
+          clientBatchId,
+          fingerprint,
+          response,
+        });
+        return response;
       }
 
-      const draft = await manager.getRepository(DocDraft).findOne({ where: { docId } });
+      const draft = await manager
+        .getRepository(DocDraft)
+        .findOne({ where: { docId } });
       if (!draft) {
-        return {
+        const response = {
           docId,
           checkedAt,
           draftRevision: serverDraftRevision,
@@ -2226,6 +2489,15 @@ export class DocumentsService {
           conflicts: [],
           tombstoned: [],
         };
+        await this.saveSyncReconcileReceipt({
+          manager,
+          docId,
+          userId,
+          clientBatchId,
+          fingerprint,
+          response,
+        });
+        return response;
       }
 
       const tombstoned = await this.tombstoneMissingSyncManifestBlocks({
@@ -2248,7 +2520,7 @@ export class DocumentsService {
         nextDraftRevision = docInTx.draftRevision;
       }
 
-      return {
+      const response = {
         docId,
         checkedAt,
         draftRevision: nextDraftRevision,
@@ -2256,6 +2528,87 @@ export class DocumentsService {
         conflicts: [],
         tombstoned,
       };
+      await this.saveSyncReconcileReceipt({
+        manager,
+        docId,
+        userId,
+        clientBatchId,
+        fingerprint,
+        response,
+      });
+      return response;
+    });
+  }
+
+  private normalizeReconcileClientBatchId(clientBatchId?: string): string {
+    const normalized = clientBatchId?.trim();
+    if (!normalized) {
+      throw new BadRequestException("RECONCILE_CLIENT_BATCH_ID_REQUIRED");
+    }
+    return normalized;
+  }
+
+  private buildSyncReconcileFingerprint(dto: SyncReconcileDto): string {
+    return JSON.stringify({
+      draftRevision: dto.draftRevision,
+      sessionId: dto.sessionId ?? null,
+      sessionEpoch: dto.sessionEpoch ?? null,
+      clientBatchId: dto.clientBatchId,
+      manifest: dto.manifest ?? [],
+    });
+  }
+
+  private mapSyncReconcileReceiptToResponse(
+    docId: string,
+    receipt: SyncReconcileReceipt,
+  ): SyncReconcileResponse {
+    return {
+      docId,
+      checkedAt: Number(receipt.checkedAt),
+      draftRevision: receipt.draftRevision,
+      needsReload: receipt.needsReload,
+      conflicts: receipt.conflicts,
+      tombstoned: receipt.tombstoned as SyncReconcileTombstone[],
+    };
+  }
+
+  private buildSyncReconcileConflictResponse(params: {
+    docId: string;
+    checkedAt: number;
+    draftRevision: number;
+    code: string;
+    message: string;
+  }): SyncReconcileResponse {
+    return {
+      docId: params.docId,
+      checkedAt: params.checkedAt,
+      draftRevision: params.draftRevision,
+      needsReload: true,
+      conflicts: [{ code: params.code, message: params.message }],
+      tombstoned: [],
+    };
+  }
+
+  private async saveSyncReconcileReceipt(params: {
+    manager: EntityManager;
+    docId: string;
+    userId: string;
+    clientBatchId: string;
+    fingerprint: string;
+    response: SyncReconcileResponse;
+  }): Promise<void> {
+    await params.manager.getRepository(SyncReconcileReceipt).save({
+      docId: params.docId,
+      clientBatchId: params.clientBatchId,
+      requestFingerprint: params.fingerprint,
+      checkedAt: params.response.checkedAt,
+      draftRevision: params.response.draftRevision,
+      needsReload: params.response.needsReload,
+      conflicts: params.response.conflicts,
+      tombstoned: params.response.tombstoned,
+      createdBy: params.userId,
+      createdAt: params.response.checkedAt,
+      updatedAt: params.response.checkedAt,
     });
   }
 
@@ -2282,9 +2635,15 @@ export class DocumentsService {
       if (syncCreateId) liveSyncCreateIds.add(syncCreateId);
     }
 
-    const draftMap = (params.draft.blockVersionMap ?? {}) as Record<string, number>;
+    const draftMap = (params.draft.blockVersionMap ?? {}) as Record<
+      string,
+      number
+    >;
     const candidates = Object.entries(draftMap)
-      .filter(([blockId]) => blockId !== params.draft.rootBlockId && !liveBlockIds.has(blockId))
+      .filter(
+        ([blockId]) =>
+          blockId !== params.draft.rootBlockId && !liveBlockIds.has(blockId),
+      )
       .map(([blockId, ver]) => ({ blockId, ver }));
     if (candidates.length === 0) return [];
 
@@ -2295,18 +2654,24 @@ export class DocumentsService {
         ver: candidate.ver,
       })),
     });
-    const byBlock = new Map(versions.map((version) => [version.blockId, version]));
+    const byBlock = new Map(
+      versions.map((version) => [version.blockId, version]),
+    );
     const tombstoned: SyncReconcileTombstone[] = [];
 
     for (const candidate of candidates) {
       const latestVersion = byBlock.get(candidate.blockId);
-      if (!latestVersion || this.isDeletedSnapshotVersion(latestVersion)) continue;
+      if (!latestVersion || this.isDeletedSnapshotVersion(latestVersion))
+        continue;
 
       const attrs = this.getPayloadAttrs(latestVersion.payload);
       const clientId = this.cleanSyncIdentity(attrs.clientId);
       const syncCreateId = this.cleanSyncIdentity(attrs.syncCreateId);
       if (!clientId && !syncCreateId) continue;
-      if ((clientId && liveClientIds.has(clientId)) || (syncCreateId && liveSyncCreateIds.has(syncCreateId))) {
+      if (
+        (clientId && liveClientIds.has(clientId)) ||
+        (syncCreateId && liveSyncCreateIds.has(syncCreateId))
+      ) {
         continue;
       }
 
@@ -2400,14 +2765,19 @@ export class DocumentsService {
       .where("t.docId = :docId", { docId: params.docId })
       .andWhere("t.expiresAt > :now", { now: params.now });
     if (params.clientId && params.syncCreateId) {
-      query.andWhere("(t.clientId = :clientId OR t.syncCreateId = :syncCreateId)", {
-        clientId: params.clientId,
-        syncCreateId: params.syncCreateId,
-      });
+      query.andWhere(
+        "(t.clientId = :clientId OR t.syncCreateId = :syncCreateId)",
+        {
+          clientId: params.clientId,
+          syncCreateId: params.syncCreateId,
+        },
+      );
     } else if (params.clientId) {
       query.andWhere("t.clientId = :clientId", { clientId: params.clientId });
     } else if (params.syncCreateId) {
-      query.andWhere("t.syncCreateId = :syncCreateId", { syncCreateId: params.syncCreateId });
+      query.andWhere("t.syncCreateId = :syncCreateId", {
+        syncCreateId: params.syncCreateId,
+      });
     }
     const existing = await query.getOne();
     if (existing) return;
@@ -2417,10 +2787,12 @@ export class DocumentsService {
       repository.create({
         docId: params.docId,
         sessionId: params.sessionId ?? null,
-        sessionEpoch: typeof params.sessionEpoch === "number" ? params.sessionEpoch : null,
+        sessionEpoch:
+          typeof params.sessionEpoch === "number" ? params.sessionEpoch : null,
         clientId: params.clientId,
         syncCreateId: params.syncCreateId,
-        deleteClientBatchId: params.clientBatchId ?? `manifest-reconcile:${params.now}`,
+        deleteClientBatchId:
+          params.clientBatchId ?? `manifest-reconcile:${params.now}`,
         deletedAt: params.now,
         expiresAt: params.now + this.syncCreateTombstoneTtlMs,
         createdBy: params.userId,
@@ -2464,7 +2836,15 @@ export class DocumentsService {
     // 一次查询获取所有需要的 BlockVersion 记录
     const versions = await this.blockVersionRepository.find({
       where: conditions.map((c) => ({ docId, blockId: c.blockId, ver: c.ver })),
-      select: ["blockId", "ver", "parentId", "sortKey", "indent", "payload", "hash"],
+      select: [
+        "blockId",
+        "ver",
+        "parentId",
+        "sortKey",
+        "indent",
+        "payload",
+        "hash",
+      ],
     });
 
     // 按 blockId:ver 建索引
@@ -2474,7 +2854,10 @@ export class DocumentsService {
     }
 
     // 遍历两个 map 的 blockId 并集，分类变更
-    const allBlockIds = new Set([...Object.keys(fromMap), ...Object.keys(toMap)]);
+    const allBlockIds = new Set([
+      ...Object.keys(fromMap),
+      ...Object.keys(toMap),
+    ]);
     const changes: DiffChangeItem[] = [];
     const summary: DiffSummary = {
       added: 0,
@@ -2489,9 +2872,14 @@ export class DocumentsService {
     for (const blockId of allBlockIds) {
       const fromVer = fromMap[blockId];
       const toVer = toMap[blockId];
-      const fromBv = fromVer === undefined ? undefined : bvIndex.get(`${blockId}:${fromVer}`);
-      const toBv = toVer === undefined ? undefined : bvIndex.get(`${blockId}:${toVer}`);
-      const fromVisible = Boolean(fromBv) && !this.isDeletedSnapshotVersion(fromBv!);
+      const fromBv =
+        fromVer === undefined
+          ? undefined
+          : bvIndex.get(`${blockId}:${fromVer}`);
+      const toBv =
+        toVer === undefined ? undefined : bvIndex.get(`${blockId}:${toVer}`);
+      const fromVisible =
+        Boolean(fromBv) && !this.isDeletedSnapshotVersion(fromBv!);
       const toVisible = Boolean(toBv) && !this.isDeletedSnapshotVersion(toBv!);
 
       if (!fromVisible && !toVisible) {
@@ -2523,7 +2911,12 @@ export class DocumentsService {
         const sortKeyChanged = fromBv.sortKey !== toBv.sortKey;
         const indentChanged = fromBv.indent !== toBv.indent;
 
-        if (!hashChanged && !parentChanged && !sortKeyChanged && !indentChanged) {
+        if (
+          !hashChanged &&
+          !parentChanged &&
+          !sortKeyChanged &&
+          !indentChanged
+        ) {
           summary.unchanged++;
           continue;
         }
@@ -2573,7 +2966,9 @@ export class DocumentsService {
       return {};
     }
     const attrs = (payload as { attrs?: unknown }).attrs;
-    return attrs && typeof attrs === "object" ? (attrs as Record<string, unknown>) : {};
+    return attrs && typeof attrs === "object"
+      ? (attrs as Record<string, unknown>)
+      : {};
   }
 
   private cleanSyncIdentity(value: unknown): string | null {
@@ -2595,7 +2990,9 @@ export class DocumentsService {
       .getRawOne<{ maxVer?: number | string | null }>();
     const maxHistoricalVer = Math.max(
       currentLatestVer,
-      Number.isFinite(Number(raw?.maxVer)) ? Number(raw?.maxVer) : currentLatestVer,
+      Number.isFinite(Number(raw?.maxVer))
+        ? Number(raw?.maxVer)
+        : currentLatestVer,
     );
     return maxHistoricalVer + 1;
   }
@@ -2619,10 +3016,11 @@ export class DocumentsService {
     docId: string,
     docVer: number,
   ): Promise<{ map: Record<string, number>; createdAt: number }> {
-    const snapshotResult = await this.documentSnapshotService.getSnapshotMapForVersion(
-      docId,
-      docVer,
-    );
+    const snapshotResult =
+      await this.documentSnapshotService.getSnapshotMapForVersion(
+        docId,
+        docVer,
+      );
     if (snapshotResult.snapshot) {
       const revision = await this.docRevisionRepository.findOne({
         where: { docId, docVer },
@@ -2669,12 +3067,16 @@ export class DocumentsService {
 
     const map: Record<string, number> = {};
     for (const r of rows) {
-      map[r.blockId] = typeof r.maxVer === "string" ? parseInt(r.maxVer, 10) : r.maxVer;
+      map[r.blockId] =
+        typeof r.maxVer === "string" ? parseInt(r.maxVer, 10) : r.maxVer;
     }
 
     // 确保根块在版本映射中（根块不应该被删除）
     if (document.rootBlockId && !(document.rootBlockId in map)) {
-      console.log("根块不在版本映射中，尝试添加，rootBlockId:", document.rootBlockId);
+      console.log(
+        "根块不在版本映射中，尝试添加，rootBlockId:",
+        document.rootBlockId,
+      );
 
       // 查询根块的最新版本
       const rootBlock = await this.blockRepository.findOne({
@@ -2695,7 +3097,8 @@ export class DocumentsService {
       if (
         rootBlock &&
         (!rootBlock.isDeleted ||
-          (rootBlock.deletedAt != null && rootBlock.deletedAt > revision.createdAt))
+          (rootBlock.deletedAt != null &&
+            rootBlock.deletedAt > revision.createdAt))
       ) {
         // 查找根块在该时间点之前的版本
         const rootVersion = await this.blockVersionRepository
@@ -2723,7 +3126,12 @@ export class DocumentsService {
 
         if (rootVersion) {
           map[document.rootBlockId] = rootVersion.ver;
-          console.log("已添加根块到版本映射:", document.rootBlockId, "ver:", rootVersion.ver);
+          console.log(
+            "已添加根块到版本映射:",
+            document.rootBlockId,
+            "ver:",
+            rootVersion.ver,
+          );
         } else {
           // 如果根块没有版本记录，使用 latestVer（这种情况不应该发生，但作为后备）
           map[document.rootBlockId] = rootBlock.latestVer;
@@ -2783,7 +3191,11 @@ export class DocumentsService {
 
     // 如果起始块是根块，直接返回根块
     if (startBlockId === rootBlockId) {
-      const rootVersion = await this.getBlockVersionAtTime(docId, rootBlockId, revisionCreatedAt);
+      const rootVersion = await this.getBlockVersionAtTime(
+        docId,
+        rootBlockId,
+        revisionCreatedAt,
+      );
       if (!rootVersion) {
         return {
           tree: { __rootBlockMissing: true },
@@ -2853,12 +3265,17 @@ export class DocumentsService {
     const sortedSiblings = siblingsQuery
       .map((row) => ({
         blockId: row.blockId,
-        maxVer: typeof row.maxVer === "string" ? parseInt(row.maxVer, 10) : row.maxVer,
+        maxVer:
+          typeof row.maxVer === "string"
+            ? parseInt(row.maxVer, 10)
+            : row.maxVer,
         sortKey: row.sortKey || "500000",
       }))
       .sort((a, b) => {
-        const sortKeyA = a.sortKey && a.sortKey.trim() !== "" ? a.sortKey : "500000";
-        const sortKeyB = b.sortKey && b.sortKey.trim() !== "" ? b.sortKey : "500000";
+        const sortKeyA =
+          a.sortKey && a.sortKey.trim() !== "" ? a.sortKey : "500000";
+        const sortKeyB =
+          b.sortKey && b.sortKey.trim() !== "" ? b.sortKey : "500000";
         const result = compareSortKey(sortKeyA, sortKeyB);
         if (result === 0) {
           return a.blockId.localeCompare(b.blockId);
@@ -2867,14 +3284,24 @@ export class DocumentsService {
       });
 
     // 找到起始块在兄弟块中的位置
-    const startIndex = sortedSiblings.findIndex((s) => s.blockId === startBlockId);
+    const startIndex = sortedSiblings.findIndex(
+      (s) => s.blockId === startBlockId,
+    );
     if (startIndex < 0) {
-      throw new NotFoundException(`起始块 ${startBlockId} 不在其父块的子块列表中`);
+      throw new NotFoundException(
+        `起始块 ${startBlockId} 不在其父块的子块列表中`,
+      );
     }
 
     // 只获取起始块及其后续的兄弟块（限制数量，避免查询过多）
-    const maxSiblingsToReturn = Math.min(limit, sortedSiblings.length - startIndex);
-    const blocksToReturn = sortedSiblings.slice(startIndex, startIndex + maxSiblingsToReturn);
+    const maxSiblingsToReturn = Math.min(
+      limit,
+      sortedSiblings.length - startIndex,
+    );
+    const blocksToReturn = sortedSiblings.slice(
+      startIndex,
+      startIndex + maxSiblingsToReturn,
+    );
 
     // 按需查询这些块的完整版本信息
     const versions = await this.blockVersionRepository.find({
@@ -2893,7 +3320,10 @@ export class DocumentsService {
     let hasMore = false;
     let nextStartBlockId: string | undefined;
 
-    const buildNode = async (blockId: string, depth: number = 0): Promise<any> => {
+    const buildNode = async (
+      blockId: string,
+      depth: number = 0,
+    ): Promise<any> => {
       if (maxDepth !== undefined && depth > maxDepth) {
         return null;
       }
@@ -2937,12 +3367,18 @@ export class DocumentsService {
     };
 
     // 构建起始块及其后续兄弟块的树
-    const children = await Promise.all(blocksToReturn.map((s) => buildNode(s.blockId, 0)));
+    const children = await Promise.all(
+      blocksToReturn.map((s) => buildNode(s.blockId, 0)),
+    );
     const validChildren = children.filter(Boolean);
 
     // 如果起始块的父块是根块，返回根块（但只包含起始块及其后续兄弟块）
     if (startBlockParentId === rootBlockId) {
-      const rootVersion = await this.getBlockVersionAtTime(docId, rootBlockId, revisionCreatedAt);
+      const rootVersion = await this.getBlockVersionAtTime(
+        docId,
+        rootBlockId,
+        revisionCreatedAt,
+      );
       if (!rootVersion) {
         return {
           tree: { __rootBlockMissing: true },
@@ -3081,7 +3517,10 @@ export class DocumentsService {
       where: childRows.map((row) => ({
         docId,
         blockId: row.blockId,
-        ver: typeof row.maxVer === "string" ? parseInt(row.maxVer, 10) : row.maxVer,
+        ver:
+          typeof row.maxVer === "string"
+            ? parseInt(row.maxVer, 10)
+            : row.maxVer,
       })),
     });
 
@@ -3159,7 +3598,8 @@ export class DocumentsService {
       if (
         rootBlock.isDeleted &&
         (!revisionCreatedAt ||
-          (rootBlock.deletedAt != null && rootBlock.deletedAt <= revisionCreatedAt))
+          (rootBlock.deletedAt != null &&
+            rootBlock.deletedAt <= revisionCreatedAt))
       ) {
         return {
           tree: { __rootBlockDeleted: true },
@@ -3199,7 +3639,8 @@ export class DocumentsService {
     if (
       rootBlock.isDeleted &&
       (!revisionCreatedAt ||
-        (rootBlock.deletedAt != null && rootBlock.deletedAt <= revisionCreatedAt))
+        (rootBlock.deletedAt != null &&
+          rootBlock.deletedAt <= revisionCreatedAt))
     ) {
       console.error("根块在目标版本前已被删除，rootBlockId:", rootBlockId);
       return {
@@ -3225,7 +3666,9 @@ export class DocumentsService {
           where: {
             docId,
             blockId: In(chunk) as any,
-            deletedAt: revisionCreatedAt ? Or(IsNull(), MoreThan(revisionCreatedAt)) : IsNull(),
+            deletedAt: revisionCreatedAt
+              ? Or(IsNull(), MoreThan(revisionCreatedAt))
+              : IsNull(),
           },
           select: ["blockId"],
         });
@@ -3339,8 +3782,10 @@ export class DocumentsService {
           const childVersions = versions
             .filter((v) => v.parentId === blockId)
             .sort((a, b) => {
-              const sortKeyA = a.sortKey && a.sortKey.trim() !== "" ? a.sortKey : "500000";
-              const sortKeyB = b.sortKey && b.sortKey.trim() !== "" ? b.sortKey : "500000";
+              const sortKeyA =
+                a.sortKey && a.sortKey.trim() !== "" ? a.sortKey : "500000";
+              const sortKeyB =
+                b.sortKey && b.sortKey.trim() !== "" ? b.sortKey : "500000";
               const result = compareSortKey(sortKeyA, sortKeyB);
               if (result === 0) {
                 return a.blockId.localeCompare(b.blockId);
@@ -3374,7 +3819,8 @@ export class DocumentsService {
               startBlock.sortKey && startBlock.sortKey.trim() !== ""
                 ? startBlock.sortKey
                 : "500000";
-            const currentSortKey = bv.sortKey && bv.sortKey.trim() !== "" ? bv.sortKey : "500000";
+            const currentSortKey =
+              bv.sortKey && bv.sortKey.trim() !== "" ? bv.sortKey : "500000";
             // 如果当前块的 sortKey 小于起始块的 sortKey，跳过
             if (compareSortKey(currentSortKey, startSortKey) < 0) {
               visitedBlocks.add(blockId);
@@ -3391,8 +3837,10 @@ export class DocumentsService {
       const childVersions = versions
         .filter((v) => v.parentId === blockId)
         .sort((a, b) => {
-          const sortKeyA = a.sortKey && a.sortKey.trim() !== "" ? a.sortKey : "500000";
-          const sortKeyB = b.sortKey && b.sortKey.trim() !== "" ? b.sortKey : "500000";
+          const sortKeyA =
+            a.sortKey && a.sortKey.trim() !== "" ? a.sortKey : "500000";
+          const sortKeyB =
+            b.sortKey && b.sortKey.trim() !== "" ? b.sortKey : "500000";
           const result = compareSortKey(sortKeyA, sortKeyB);
           if (result === 0) {
             return a.blockId.localeCompare(b.blockId);
@@ -3403,7 +3851,9 @@ export class DocumentsService {
       // 如果指定了 startBlockId 且当前块是起始块的父块，只返回起始块及其后续兄弟块
       let childrenToProcess = childVersions;
       if (startBlockId && shouldStart && blockId === startBlockParentId) {
-        const startIndex = childVersions.findIndex((v) => v.blockId === startBlockId);
+        const startIndex = childVersions.findIndex(
+          (v) => v.blockId === startBlockId,
+        );
         if (startIndex >= 0) {
           // 只返回起始块及其后续的兄弟块
           childrenToProcess = childVersions.slice(startIndex);
@@ -3428,8 +3878,10 @@ export class DocumentsService {
           const siblings = versions
             .filter((v) => v.parentId === bv.parentId)
             .sort((a, b) => {
-              const sortKeyA = a.sortKey && a.sortKey.trim() !== "" ? a.sortKey : "500000";
-              const sortKeyB = b.sortKey && b.sortKey.trim() !== "" ? b.sortKey : "500000";
+              const sortKeyA =
+                a.sortKey && a.sortKey.trim() !== "" ? a.sortKey : "500000";
+              const sortKeyB =
+                b.sortKey && b.sortKey.trim() !== "" ? b.sortKey : "500000";
               const result = compareSortKey(sortKeyA, sortKeyB);
               if (result === 0) {
                 return a.blockId.localeCompare(b.blockId);
@@ -3464,13 +3916,20 @@ export class DocumentsService {
 
     // 如果返回的树只是起始块本身，说明需要返回后续兄弟块
     // 但是后续兄弟块应该在父块级别处理，所以这里需要特殊处理
-    if (startBlockId && tree && tree.blockId === startBlockId && startBlockParentId) {
+    if (
+      startBlockId &&
+      tree &&
+      tree.blockId === startBlockId &&
+      startBlockParentId
+    ) {
       // 获取起始块的所有兄弟块
       const siblings = versions
         .filter((v) => v.parentId === startBlockParentId)
         .sort((a, b) => {
-          const sortKeyA = a.sortKey && a.sortKey.trim() !== "" ? a.sortKey : "500000";
-          const sortKeyB = b.sortKey && b.sortKey.trim() !== "" ? b.sortKey : "500000";
+          const sortKeyA =
+            a.sortKey && a.sortKey.trim() !== "" ? a.sortKey : "500000";
+          const sortKeyB =
+            b.sortKey && b.sortKey.trim() !== "" ? b.sortKey : "500000";
           const result = compareSortKey(sortKeyA, sortKeyB);
           if (result === 0) {
             return a.blockId.localeCompare(b.blockId);

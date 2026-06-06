@@ -51,12 +51,12 @@ export class SyncReconcileDto {
   @IsNumber()
   sessionEpoch?: number;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     description: "Idempotency key for this final-state reconcile request",
   })
-  @IsOptional()
+  @IsDefined()
   @IsString()
-  clientBatchId?: string;
+  clientBatchId: string;
 
   @ApiProperty({
     description:
