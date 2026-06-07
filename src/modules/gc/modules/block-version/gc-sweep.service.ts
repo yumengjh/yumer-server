@@ -3,6 +3,7 @@ import { Injectable } from "@nestjs/common";
 import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
 import { DataSource, FindOptionsWhere, Repository } from "typeorm";
 import { Block } from "../../../../entities/block.entity";
+import { BlockRenderCache } from "../../../../entities/block-render-cache.entity";
 import { BlockVersion } from "../../../../entities/block-version.entity";
 import { DocDraft } from "../../../../entities/doc-draft.entity";
 import { DocSnapshot } from "../../../../entities/doc-snapshot.entity";
@@ -821,6 +822,9 @@ export class GcSweepService {
         docId: candidate.docId ?? "",
         blockId: candidate.blockId,
         ver: candidate.blockVer,
+      });
+      await manager.getRepository(BlockRenderCache).delete({
+        blockVersionId: candidate.resourceRowId,
       });
       await this.syncBlockAfterDeletingVersion(candidate, blockRepository, blockVersionRepository);
       await poolRepository.save({

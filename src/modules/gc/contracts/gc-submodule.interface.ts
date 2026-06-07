@@ -6,6 +6,8 @@ export type GcSubmoduleCapabilities = {
   candidates?: boolean;
   pool?: boolean;
   maintenance?: boolean;
+  dryRun?: boolean;
+  publishedReachability?: boolean;
 };
 
 export type GcSubmoduleDescriptor = {

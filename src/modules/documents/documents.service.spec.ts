@@ -104,11 +104,19 @@ describe("DocumentsService", () => {
   const documentRenderService = {
     renderTree: jest.fn(),
   };
+  const renderCacheGcService = {
+    sweepDocumentPublishedReachability: jest.fn(),
+    clearDocumentRenderCaches: jest.fn(),
+  };
 
   let service: DocumentsService;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    renderCacheGcService.sweepDocumentPublishedReachability.mockResolvedValue(
+      undefined,
+    );
+    renderCacheGcService.clearDocumentRenderCaches.mockResolvedValue(undefined);
     syncSessions.length = 0;
     global.fetch = originalFetch;
     delete process.env.PUBLIC_SITE_REVALIDATE_URL;
@@ -129,6 +137,7 @@ describe("DocumentsService", () => {
       activitiesService,
       draftCheckpointService,
       documentRenderService,
+      renderCacheGcService,
     );
   });
 
@@ -1186,6 +1195,53 @@ describe("DocumentsService", () => {
         updatedBy: "user_1",
       }),
     );
+    expect(
+      renderCacheGcService.sweepDocumentPublishedReachability,
+    ).toHaveBeenCalledWith("doc_1", "user_1");
+  });
+
+  it("发布后的渲染缓存清理失败不影响发布结果", async () => {
+    const document = {
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      head: 5,
+      publishedHead: 0,
+      publishedSnapshotId: null,
+      status: "draft",
+      updatedBy: "old_user",
+    } as Document;
+    jest.mocked(documentRepository.findOne).mockResolvedValue(document);
+    (service as any).checkDocumentEditPermission = jest
+      .fn()
+      .mockResolvedValue(undefined);
+    (service as any).findOne = jest.fn().mockResolvedValue({
+      ...document,
+      publishedHead: 5,
+      publishedSnapshotId: "doc_1@snap@5",
+    });
+    jest
+      .mocked((documentSnapshotService as any).createSnapshotForRevision)
+      .mockResolvedValue({ snapshotId: "doc_1@snap@5" });
+    renderCacheGcService.sweepDocumentPublishedReachability.mockRejectedValue(
+      new Error("render cache gc unavailable"),
+    );
+
+    const docRepo = {
+      findOne: jest.fn().mockResolvedValue({ ...document }),
+      save: jest.fn().mockImplementation(async (value) => value),
+    };
+    jest
+      .mocked(dataSource.transaction)
+      .mockImplementation(async (callback: any) =>
+        callback({ getRepository: jest.fn().mockReturnValue(docRepo) }),
+      );
+
+    await expect(service.publish("doc_1", "user_1")).resolves.toMatchObject({
+      document: {
+        docId: "doc_1",
+        publishedHead: 5,
+      },
+    });
   });
 
   it("?????????????????????????????? published ???", async () => {
@@ -1371,6 +1427,10 @@ describe("DocumentsService", () => {
         publishedSnapshotId: null,
         updatedBy: "user_1",
       }),
+    );
+    expect(renderCacheGcService.clearDocumentRenderCaches).toHaveBeenCalledWith(
+      "doc_1",
+      "user_1",
     );
   });
 
@@ -2797,7 +2857,9 @@ describe("DocumentsService", () => {
     });
     expect(manager.save).not.toHaveBeenCalled();
     expect(loggerLog).toHaveBeenCalledWith(
-      expect.stringContaining("同步 manifest reconcile draft-revision-mismatch:"),
+      expect.stringContaining(
+        "同步 manifest reconcile draft-revision-mismatch:",
+      ),
     );
   });
 

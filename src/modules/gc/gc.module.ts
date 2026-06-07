@@ -3,12 +3,18 @@ import { SystemAdminTokenGuard } from "../../common/guards/system-admin-token.gu
 import { GcModulesController } from "./gc-modules.controller";
 import { GcRegistryService } from "./gc-registry.service";
 import { BlockVersionGcModule } from "./modules/block-version/block-version-gc.module";
+import { GcRenderCacheModule } from "./modules/render-cache/gc-render-cache.module";
 import { GcStorageModule } from "./modules/storage/gc-storage.module";
 
 @Module({
-  imports: [BlockVersionGcModule, GcStorageModule],
+  imports: [BlockVersionGcModule, GcRenderCacheModule, GcStorageModule],
   controllers: [GcModulesController],
   providers: [SystemAdminTokenGuard, GcRegistryService],
-  exports: [BlockVersionGcModule, GcStorageModule, GcRegistryService],
+  exports: [
+    BlockVersionGcModule,
+    GcRenderCacheModule,
+    GcStorageModule,
+    GcRegistryService,
+  ],
 })
 export class GcModule {}

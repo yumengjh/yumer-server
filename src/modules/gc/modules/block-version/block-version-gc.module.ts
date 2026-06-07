@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { SystemAdminTokenGuard } from "../../../../common/guards/system-admin-token.guard";
 import { Block } from "../../../../entities/block.entity";
+import { BlockRenderCache } from "../../../../entities/block-render-cache.entity";
 import { BlockVersion } from "../../../../entities/block-version.entity";
 import { DocDraft } from "../../../../entities/doc-draft.entity";
 import { DocRevision } from "../../../../entities/doc-revision.entity";
@@ -22,6 +23,7 @@ import { BlockVersionGcSubmodule } from "./block-version-gc.submodule";
   imports: [
     TypeOrmModule.forFeature([
       Block,
+      BlockRenderCache,
       BlockVersion,
       Document,
       DocRevision,

@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import type { GcSubmoduleDescriptor } from "./contracts/gc-submodule.interface";
 import { BlockVersionGcSubmodule } from "./modules/block-version/block-version-gc.submodule";
+import { GcRenderCacheSubmodule } from "./modules/render-cache/gc-render-cache.submodule";
 import { GcStorageSubmodule } from "./modules/storage/gc-storage.submodule";
 
 type GcSubmoduleNode = GcSubmoduleDescriptor & {
@@ -11,6 +12,7 @@ type GcSubmoduleNode = GcSubmoduleDescriptor & {
 export class GcRegistryService {
   constructor(
     private readonly blockVersionGcSubmodule: BlockVersionGcSubmodule,
+    private readonly gcRenderCacheSubmodule: GcRenderCacheSubmodule,
     private readonly gcStorageSubmodule: GcStorageSubmodule,
   ) {}
 
@@ -20,6 +22,7 @@ export class GcRegistryService {
   } {
     const items = [
       this.blockVersionGcSubmodule.describe(),
+      this.gcRenderCacheSubmodule.describe(),
       this.gcStorageSubmodule.describe(),
     ];
 

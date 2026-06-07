@@ -24,6 +24,7 @@ import { DocumentSyncSession } from "../../entities/document-sync-session.entity
 import { SyncCreateTombstone } from "../../entities/sync-create-tombstone.entity";
 import { WorkspacesModule } from "../workspaces/workspaces.module";
 import { ActivitiesModule } from "../activities/activities.module";
+import { GcRenderCacheModule } from "../gc/modules/render-cache/gc-render-cache.module";
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { ActivitiesModule } from "../activities/activities.module";
     ]),
     WorkspacesModule,
     ActivitiesModule,
+    GcRenderCacheModule,
   ],
   controllers: [DocumentsController],
   providers: [

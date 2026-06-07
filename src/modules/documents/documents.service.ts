@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   BadRequestException,
   Logger,
+  Optional,
 } from "@nestjs/common";
 import { randomBytes } from "crypto";
 import { InjectRepository } from "@nestjs/typeorm";
@@ -68,6 +69,7 @@ import {
   type DocumentRenderDiagnostics,
 } from "./services/document-render.service";
 import { DraftCheckpointService } from "./draft-checkpoint.service";
+import { GcRenderCacheService } from "../gc/modules/render-cache/gc-render-cache.service";
 
 type DocumentActorSummary = {
   userId: string;
@@ -189,6 +191,8 @@ export class DocumentsService {
     private activitiesService: ActivitiesService,
     private draftCheckpointService: DraftCheckpointService,
     private documentRenderService?: DocumentRenderService,
+    @Optional()
+    private renderCacheGcService?: GcRenderCacheService,
   ) {}
 
   private getDocumentSyncSessionRepository() {
@@ -898,6 +902,7 @@ export class DocumentsService {
       docId,
       userId,
     );
+    await this.sweepPublishedRenderCachesBestEffort(docId, userId);
     const revalidation = await this.revalidatePublicDocumentPath(document);
     const publishedDocument = await this.findOne(docId, userId);
     return {
@@ -956,6 +961,7 @@ export class DocumentsService {
       docId,
       userId,
     );
+    await this.clearPublishedRenderCachesBestEffort(docId, userId);
     const revalidation = await this.revalidatePublicDocumentPath(document);
     const unpublishedDocument = await this.findOne(docId, userId);
     return {
@@ -976,6 +982,43 @@ export class DocumentsService {
         source: metadata.source,
       },
     };
+  }
+
+  private async sweepPublishedRenderCachesBestEffort(
+    docId: string,
+    userId: string,
+  ) {
+    if (!this.renderCacheGcService) {
+      return;
+    }
+
+    try {
+      await this.renderCacheGcService.sweepDocumentPublishedReachability(
+        docId,
+        userId,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `发布后渲染缓存清理失败: docId=${docId}, error=${(error as Error).message}`,
+      );
+    }
+  }
+
+  private async clearPublishedRenderCachesBestEffort(
+    docId: string,
+    userId: string,
+  ) {
+    if (!this.renderCacheGcService) {
+      return;
+    }
+
+    try {
+      await this.renderCacheGcService.clearDocumentRenderCaches(docId, userId);
+    } catch (error) {
+      this.logger.warn(
+        `取消发布后渲染缓存清理失败: docId=${docId}, error=${(error as Error).message}`,
+      );
+    }
   }
 
   private async restorePublishedSnapshotState(

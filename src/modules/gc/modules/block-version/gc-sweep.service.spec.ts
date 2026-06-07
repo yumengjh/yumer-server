@@ -1,5 +1,6 @@
 import type { ObjectLiteral, Repository } from "typeorm";
 import { Block } from "../../../../entities/block.entity";
+import { BlockRenderCache } from "../../../../entities/block-render-cache.entity";
 import { BlockVersion } from "../../../../entities/block-version.entity";
 import { DocDraft } from "../../../../entities/doc-draft.entity";
 import { DocSnapshot } from "../../../../entities/doc-snapshot.entity";
@@ -923,6 +924,7 @@ describe("GcSweepService", () => {
       find: jest.fn().mockResolvedValue([{ ver: 5 }]),
     });
     const deletedRows: Array<Record<string, unknown>> = [];
+    const deletedRenderCaches: Array<Record<string, unknown>> = [];
     const savedPoolEntries: Array<Record<string, unknown>> = [];
     const manager = {
       getRepository: jest.fn((entity: unknown) => {
@@ -965,6 +967,14 @@ describe("GcSweepService", () => {
             save: jest.fn().mockImplementation(async (value: Record<string, unknown>) => {
               savedPoolEntries.push(value);
               return value;
+            }),
+          });
+        }
+        if (entity === BlockRenderCache) {
+          return repository<BlockRenderCache>({
+            delete: jest.fn().mockImplementation(async (criteria: Record<string, unknown>) => {
+              deletedRenderCaches.push(criteria);
+              return { affected: 2 };
             }),
           });
         }
@@ -1036,6 +1046,7 @@ describe("GcSweepService", () => {
       blockId: "b_4",
       ver: 2,
     });
+    expect(deletedRenderCaches[0]).toEqual({ blockVersionId: 30 });
     expect(savedPoolEntries[0]).toMatchObject({
       candidateKey: "block_version:b_4@2:candidate_block_version",
       state: "swept",
@@ -1170,6 +1181,11 @@ describe("GcSweepService", () => {
               savedPoolEntries.push(value);
               return value;
             }),
+          });
+        }
+        if (entity === BlockRenderCache) {
+          return repository<BlockRenderCache>({
+            delete: jest.fn().mockResolvedValue({ affected: 1 }),
           });
         }
 
