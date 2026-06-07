@@ -569,6 +569,8 @@ describe("DraftCheckpointService", () => {
 
   it("replays the original response for the same checkpoint fingerprint", async () => {
     const harness = createDraftCheckpointHarness();
+    const loggerLog = jest.fn();
+    (harness.service as any).logger.log = loggerLog;
     const dto = harness.withContentHash({
       ...harness.baseCheckpoint("checkpoint_replay_1"),
       blocks: [
@@ -590,10 +592,15 @@ describe("DraftCheckpointService", () => {
     expect(second).toEqual(first);
     expect(harness.receipts).toHaveLength(1);
     expect(harness.visibleDraftBlocks()).toHaveLength(1);
+    expect(loggerLog).toHaveBeenCalledWith(
+      expect.stringContaining("同步 draft checkpoint replay:"),
+    );
   });
 
   it("returns conflict when checkpoint id is reused with different content", async () => {
     const harness = createDraftCheckpointHarness();
+    const loggerLog = jest.fn();
+    (harness.service as any).logger.log = loggerLog;
     await harness.service.applyDraftCheckpoint(
       "doc_1",
       "user_1",
@@ -618,10 +625,15 @@ describe("DraftCheckpointService", () => {
 
     expect(response.needsReload).toBe(true);
     expect(response.conflicts[0]?.code).toBe("CHECKPOINT_FINGERPRINT_CONFLICT");
+    expect(loggerLog).toHaveBeenCalledWith(
+      expect.stringContaining("同步 draft checkpoint fingerprint-conflict:"),
+    );
   });
 
   it("rejects a checkpoint when contentHash does not match the received body", async () => {
     const harness = createDraftCheckpointHarness();
+    const loggerLog = jest.fn();
+    (harness.service as any).logger.log = loggerLog;
 
     const response = await harness.service.applyDraftCheckpoint(
       "doc_1",
@@ -639,6 +651,9 @@ describe("DraftCheckpointService", () => {
     expect(response.needsReload).toBe(true);
     expect(response.conflicts[0]?.code).toBe("CONTENT_HASH_MISMATCH");
     expect(harness.visibleDraftBlocks()).toEqual([]);
+    expect(loggerLog).toHaveBeenCalledWith(
+      expect.stringContaining("同步 draft checkpoint content-hash-mismatch:"),
+    );
   });
 
   it("returns conflict when draftRevision is stale", async () => {
@@ -661,6 +676,8 @@ describe("DraftCheckpointService", () => {
 
   it("returns conflict when sync session does not match", async () => {
     const harness = createDraftCheckpointHarness();
+    const loggerLog = jest.fn();
+    (harness.service as any).logger.log = loggerLog;
 
     const response = await harness.service.applyDraftCheckpoint(
       "doc_1",
@@ -675,5 +692,8 @@ describe("DraftCheckpointService", () => {
 
     expect(response.needsReload).toBe(true);
     expect(response.conflicts[0]?.code).toBe("SYNC_SESSION_MISMATCH");
+    expect(loggerLog).toHaveBeenCalledWith(
+      expect.stringContaining("同步 draft checkpoint session-mismatch:"),
+    );
   });
 });

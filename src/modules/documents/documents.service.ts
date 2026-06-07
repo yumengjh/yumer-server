@@ -216,6 +216,13 @@ export class DocumentsService {
       existing.leaseExpiresAt = now + this.syncSessionLeaseMs;
       existing.updatedAt = now;
       const renewed = await repo.save(existing);
+      this.logSyncSessionEvent("reused", {
+        docId,
+        userId,
+        sessionId: renewed.sessionId,
+        sessionEpoch: renewed.sessionEpoch,
+        lastAckedOpSeq: renewed.lastAckedOpSeq ?? null,
+      });
       return renewed as DocumentSyncSession;
     }
     const nextSession = repo.create({
@@ -231,6 +238,13 @@ export class DocumentsService {
       updatedAt: now,
     });
     const saved = await repo.save(nextSession);
+    this.logSyncSessionEvent(existing ? "reacquired" : "acquired", {
+      docId,
+      userId,
+      sessionId: saved.sessionId,
+      sessionEpoch: saved.sessionEpoch,
+      lastAckedOpSeq: saved.lastAckedOpSeq ?? null,
+    });
     return saved as DocumentSyncSession;
   }
 
@@ -247,28 +261,66 @@ export class DocumentsService {
       ) {
         return null;
       }
+      this.logSyncSessionEvent("mismatch", {
+        docId,
+        userId: null,
+        sessionId: syncSession?.sessionId ?? null,
+        sessionEpoch:
+          typeof syncSession?.sessionEpoch === "number"
+            ? syncSession.sessionEpoch
+            : null,
+        lastAckedOpSeq: null,
+      });
       throw new BadRequestException("SYNC_SESSION_MISMATCH");
     }
     if (
       !syncSession?.sessionId ||
       typeof syncSession.sessionEpoch !== "number"
     ) {
+      this.logSyncSessionEvent("required", {
+        docId,
+        userId: current.holderUserId ?? null,
+        sessionId: null,
+        sessionEpoch: null,
+        lastAckedOpSeq: current.lastAckedOpSeq ?? null,
+      });
       throw new BadRequestException("SYNC_SESSION_REQUIRED");
     }
     if (
       current.sessionId !== syncSession.sessionId ||
       current.sessionEpoch !== syncSession.sessionEpoch
     ) {
+      this.logSyncSessionEvent("mismatch", {
+        docId,
+        userId: current.holderUserId ?? null,
+        sessionId: syncSession.sessionId,
+        sessionEpoch: syncSession.sessionEpoch,
+        lastAckedOpSeq: current.lastAckedOpSeq ?? null,
+      });
       throw new BadRequestException("SYNC_SESSION_MISMATCH");
     }
 
     const now = Date.now();
     if (current.leaseExpiresAt < now) {
+      this.logSyncSessionEvent("expired", {
+        docId,
+        userId: current.holderUserId ?? null,
+        sessionId: current.sessionId,
+        sessionEpoch: current.sessionEpoch,
+        lastAckedOpSeq: current.lastAckedOpSeq ?? null,
+      });
       throw new BadRequestException("SYNC_SESSION_EXPIRED");
     }
     current.leaseExpiresAt = now + this.syncSessionLeaseMs;
     current.updatedAt = now;
     await repo.save(current);
+    this.logSyncSessionEvent("renewed", {
+      docId,
+      userId: current.holderUserId ?? null,
+      sessionId: current.sessionId,
+      sessionEpoch: current.sessionEpoch,
+      lastAckedOpSeq: current.lastAckedOpSeq ?? null,
+    });
     return current;
   }
 
@@ -290,6 +342,33 @@ export class DocumentsService {
     await this.checkDocumentEditPermission(document, userId);
     const session = await this.acquireDocumentSyncSession(docId, userId);
     return this.buildSyncSessionResponse(session);
+  }
+
+  private logSyncSessionEvent(
+    phase:
+      | "acquired"
+      | "expired"
+      | "mismatch"
+      | "reacquired"
+      | "renewed"
+      | "required"
+      | "reused",
+    params: {
+      docId: string;
+      userId: string | null;
+      sessionId: string | null;
+      sessionEpoch: number | null;
+      lastAckedOpSeq: number | null;
+    },
+  ) {
+    const suffix = [
+      `docId=${params.docId}`,
+      `userId=${params.userId ?? "-"}`,
+      `sessionId=${params.sessionId ?? "-"}`,
+      `sessionEpoch=${params.sessionEpoch ?? "-"}`,
+      `lastAckedOpSeq=${params.lastAckedOpSeq ?? "-"}`,
+    ].join(", ");
+    this.logger.log(`同步 session ${phase}: ${suffix}`);
   }
 
   /**
@@ -2439,8 +2518,27 @@ export class DocumentsService {
       });
       if (existingReceipt) {
         if (existingReceipt.requestFingerprint === fingerprint) {
+          this.logSyncReconcileEvent("replay", {
+            docId,
+            userId,
+            clientBatchId,
+            sessionId: dto.sessionId,
+            sessionEpoch: dto.sessionEpoch,
+            draftRevision: existingReceipt.draftRevision,
+            needsReload: existingReceipt.needsReload,
+            tombstonedCount: existingReceipt.tombstoned?.length ?? 0,
+          });
           return this.mapSyncReconcileReceiptToResponse(docId, existingReceipt);
         }
+        this.logSyncReconcileEvent("fingerprint-conflict", {
+          docId,
+          userId,
+          clientBatchId,
+          sessionId: dto.sessionId,
+          sessionEpoch: dto.sessionEpoch,
+          draftRevision: serverDraftRevision,
+          needsReload: true,
+        });
         return this.buildSyncReconcileConflictResponse({
           docId,
           checkedAt,
@@ -2474,6 +2572,15 @@ export class DocumentsService {
           fingerprint,
           response,
         });
+        this.logSyncReconcileEvent("draft-revision-mismatch", {
+          docId,
+          userId,
+          clientBatchId,
+          sessionId: dto.sessionId,
+          sessionEpoch: dto.sessionEpoch,
+          draftRevision: serverDraftRevision,
+          needsReload: true,
+        });
         return response;
       }
 
@@ -2496,6 +2603,15 @@ export class DocumentsService {
           clientBatchId,
           fingerprint,
           response,
+        });
+        this.logSyncReconcileEvent("no-draft", {
+          docId,
+          userId,
+          clientBatchId,
+          sessionId: dto.sessionId,
+          sessionEpoch: dto.sessionEpoch,
+          draftRevision: serverDraftRevision,
+          needsReload: false,
         });
         return response;
       }
@@ -2536,8 +2652,49 @@ export class DocumentsService {
         fingerprint,
         response,
       });
+      this.logSyncReconcileEvent("applied", {
+        docId,
+        userId,
+        clientBatchId,
+        sessionId: dto.sessionId,
+        sessionEpoch: dto.sessionEpoch,
+        draftRevision: nextDraftRevision,
+        needsReload: false,
+        tombstonedCount: tombstoned.length,
+      });
       return response;
     });
+  }
+
+  private logSyncReconcileEvent(
+    phase:
+      | "applied"
+      | "draft-revision-mismatch"
+      | "fingerprint-conflict"
+      | "no-draft"
+      | "replay",
+    params: {
+      docId: string;
+      userId: string;
+      clientBatchId: string;
+      sessionId?: string;
+      sessionEpoch?: number;
+      draftRevision: number;
+      needsReload: boolean;
+      tombstonedCount?: number;
+    },
+  ) {
+    const suffix = [
+      `docId=${params.docId}`,
+      `userId=${params.userId}`,
+      `clientBatchId=${params.clientBatchId}`,
+      `sessionId=${params.sessionId ?? "-"}`,
+      `sessionEpoch=${typeof params.sessionEpoch === "number" ? params.sessionEpoch : "-"}`,
+      `draftRevision=${params.draftRevision}`,
+      `needsReload=${params.needsReload}`,
+      `tombstoned=${params.tombstonedCount ?? 0}`,
+    ].join(", ");
+    this.logger.log(`同步 manifest reconcile ${phase}: ${suffix}`);
   }
 
   private normalizeReconcileClientBatchId(clientBatchId?: string): string {

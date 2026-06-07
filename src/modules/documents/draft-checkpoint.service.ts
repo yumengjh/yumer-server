@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { createHash } from "crypto";
 import { DataSource, EntityManager, In } from "typeorm";
 import { generateBlockId } from "../../common/utils/id-generator.util";
@@ -24,6 +24,8 @@ type DraftCandidate = { block: Block; version: BlockVersion };
 
 @Injectable()
 export class DraftCheckpointService {
+  private readonly logger = new Logger(DraftCheckpointService.name);
+
   constructor(
     private readonly dataSource: DataSource,
     private readonly documentDraftService: DocumentDraftService,
@@ -64,9 +66,20 @@ export class DraftCheckpointService {
     });
     if (existingReceipt) {
       if (existingReceipt.requestFingerprint === fingerprint) {
+        this.logCheckpointEvent("replay", {
+          docId,
+          userId,
+          clientCheckpointId,
+          sessionId: dto.sessionId,
+          sessionEpoch: dto.sessionEpoch,
+          draftRevision: existingReceipt.draftRevision,
+          needsReload: existingReceipt.needsReload,
+          blockCount: dto.blocks.length,
+          tombstonedCount: existingReceipt.tombstoned?.length ?? 0,
+        });
         return this.mapReceiptToResponse(existingReceipt);
       }
-      return this.conflictResponse({
+      const response = this.conflictResponse({
         dto,
         acceptedCheckpointId: clientCheckpointId,
         serverHead: document.head,
@@ -74,10 +87,21 @@ export class DraftCheckpointService {
         code: "CHECKPOINT_FINGERPRINT_CONFLICT",
         message: "Checkpoint id was reused with different content",
       });
+      this.logCheckpointEvent("fingerprint-conflict", {
+        docId,
+        userId,
+        clientCheckpointId,
+        sessionId: dto.sessionId,
+        sessionEpoch: dto.sessionEpoch,
+        draftRevision: document.draftRevision,
+        needsReload: true,
+        blockCount: dto.blocks.length,
+      });
+      return response;
     }
 
     if (dto.mode !== "checkpoint" || dto.coverage !== "full") {
-      return this.conflictResponse({
+      const response = this.conflictResponse({
         dto,
         acceptedCheckpointId: clientCheckpointId,
         serverHead: document.head,
@@ -85,9 +109,20 @@ export class DraftCheckpointService {
         code: "CHECKPOINT_COVERAGE_UNSUPPORTED",
         message: "Only full checkpoint coverage is supported",
       });
+      this.logCheckpointEvent("coverage-unsupported", {
+        docId,
+        userId,
+        clientCheckpointId,
+        sessionId: dto.sessionId,
+        sessionEpoch: dto.sessionEpoch,
+        draftRevision: document.draftRevision,
+        needsReload: true,
+        blockCount: dto.blocks.length,
+      });
+      return response;
     }
     if (!this.isCheckpointContentHashValid(docId, dto)) {
-      return this.conflictResponse({
+      const response = this.conflictResponse({
         dto,
         acceptedCheckpointId: clientCheckpointId,
         serverHead: document.head,
@@ -95,9 +130,20 @@ export class DraftCheckpointService {
         code: "CONTENT_HASH_MISMATCH",
         message: "Checkpoint content hash does not match the received content",
       });
+      this.logCheckpointEvent("content-hash-mismatch", {
+        docId,
+        userId,
+        clientCheckpointId,
+        sessionId: dto.sessionId,
+        sessionEpoch: dto.sessionEpoch,
+        draftRevision: document.draftRevision,
+        needsReload: true,
+        blockCount: dto.blocks.length,
+      });
+      return response;
     }
     if (document.head !== dto.baseVersion) {
-      return this.conflictResponse({
+      const response = this.conflictResponse({
         dto,
         acceptedCheckpointId: clientCheckpointId,
         serverHead: document.head,
@@ -105,9 +151,20 @@ export class DraftCheckpointService {
         code: "BASE_VERSION_MISMATCH",
         message: "Base version mismatch",
       });
+      this.logCheckpointEvent("base-version-mismatch", {
+        docId,
+        userId,
+        clientCheckpointId,
+        sessionId: dto.sessionId,
+        sessionEpoch: dto.sessionEpoch,
+        draftRevision: document.draftRevision,
+        needsReload: true,
+        blockCount: dto.blocks.length,
+      });
+      return response;
     }
     if (document.draftRevision !== dto.draftRevision) {
-      return this.conflictResponse({
+      const response = this.conflictResponse({
         dto,
         acceptedCheckpointId: clientCheckpointId,
         serverHead: document.head,
@@ -115,6 +172,17 @@ export class DraftCheckpointService {
         code: "DRAFT_REVISION_MISMATCH",
         message: "Draft revision mismatch",
       });
+      this.logCheckpointEvent("draft-revision-mismatch", {
+        docId,
+        userId,
+        clientCheckpointId,
+        sessionId: dto.sessionId,
+        sessionEpoch: dto.sessionEpoch,
+        draftRevision: document.draftRevision,
+        needsReload: true,
+        blockCount: dto.blocks.length,
+      });
+      return response;
     }
 
     const session = await manager.getRepository(DocumentSyncSession).findOne({
@@ -127,7 +195,7 @@ export class DraftCheckpointService {
       session.holderUserId !== userId ||
       Number(session.leaseExpiresAt) <= Date.now()
     ) {
-      return this.conflictResponse({
+      const response = this.conflictResponse({
         dto,
         acceptedCheckpointId: clientCheckpointId,
         serverHead: document.head,
@@ -135,13 +203,24 @@ export class DraftCheckpointService {
         code: "SYNC_SESSION_MISMATCH",
         message: "Sync session mismatch",
       });
+      this.logCheckpointEvent("session-mismatch", {
+        docId,
+        userId,
+        clientCheckpointId,
+        sessionId: dto.sessionId,
+        sessionEpoch: dto.sessionEpoch,
+        draftRevision: document.draftRevision,
+        needsReload: true,
+        blockCount: dto.blocks.length,
+      });
+      return response;
     }
 
     const draft = await manager
       .getRepository(DocDraft)
       .findOne({ where: { docId } });
     if (!draft) {
-      return this.conflictResponse({
+      const response = this.conflictResponse({
         dto,
         acceptedCheckpointId: clientCheckpointId,
         serverHead: document.head,
@@ -149,6 +228,17 @@ export class DraftCheckpointService {
         code: "DRAFT_NOT_FOUND",
         message: "Document draft not found",
       });
+      this.logCheckpointEvent("draft-not-found", {
+        docId,
+        userId,
+        clientCheckpointId,
+        sessionId: dto.sessionId,
+        sessionEpoch: dto.sessionEpoch,
+        draftRevision: document.draftRevision,
+        needsReload: true,
+        blockCount: dto.blocks.length,
+      });
+      return response;
     }
 
     const appliedAt = Date.now();
@@ -272,7 +362,55 @@ export class DraftCheckpointService {
       fingerprint,
       response,
     });
+    this.logCheckpointEvent("applied", {
+      docId,
+      userId,
+      clientCheckpointId,
+      sessionId: dto.sessionId,
+      sessionEpoch: dto.sessionEpoch,
+      draftRevision: document.draftRevision,
+      needsReload: false,
+      blockCount: dto.blocks.length,
+      tombstonedCount: tombstoned.length,
+    });
     return response;
+  }
+
+  private logCheckpointEvent(
+    phase:
+      | "applied"
+      | "base-version-mismatch"
+      | "content-hash-mismatch"
+      | "coverage-unsupported"
+      | "draft-not-found"
+      | "draft-revision-mismatch"
+      | "fingerprint-conflict"
+      | "replay"
+      | "session-mismatch",
+    params: {
+      docId: string;
+      userId: string;
+      clientCheckpointId: string;
+      sessionId?: string;
+      sessionEpoch?: number;
+      draftRevision: number;
+      needsReload: boolean;
+      blockCount: number;
+      tombstonedCount?: number;
+    },
+  ) {
+    const suffix = [
+      `docId=${params.docId}`,
+      `userId=${params.userId}`,
+      `clientCheckpointId=${params.clientCheckpointId}`,
+      `sessionId=${params.sessionId ?? "-"}`,
+      `sessionEpoch=${typeof params.sessionEpoch === "number" ? params.sessionEpoch : "-"}`,
+      `draftRevision=${params.draftRevision}`,
+      `needsReload=${params.needsReload}`,
+      `blocks=${params.blockCount}`,
+      `tombstoned=${params.tombstonedCount ?? 0}`,
+    ].join(", ");
+    this.logger.log(`同步 draft checkpoint ${phase}: ${suffix}`);
   }
 
   private normalizeCheckpointId(clientCheckpointId: string): string {

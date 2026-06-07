@@ -424,6 +424,8 @@ describe("DocumentsService", () => {
   });
 
   it("reuses the same active sync session for repeated loads by the same user", async () => {
+    const loggerLog = jest.fn();
+    (service as any).logger.log = loggerLog;
     jest.mocked(documentRepository.findOne).mockResolvedValue({
       docId: "doc_1",
       workspaceId: "ws_1",
@@ -457,6 +459,96 @@ describe("DocumentsService", () => {
     expect(first.syncSession.sessionId).toBe(second.syncSession.sessionId);
     expect(first.syncSession.sessionEpoch).toBe(
       second.syncSession.sessionEpoch,
+    );
+    expect(loggerLog).toHaveBeenCalledWith(
+      expect.stringContaining("同步 session acquired:"),
+    );
+    expect(loggerLog).toHaveBeenCalledWith(
+      expect.stringContaining("同步 session reused:"),
+    );
+  });
+
+  it("renews an active sync session and logs the renewal", async () => {
+    const loggerLog = jest.fn();
+    (service as any).logger.log = loggerLog;
+    const now = Date.now();
+    syncSessions.push({
+      docId: "doc_1",
+      sessionId: "session_renew_ok",
+      sessionEpoch: 3,
+      holderUserId: "user_1",
+      leaseExpiresAt: now + 60_000,
+      lastAckedOpSeq: 7,
+      createdAt: now,
+      updatedAt: now,
+    });
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 3,
+      draftRevision: 12,
+      publishedHead: 2,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+
+    const result = await service.renewSyncSession("doc_1", "user_1", {
+      sessionId: "session_renew_ok",
+      sessionEpoch: 3,
+    });
+
+    expect(result).toMatchObject({
+      sessionId: "session_renew_ok",
+      sessionEpoch: 3,
+      lastAckedOpSeq: 7,
+    });
+    expect(loggerLog).toHaveBeenCalledWith(
+      expect.stringContaining("同步 session renewed:"),
+    );
+  });
+
+  it("rejects renewing an expired sync session and logs expiration", async () => {
+    const loggerLog = jest.fn();
+    (service as any).logger.log = loggerLog;
+    const now = Date.now();
+    syncSessions.push({
+      docId: "doc_1",
+      sessionId: "session_renew_expired",
+      sessionEpoch: 4,
+      holderUserId: "user_1",
+      leaseExpiresAt: now - 1,
+      lastAckedOpSeq: 5,
+      createdAt: now - 1000,
+      updatedAt: now - 1000,
+    });
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 3,
+      draftRevision: 12,
+      publishedHead: 2,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+
+    await expect(
+      service.renewSyncSession("doc_1", "user_1", {
+        sessionId: "session_renew_expired",
+        sessionEpoch: 4,
+      }),
+    ).rejects.toThrow("SYNC_SESSION_EXPIRED");
+    expect(loggerLog).toHaveBeenCalledWith(
+      expect.stringContaining("同步 session expired:"),
     );
   });
 
@@ -2461,6 +2553,8 @@ describe("DocumentsService", () => {
   });
 
   it("reconciles idle manifest by tombstoning missing sync-created draft blocks", async () => {
+    const loggerLog = jest.fn();
+    (service as any).logger.log = loggerLog;
     const now = Date.now();
     syncSessions.push({
       docId: "doc_1",
@@ -2633,9 +2727,14 @@ describe("DocumentsService", () => {
         needsReload: false,
       }),
     );
+    expect(loggerLog).toHaveBeenCalledWith(
+      expect.stringContaining("同步 manifest reconcile applied:"),
+    );
   });
 
   it("does not reconcile an idle manifest built on a stale draft revision", async () => {
+    const loggerLog = jest.fn();
+    (service as any).logger.log = loggerLog;
     const now = Date.now();
     syncSessions.push({
       docId: "doc_1",
@@ -2697,9 +2796,14 @@ describe("DocumentsService", () => {
       tombstoned: [],
     });
     expect(manager.save).not.toHaveBeenCalled();
+    expect(loggerLog).toHaveBeenCalledWith(
+      expect.stringContaining("同步 manifest reconcile draft-revision-mismatch:"),
+    );
   });
 
   it("replays an existing sync-reconcile receipt for the same request fingerprint", async () => {
+    const loggerLog = jest.fn();
+    (service as any).logger.log = loggerLog;
     const now = Date.now();
     syncSessions.push({
       docId: "doc_1",
@@ -2778,6 +2882,9 @@ describe("DocumentsService", () => {
     });
     expect(receiptRepo.save).not.toHaveBeenCalled();
     expect(manager.save).not.toHaveBeenCalled();
+    expect(loggerLog).toHaveBeenCalledWith(
+      expect.stringContaining("同步 manifest reconcile replay:"),
+    );
   });
 
   it("checks edit permission before applying a draft checkpoint", async () => {
