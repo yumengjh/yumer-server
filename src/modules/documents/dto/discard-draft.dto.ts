@@ -17,4 +17,23 @@ export class DiscardDraftDto {
   @IsOptional()
   @IsNumber()
   sessionEpoch?: number;
+
+  @ApiPropertyOptional({
+    description:
+      "Compat field mirrored from sync session payload; accepted but ignored by discard/renew",
+    example: "2026-06-04T23:30:00.000Z",
+  })
+  @IsOptional()
+  @IsString()
+  leaseExpiresAt?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      "Compat field mirrored from sync session payload; accepted but ignored by discard/renew",
+    example: 42,
+    nullable: true,
+  })
+  @IsOptional()
+  @IsNumber()
+  lastAckedOpSeq?: number | null;
 }
