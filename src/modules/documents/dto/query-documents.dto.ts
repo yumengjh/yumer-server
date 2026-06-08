@@ -6,6 +6,7 @@ export enum DocumentStatus {
   DRAFT = 'draft',
   NORMAL = 'normal',
   ARCHIVED = 'archived',
+  DELETED = 'deleted',
 }
 
 export enum DocumentSortBy {
@@ -13,6 +14,7 @@ export enum DocumentSortBy {
   CREATED_AT = 'createdAt',
   TITLE = 'title',
   VIEW_COUNT = 'viewCount',
+  DELETED_AT = 'deletedAt',
 }
 
 export enum SortOrder {
@@ -32,7 +34,7 @@ export class QueryDocumentsDto extends PaginationDto {
     enum: DocumentStatus,
   })
   @IsOptional()
-  @IsEnum(DocumentStatus, { message: '状态必须是 draft、normal 或 archived' })
+  @IsEnum(DocumentStatus, { message: 'status must be draft, normal, archived, or deleted' })
   status?: string;
 
   @ApiPropertyOptional({

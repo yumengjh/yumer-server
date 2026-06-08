@@ -67,11 +67,26 @@ export class Document {
   @Column({ default: "draft" })
   status: string;
 
+  @Column({ type: "varchar", nullable: true })
+  deletedFromStatus: string | null;
+
+  @Column({ type: isSqlite() ? "datetime" : "timestamp", nullable: true })
+  deletedAt: Date | null;
+
+  @Column({ type: "varchar", nullable: true })
+  deletedBy: string | null;
+
+  @Column({ type: isSqlite() ? "datetime" : "timestamp", nullable: true })
+  restoredAt: Date | null;
+
+  @Column({ type: "varchar", nullable: true })
+  restoredBy: string | null;
+
   @Column({ default: "private" })
   visibility: string;
 
-  @Column({ nullable: true })
-  parentId: string;
+  @Column({ type: "varchar", nullable: true })
+  parentId: string | null;
 
   @Column({ default: 0 })
   sortOrder: number;

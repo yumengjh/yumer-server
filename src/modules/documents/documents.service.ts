@@ -21,12 +21,17 @@ import {
 import { Document } from "../../entities/document.entity";
 import { Block } from "../../entities/block.entity";
 import { BlockVersion } from "../../entities/block-version.entity";
+import { BlockRenderCache } from "../../entities/block-render-cache.entity";
 import { DocRevision } from "../../entities/doc-revision.entity";
 import { DocSnapshot } from "../../entities/doc-snapshot.entity";
 import { DocDraft } from "../../entities/doc-draft.entity";
 import { DocumentSyncSession } from "../../entities/document-sync-session.entity";
 import { SyncCreateTombstone } from "../../entities/sync-create-tombstone.entity";
+import { SyncBatchReceipt } from "../../entities/sync-batch-receipt.entity";
+import { SyncCheckpointReceipt } from "../../entities/sync-checkpoint-receipt.entity";
 import { SyncReconcileReceipt } from "../../entities/sync-reconcile-receipt.entity";
+import { Comment } from "../../entities/comment.entity";
+import { Favorite } from "../../entities/favorite.entity";
 import { Tag } from "../../entities/tag.entity";
 import { User } from "../../entities/user.entity";
 import { WorkspacesService } from "../workspaces/workspaces.service";
@@ -131,6 +136,17 @@ type SyncReconcileResponse = {
   needsReload: boolean;
   conflicts: Array<Record<string, unknown>>;
   tombstoned: SyncReconcileTombstone[];
+};
+
+const DOCUMENT_STATUS_DELETED = "deleted";
+const DEFAULT_RESTORED_DOCUMENT_STATUS = "normal";
+const DEFAULT_TRASH_RETENTION_DAYS = 30;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+type TrashLifecycleFields = {
+  trashRetentionDays: number;
+  trashExpiresAt: string | null;
+  trashDaysRemaining: number | null;
 };
 
 function toSafeISOString(value: unknown): string | null {
@@ -250,6 +266,58 @@ export class DocumentsService {
       lastAckedOpSeq: saved.lastAckedOpSeq ?? null,
     });
     return saved as DocumentSyncSession;
+  }
+
+  private getTrashRetentionDays(): number {
+    const raw = process.env.DOCUMENT_TRASH_RETENTION_DAYS;
+    const parsed = raw ? Number(raw) : DEFAULT_TRASH_RETENTION_DAYS;
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return DEFAULT_TRASH_RETENTION_DAYS;
+    }
+    return Math.floor(parsed);
+  }
+
+  private getTrashLifecycleFields(
+    document: Pick<Document, "status" | "deletedAt">,
+    now: Date = new Date(),
+  ): TrashLifecycleFields | null {
+    if (
+      document.status !== DOCUMENT_STATUS_DELETED ||
+      document.deletedAt === null ||
+      document.deletedAt === undefined
+    ) {
+      return null;
+    }
+
+    const deletedAtTime =
+      document.deletedAt instanceof Date
+        ? document.deletedAt.getTime()
+        : new Date(document.deletedAt).getTime();
+    if (Number.isNaN(deletedAtTime)) {
+      return {
+        trashRetentionDays: this.getTrashRetentionDays(),
+        trashExpiresAt: null,
+        trashDaysRemaining: null,
+      };
+    }
+
+    const retentionDays = this.getTrashRetentionDays();
+    const expiresAtTime = deletedAtTime + retentionDays * MS_PER_DAY;
+    return {
+      trashRetentionDays: retentionDays,
+      trashExpiresAt: new Date(expiresAtTime).toISOString(),
+      trashDaysRemaining: Math.max(
+        0,
+        Math.ceil((expiresAtTime - now.getTime()) / MS_PER_DAY),
+      ),
+    };
+  }
+
+  private withTrashLifecycle<T extends Document>(
+    document: T,
+  ): T & Partial<TrashLifecycleFields> {
+    const lifecycle = this.getTrashLifecycleFields(document);
+    return lifecycle ? { ...document, ...lifecycle } : document;
   }
 
   private async validateDocumentSyncSession(
@@ -623,7 +691,7 @@ export class DocumentsService {
     const [items, total] = await queryBuilder.getManyAndCount();
 
     return {
-      items,
+      items: items.map((item) => this.withTrashLifecycle(item)),
       total,
       page,
       pageSize,
@@ -793,6 +861,11 @@ export class DocumentsService {
       document.category = updateDocumentDto.category;
     }
     if (updateDocumentDto.status !== undefined) {
+      if (updateDocumentDto.status === DOCUMENT_STATUS_DELETED) {
+        throw new BadRequestException(
+          "Use the document trash endpoint to delete documents",
+        );
+      }
       document.status = updateDocumentDto.status;
     }
 
@@ -807,6 +880,103 @@ export class DocumentsService {
       updateDocumentDto as object,
     );
     return this.findOne(docId, userId);
+  }
+
+  async permanentlyDelete(docId: string, userId: string) {
+    const document = await this.documentRepository.findOne({
+      where: { docId },
+    });
+
+    if (!document) {
+      throw new NotFoundException("Document not found in trash");
+    }
+
+    if (document.status !== DOCUMENT_STATUS_DELETED) {
+      throw new BadRequestException(
+        "Document must be moved to trash before permanent deletion",
+      );
+    }
+
+    await this.checkDocumentDeletePermission(document, userId);
+
+    const permanentlyDeletedAt = new Date();
+    const result = await this.dataSource.transaction(async (manager) => {
+      const docRepo = manager.getRepository(Document);
+      const lockedDocument = await docRepo.findOne({
+        where: { docId },
+      });
+
+      if (
+        !lockedDocument ||
+        lockedDocument.status !== DOCUMENT_STATUS_DELETED
+      ) {
+        throw new NotFoundException("Document not found in trash");
+      }
+
+      await this.checkDocumentDeletePermission(lockedDocument, userId);
+
+      const documentsToDelete = await this.collectDeletedDocumentSubtree(
+        lockedDocument,
+        docRepo,
+      );
+      const docIds = documentsToDelete.map((item) => item.docId);
+      const criteria = { docId: In(docIds) };
+
+      const deleteByDocIds = async (entity: new () => unknown) => {
+        const deleteResult = await manager
+          .getRepository(entity)
+          .delete(criteria as object);
+        return deleteResult.affected ?? 0;
+      };
+
+      const deletedCounts = {
+        renderCaches: await deleteByDocIds(BlockRenderCache),
+        comments: await deleteByDocIds(Comment),
+        favorites: await deleteByDocIds(Favorite),
+        drafts: await deleteByDocIds(DocDraft),
+        syncSessions: await deleteByDocIds(DocumentSyncSession),
+        syncCreateTombstones: await deleteByDocIds(SyncCreateTombstone),
+        syncBatchReceipts: await deleteByDocIds(SyncBatchReceipt),
+        syncCheckpointReceipts: await deleteByDocIds(SyncCheckpointReceipt),
+        syncReconcileReceipts: await deleteByDocIds(SyncReconcileReceipt),
+        snapshots: await deleteByDocIds(DocSnapshot),
+        revisions: await deleteByDocIds(DocRevision),
+        blockVersions: await deleteByDocIds(BlockVersion),
+        blocks: await deleteByDocIds(Block),
+        documents: await deleteByDocIds(Document),
+      };
+
+      return {
+        workspaceId: lockedDocument.workspaceId,
+        affectedCount: documentsToDelete.length,
+        deletedDocIds: docIds,
+        deletedCounts,
+      };
+    });
+
+    await this.activitiesService.record(
+      result.workspaceId,
+      DOC_ACTIONS.PURGE,
+      "document",
+      docId,
+      userId,
+      {
+        permanentlyDeletedAt: permanentlyDeletedAt.toISOString(),
+        affectedCount: result.affectedCount,
+        deletedDocIds: result.deletedDocIds,
+        deletedCounts: result.deletedCounts,
+      },
+    );
+
+    return {
+      message: "Document permanently deleted",
+      docId,
+      status: "purged",
+      permanentlyDeletedAt: permanentlyDeletedAt.toISOString(),
+      affectedCount: result.affectedCount,
+      deletedDocIds: result.deletedDocIds,
+      deletedCounts: result.deletedCounts,
+    };
   }
 
   /**
@@ -1277,24 +1447,62 @@ export class DocumentsService {
       throw new NotFoundException("文档不存在");
     }
 
+    if (document.status === DOCUMENT_STATUS_DELETED) {
+      throw new NotFoundException("文档不存在");
+    }
+
     // 检查删除权限
     await this.checkDocumentDeletePermission(document, userId);
 
-    // 减少标签的使用统计并从 documentIds 中移除
-    if (document.tags && document.tags.length > 0) {
-      await this.validateAndUpdateTags(
-        document.workspaceId,
-        document.tags,
-        null,
-        "remove",
-        document.docId,
-      );
-    }
+    const { documentsToTrash, deletedAt } = await this.dataSource.transaction(
+      async (manager) => {
+        const docRepo = manager.getRepository(Document);
+        const tagManager = manager as unknown as EntityManager;
+        const lockedDocument = await docRepo.findOne({
+          where: { docId },
+        });
 
-    // 软删除：更新状态
-    document.status = "deleted";
-    document.updatedBy = userId;
-    await this.documentRepository.save(document);
+        if (
+          !lockedDocument ||
+          lockedDocument.status === DOCUMENT_STATUS_DELETED
+        ) {
+          throw new NotFoundException("文档不存在");
+        }
+
+        await this.checkDocumentDeletePermission(lockedDocument, userId);
+
+        const docsToTrash = await this.collectActiveDocumentSubtree(
+          lockedDocument,
+          docRepo,
+        );
+        const deletedAtValue = new Date();
+
+        for (const item of docsToTrash) {
+          if (item.tags && item.tags.length > 0) {
+            await this.validateAndUpdateTags(
+              item.workspaceId,
+              item.tags,
+              tagManager,
+              "remove",
+              item.docId,
+            );
+          }
+
+          const previousStatus = item.status;
+          item.status = DOCUMENT_STATUS_DELETED;
+          item.deletedFromStatus = previousStatus;
+          item.deletedAt = deletedAtValue;
+          item.deletedBy = userId;
+          item.restoredAt = null;
+          item.restoredBy = null;
+          item.updatedBy = userId;
+          await docRepo.save(item);
+        }
+
+        return { documentsToTrash: docsToTrash, deletedAt: deletedAtValue };
+      },
+    );
+
     await this.activitiesService.record(
       document.workspaceId,
       DOC_ACTIONS.DELETE,
@@ -1302,7 +1510,185 @@ export class DocumentsService {
       docId,
       userId,
     );
-    return { message: "文档已删除" };
+    const revalidations: PublicDocumentRevalidationResult[] = [];
+    for (const item of documentsToTrash) {
+      await this.clearPublishedRenderCachesBestEffort(item.docId, userId);
+      revalidations.push(await this.revalidatePublicDocumentPath(item));
+    }
+    return {
+      message: "文档已删除",
+      docId,
+      status: documentsToTrash[0].status,
+      deletedAt: deletedAt.toISOString(),
+      ...this.getTrashLifecycleFields(documentsToTrash[0], deletedAt),
+      affectedCount: documentsToTrash.length,
+      revalidation: revalidations[0],
+    };
+  }
+
+  private async collectActiveDocumentSubtree(
+    root: Document,
+    documentRepository: Pick<Repository<Document>, "find">,
+  ): Promise<Document[]> {
+    const result: Document[] = [root];
+    const seen = new Set<string>([root.docId]);
+    let frontier = [root.docId];
+
+    while (frontier.length > 0) {
+      const children = await documentRepository.find({
+        where: {
+          workspaceId: root.workspaceId,
+          parentId: In(frontier),
+        },
+      });
+      const nextFrontier: string[] = [];
+
+      for (const child of children) {
+        if (seen.has(child.docId) || child.status === DOCUMENT_STATUS_DELETED) {
+          continue;
+        }
+        seen.add(child.docId);
+        result.push(child);
+        nextFrontier.push(child.docId);
+      }
+
+      frontier = nextFrontier;
+    }
+
+    return result;
+  }
+
+  private async collectDeletedDocumentSubtree(
+    root: Document,
+    documentRepository: Pick<Repository<Document>, "find">,
+  ): Promise<Document[]> {
+    const result: Document[] = [root];
+    const seen = new Set<string>([root.docId]);
+    let frontier = [root.docId];
+
+    while (frontier.length > 0) {
+      const children = await documentRepository.find({
+        where: {
+          workspaceId: root.workspaceId,
+          parentId: In(frontier),
+          status: DOCUMENT_STATUS_DELETED,
+        },
+      });
+      const nextFrontier: string[] = [];
+
+      for (const child of children) {
+        if (seen.has(child.docId)) {
+          continue;
+        }
+        seen.add(child.docId);
+        result.push(child);
+        nextFrontier.push(child.docId);
+      }
+
+      frontier = nextFrontier;
+    }
+
+    return result;
+  }
+
+  async restore(docId: string, userId: string) {
+    const document = await this.documentRepository.findOne({
+      where: { docId },
+    });
+
+    if (!document || document.status !== DOCUMENT_STATUS_DELETED) {
+      throw new NotFoundException("Document not found in trash");
+    }
+
+    await this.checkDocumentDeletePermission(document, userId);
+
+    const { documentsToRestore, restoredAt } = await this.dataSource.transaction(
+      async (manager) => {
+        const docRepo = manager.getRepository(Document);
+        const tagManager = manager as unknown as EntityManager;
+        const lockedDocument = await docRepo.findOne({
+          where: { docId },
+        });
+
+        if (
+          !lockedDocument ||
+          lockedDocument.status !== DOCUMENT_STATUS_DELETED
+        ) {
+          throw new NotFoundException("Document not found in trash");
+        }
+
+        await this.checkDocumentDeletePermission(lockedDocument, userId);
+
+        const docsToRestore = await this.collectDeletedDocumentSubtree(
+          lockedDocument,
+          docRepo,
+        );
+        const restoringDocIds = new Set(
+          docsToRestore.map((item) => item.docId),
+        );
+        const restoredAtValue = new Date();
+
+        for (const item of docsToRestore) {
+          if (item.parentId && !restoringDocIds.has(item.parentId)) {
+            const parentDoc = await docRepo.findOne({
+              where: { docId: item.parentId },
+              select: ["docId", "workspaceId", "status"],
+            });
+            if (
+              !parentDoc ||
+              parentDoc.workspaceId !== item.workspaceId ||
+              parentDoc.status === DOCUMENT_STATUS_DELETED
+            ) {
+              item.parentId = null;
+            }
+          }
+
+          if (item.tags && item.tags.length > 0) {
+            await this.validateAndUpdateTags(
+              item.workspaceId,
+              item.tags,
+              tagManager,
+              "add",
+              item.docId,
+            );
+          }
+
+          const restoredStatus =
+            item.deletedFromStatus &&
+            item.deletedFromStatus !== DOCUMENT_STATUS_DELETED
+              ? item.deletedFromStatus
+              : DEFAULT_RESTORED_DOCUMENT_STATUS;
+          item.status = restoredStatus;
+          item.deletedFromStatus = null;
+          item.deletedAt = null;
+          item.deletedBy = null;
+          item.restoredAt = restoredAtValue;
+          item.restoredBy = userId;
+          item.updatedBy = userId;
+          await docRepo.save(item);
+        }
+
+        return { documentsToRestore: docsToRestore, restoredAt: restoredAtValue };
+      },
+    );
+
+    const restoredRoot = documentsToRestore[0];
+
+    await this.activitiesService.record(
+      document.workspaceId,
+      DOC_ACTIONS.RESTORE,
+      "document",
+      docId,
+      userId,
+      {
+        restoredAt: restoredAt.toISOString(),
+        parentId: restoredRoot.parentId,
+        status: restoredRoot.status,
+        affectedCount: documentsToRestore.length,
+      },
+    );
+
+    return this.findOne(docId, userId);
   }
 
   /**

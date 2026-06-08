@@ -371,6 +371,42 @@ export class DocumentsController {
     return this.documentsService.move(docId, moveDocumentDto, user.userId);
   }
 
+  @Post(":docId/restore")
+  @HttpCode(HttpStatus.OK)
+  @AuditLog({
+    action: "RESTORE",
+    resourceType: "document",
+    resourceIdKey: "docId",
+  })
+  @ApiOperation({ summary: "Restore document from trash" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
+  @ApiResponse({ status: 404, description: "Document not found in trash" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
+  async restore(@Param("docId") docId: string, @CurrentUser() user: any) {
+    return this.documentsService.restore(docId, user.userId);
+  }
+
+  @Delete(":docId/permanent")
+  @HttpCode(HttpStatus.OK)
+  @AuditLog({
+    action: "PURGE",
+    resourceType: "document",
+    resourceIdKey: "docId",
+  })
+  @ApiOperation({ summary: "Permanently delete document from trash" })
+  @ApiParam({ name: "docId", description: "Document ID" })
+  @ApiResponse({ status: 200, description: "Success" })
+  @ApiResponse({ status: 404, description: "Document not found in trash" })
+  @ApiResponse({ status: 403, description: "Forbidden" })
+  @ApiResponse({ status: 400, description: "Document is not in trash" })
+  async permanentlyDelete(
+    @Param("docId") docId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.documentsService.permanentlyDelete(docId, user.userId);
+  }
+
   @Delete(":docId")
   @HttpCode(HttpStatus.OK)
   @AuditLog({

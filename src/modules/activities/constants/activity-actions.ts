@@ -3,6 +3,8 @@ export const DOC_ACTIONS = {
   CREATE: 'doc.create',
   UPDATE: 'doc.update',
   DELETE: 'doc.delete',
+  RESTORE: 'doc.restore',
+  PURGE: 'doc.purge',
   MOVE: 'doc.move',
   PUBLISH: 'doc.publish',
   UNPUBLISH: 'doc.unpublish',

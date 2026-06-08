@@ -19,6 +19,7 @@ describe("DocumentsService", () => {
   const syncSessions: Array<Record<string, unknown>> = [];
   const documentRepository = {
     findOne: jest.fn(),
+    find: jest.fn(),
     save: jest.fn(),
   } as unknown as Repository<Document>;
   const userRepository = {
@@ -54,7 +55,10 @@ describe("DocumentsService", () => {
     findOne: jest.fn(),
   } as unknown as Repository<DocRevision>;
   const docSnapshotRepository = {} as Repository<DocSnapshot>;
-  const tagRepository = {} as Repository<Tag>;
+  const tagRepository = {
+    find: jest.fn(),
+    save: jest.fn(),
+  } as unknown as Repository<Tag>;
   const dataSource = {
     getRepository: jest.fn((entity: { name?: string }) => {
       if (entity?.name === "DocumentSyncSession") {
@@ -94,6 +98,7 @@ describe("DocumentsService", () => {
     checkAccess: jest.fn(),
     findOne: jest.fn(),
     checkEditPermission: jest.fn(),
+    checkAdminPermission: jest.fn(),
   } as unknown as WorkspacesService;
   const activitiesService = {
     record: jest.fn(),
@@ -113,6 +118,29 @@ describe("DocumentsService", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.mocked(documentRepository.find).mockResolvedValue([]);
+    jest.mocked(tagRepository.find).mockResolvedValue([]);
+    jest.mocked(tagRepository.save).mockImplementation(async (value) => value);
+    jest
+      .mocked(dataSource.transaction)
+      .mockImplementation(async (callback: any) =>
+        callback({
+          getRepository: jest.fn((entity: { name?: string }) => {
+            if (entity?.name === "Document") return documentRepository;
+            if (entity?.name === "Tag") return tagRepository;
+            if (entity?.name === "Block") return blockRepository;
+            if (entity?.name === "BlockVersion") return blockVersionRepository;
+            if (entity?.name === "DocRevision") return docRevisionRepository;
+            if (entity?.name === "DocSnapshot") return docSnapshotRepository;
+            if (entity?.name === "User") return userRepository;
+            return {
+              find: jest.fn(),
+              findOne: jest.fn(),
+              save: jest.fn(async (value) => value),
+            };
+          }),
+        }),
+      );
     renderCacheGcService.sweepDocumentPublishedReachability.mockResolvedValue(
       undefined,
     );
@@ -121,6 +149,7 @@ describe("DocumentsService", () => {
     global.fetch = originalFetch;
     delete process.env.PUBLIC_SITE_REVALIDATE_URL;
     delete process.env.PUBLIC_SITE_REVALIDATE_SECRET;
+    delete process.env.DOCUMENT_TRASH_RETENTION_DAYS;
     service = new (DocumentsService as any)(
       documentRepository,
       versionControlService,
@@ -1432,6 +1461,472 @@ describe("DocumentsService", () => {
       "doc_1",
       "user_1",
     );
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it("删除文档会写入回收站生命周期元数据并清理派生缓存", async () => {
+    const document = {
+      docId: "doc_36_abcd1234",
+      workspaceId: "ws_1",
+      title: "Doc",
+      status: "draft",
+      visibility: "public",
+      tags: ["tag_1"],
+      updatedBy: "old_user",
+    } as unknown as Document;
+    jest.mocked(documentRepository.findOne).mockImplementation(
+      async ({ where }: { where?: { docId?: string } }) =>
+        where?.docId === "doc_36_abcd1234" ? (document as Document) : null,
+    );
+    jest
+      .mocked((workspacesService as any).checkAdminPermission)
+      .mockResolvedValue(undefined);
+    (service as any).validateAndUpdateTags = jest
+      .fn()
+      .mockResolvedValue(undefined);
+    jest
+      .mocked(documentRepository.save)
+      .mockImplementation(async (value) => value as never);
+
+    const result = await service.remove("doc_36_abcd1234", "user_1");
+
+    expect((service as any).validateAndUpdateTags).toHaveBeenCalledWith(
+      "ws_1",
+      ["tag_1"],
+      expect.objectContaining({ getRepository: expect.any(Function) }),
+      "remove",
+      "doc_36_abcd1234",
+    );
+    expect(documentRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "deleted",
+        deletedFromStatus: "draft",
+        deletedBy: "user_1",
+        deletedAt: expect.any(Date),
+        restoredAt: null,
+        restoredBy: null,
+        updatedBy: "user_1",
+      }),
+    );
+    expect(activitiesService.record).toHaveBeenCalledWith(
+      "ws_1",
+      "doc.delete",
+      "document",
+      "doc_36_abcd1234",
+      "user_1",
+    );
+    expect(renderCacheGcService.clearDocumentRenderCaches).toHaveBeenCalledWith(
+      "doc_36_abcd1234",
+      "user_1",
+    );
+    expect(result).toMatchObject({
+      docId: "doc_36_abcd1234",
+      status: "deleted",
+      deletedAt: expect.any(String),
+      trashRetentionDays: 30,
+      trashExpiresAt: expect.any(String),
+      trashDaysRemaining: expect.any(Number),
+      affectedCount: 1,
+    });
+  });
+
+  it("回收站列表会返回自动删除剩余天数", async () => {
+    jest
+      .useFakeTimers()
+      .setSystemTime(new Date("2026-06-08T00:00:00.000Z"));
+    process.env.DOCUMENT_TRASH_RETENTION_DAYS = "14";
+
+    const deletedDocument = {
+      docId: "doc_deleted",
+      workspaceId: "ws_1",
+      title: "Deleted",
+      status: "deleted",
+      deletedAt: new Date("2026-06-01T00:00:00.000Z"),
+    } as unknown as Document;
+    const queryBuilder = {
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([[deletedDocument], 1]),
+    };
+    (documentRepository as any).createQueryBuilder = jest
+      .fn()
+      .mockReturnValue(queryBuilder);
+    jest
+      .mocked((workspacesService as any).checkAccess)
+      .mockResolvedValue(undefined);
+
+    const result = await service.findAll(
+      { workspaceId: "ws_1", status: "deleted" } as any,
+      "user_1",
+    );
+
+    expect(result.items[0]).toMatchObject({
+      docId: "doc_deleted",
+      trashRetentionDays: 14,
+      trashExpiresAt: "2026-06-15T00:00:00.000Z",
+      trashDaysRemaining: 7,
+    });
+  });
+
+  it("删除父文档会递归把活跃子文档放入回收站", async () => {
+    const root = {
+      docId: "doc_root",
+      workspaceId: "ws_1",
+      title: "Root",
+      status: "normal",
+      tags: [],
+      updatedBy: "old_user",
+    } as unknown as Document;
+    const child = {
+      docId: "doc_child",
+      workspaceId: "ws_1",
+      parentId: "doc_root",
+      title: "Child",
+      status: "draft",
+      tags: ["tag_child"],
+      updatedBy: "old_user",
+    } as unknown as Document;
+    const grandchild = {
+      docId: "doc_grandchild",
+      workspaceId: "ws_1",
+      parentId: "doc_child",
+      title: "Grandchild",
+      status: "normal",
+      tags: [],
+      updatedBy: "old_user",
+    } as Document;
+    jest.mocked(documentRepository.findOne).mockImplementation(
+      async ({ where }: { where?: { docId?: string } }) => {
+        if (where?.docId === "doc_root") return root;
+        if (where?.docId === "doc_child") return child;
+        if (where?.docId === "doc_grandchild") return grandchild;
+        return null;
+      },
+    );
+    jest
+      .mocked(documentRepository.find)
+      .mockResolvedValueOnce([child])
+      .mockResolvedValueOnce([grandchild])
+      .mockResolvedValueOnce([]);
+    jest
+      .mocked((workspacesService as any).checkAdminPermission)
+      .mockResolvedValue(undefined);
+    (service as any).validateAndUpdateTags = jest
+      .fn()
+      .mockResolvedValue(undefined);
+    jest
+      .mocked(documentRepository.save)
+      .mockImplementation(async (value) => value as never);
+
+    const result = await service.remove("doc_root", "user_1");
+
+    expect(documentRepository.save).toHaveBeenCalledTimes(3);
+    expect(documentRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        docId: "doc_root",
+        status: "deleted",
+        deletedFromStatus: "normal",
+      }),
+    );
+    expect(documentRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        docId: "doc_child",
+        status: "deleted",
+        deletedFromStatus: "draft",
+      }),
+    );
+    expect(documentRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        docId: "doc_grandchild",
+        status: "deleted",
+        deletedFromStatus: "normal",
+      }),
+    );
+    expect((service as any).validateAndUpdateTags).toHaveBeenCalledWith(
+      "ws_1",
+      ["tag_child"],
+      expect.objectContaining({ getRepository: expect.any(Function) }),
+      "remove",
+      "doc_child",
+    );
+    expect(renderCacheGcService.clearDocumentRenderCaches).toHaveBeenCalledWith(
+      "doc_root",
+      "user_1",
+    );
+    expect(renderCacheGcService.clearDocumentRenderCaches).toHaveBeenCalledWith(
+      "doc_child",
+      "user_1",
+    );
+    expect(renderCacheGcService.clearDocumentRenderCaches).toHaveBeenCalledWith(
+      "doc_grandchild",
+      "user_1",
+    );
+    expect(result).toMatchObject({
+      docId: "doc_root",
+      status: "deleted",
+      affectedCount: 3,
+    });
+  });
+
+  it("恢复文档会还原删除前状态并在父级仍删除时移动到根目录", async () => {
+    const document = {
+      docId: "doc_child",
+      workspaceId: "ws_1",
+      title: "Child",
+      status: "deleted",
+      deletedFromStatus: "archived",
+      deletedAt: new Date("2026-06-01T00:00:00.000Z"),
+      deletedBy: "user_old",
+      parentId: "doc_parent",
+      tags: ["tag_1"],
+      updatedBy: "user_old",
+    } as Document;
+    jest.mocked(documentRepository.findOne).mockImplementation(
+      async ({ where }: { where?: { docId?: string } }) => {
+        if (where?.docId === "doc_child") return document;
+        if (where?.docId === "doc_parent")
+          return {
+            docId: "doc_parent",
+            workspaceId: "ws_1",
+            status: "deleted",
+          } as Document;
+        return null;
+      },
+    );
+    jest
+      .mocked((workspacesService as any).checkAdminPermission)
+      .mockResolvedValue(undefined);
+    (service as any).validateAndUpdateTags = jest
+      .fn()
+      .mockResolvedValue(undefined);
+    (service as any).findOne = jest.fn().mockResolvedValue({
+      ...document,
+      status: "archived",
+      parentId: null,
+    });
+
+    const result = await service.restore("doc_child", "user_1");
+
+    expect((service as any).validateAndUpdateTags).toHaveBeenCalledWith(
+      "ws_1",
+      ["tag_1"],
+      expect.objectContaining({ getRepository: expect.any(Function) }),
+      "add",
+      "doc_child",
+    );
+    expect(documentRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "archived",
+        parentId: null,
+        deletedFromStatus: null,
+        deletedAt: null,
+        deletedBy: null,
+        restoredAt: expect.any(Date),
+        restoredBy: "user_1",
+        updatedBy: "user_1",
+      }),
+    );
+    expect(activitiesService.record).toHaveBeenCalledWith(
+      "ws_1",
+      "doc.restore",
+      "document",
+      "doc_child",
+      "user_1",
+      expect.objectContaining({
+        parentId: null,
+        status: "archived",
+      }),
+    );
+    expect(result).toMatchObject({
+      docId: "doc_child",
+      status: "archived",
+      parentId: null,
+    });
+  });
+
+  it("恢复父文档会递归恢复已删除子文档并保留树结构", async () => {
+    const root = {
+      docId: "doc_root",
+      workspaceId: "ws_1",
+      title: "Root",
+      status: "deleted",
+      deletedFromStatus: "normal",
+      parentId: null,
+      tags: [],
+      updatedBy: "old_user",
+    } as Document;
+    const child = {
+      docId: "doc_child",
+      workspaceId: "ws_1",
+      title: "Child",
+      status: "deleted",
+      deletedFromStatus: "draft",
+      parentId: "doc_root",
+      tags: ["tag_child"],
+      updatedBy: "old_user",
+    } as Document;
+    jest.mocked(documentRepository.findOne).mockImplementation(
+      async ({ where }: { where?: { docId?: string } }) => {
+        if (where?.docId === "doc_root") return root;
+        if (where?.docId === "doc_child") return child;
+        return null;
+      },
+    );
+    jest
+      .mocked(documentRepository.find)
+      .mockResolvedValueOnce([child])
+      .mockResolvedValueOnce([]);
+    jest
+      .mocked((workspacesService as any).checkAdminPermission)
+      .mockResolvedValue(undefined);
+    (service as any).validateAndUpdateTags = jest
+      .fn()
+      .mockResolvedValue(undefined);
+    (service as any).findOne = jest.fn().mockResolvedValue({
+      ...root,
+      status: "normal",
+    });
+
+    const result = await service.restore("doc_root", "user_1");
+
+    expect(documentRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        docId: "doc_root",
+        status: "normal",
+        deletedFromStatus: null,
+        restoredBy: "user_1",
+      }),
+    );
+    expect(documentRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        docId: "doc_child",
+        status: "draft",
+        parentId: "doc_root",
+        deletedFromStatus: null,
+        restoredBy: "user_1",
+      }),
+    );
+    expect((service as any).validateAndUpdateTags).toHaveBeenCalledWith(
+      "ws_1",
+      ["tag_child"],
+      expect.objectContaining({ getRepository: expect.any(Function) }),
+      "add",
+      "doc_child",
+    );
+    expect(activitiesService.record).toHaveBeenCalledWith(
+      "ws_1",
+      "doc.restore",
+      "document",
+      "doc_root",
+      "user_1",
+      expect.objectContaining({
+        parentId: null,
+        status: "normal",
+        affectedCount: 2,
+      }),
+    );
+    expect(result).toMatchObject({
+      docId: "doc_root",
+      status: "normal",
+    });
+  });
+
+  it("永久删除只清理回收站文档子树和相关派生数据", async () => {
+    const root = {
+      docId: "doc_root",
+      workspaceId: "ws_1",
+      title: "Root",
+      status: "deleted",
+      parentId: null,
+      tags: ["tag_1"],
+    } as unknown as Document;
+    const child = {
+      docId: "doc_child",
+      workspaceId: "ws_1",
+      title: "Child",
+      status: "deleted",
+      parentId: "doc_root",
+      tags: [],
+    } as unknown as Document;
+    jest.mocked(documentRepository.findOne).mockResolvedValue(root);
+    jest
+      .mocked((workspacesService as any).checkAdminPermission)
+      .mockResolvedValue(undefined);
+
+    const deletedCountsByEntity: Record<string, number> = {
+      BlockRenderCache: 3,
+      Comment: 2,
+      Favorite: 1,
+      DocDraft: 1,
+      DocumentSyncSession: 1,
+      SyncCreateTombstone: 2,
+      SyncBatchReceipt: 1,
+      SyncCheckpointReceipt: 1,
+      SyncReconcileReceipt: 1,
+      DocSnapshot: 2,
+      DocRevision: 2,
+      BlockVersion: 4,
+      Block: 4,
+      Document: 2,
+    };
+    const docRepo = {
+      findOne: jest.fn().mockResolvedValue(root),
+      find: jest.fn().mockResolvedValueOnce([child]).mockResolvedValueOnce([]),
+      delete: jest.fn().mockResolvedValue({ affected: 2 }),
+    };
+    const deleteRepos: Record<string, { delete: jest.Mock }> = {};
+    const manager = {
+      getRepository: jest.fn((entity: { name?: string }) => {
+        if (entity?.name === "Document") return docRepo;
+        const name = entity?.name ?? "Unknown";
+        deleteRepos[name] ??= {
+          delete: jest
+            .fn()
+            .mockResolvedValue({ affected: deletedCountsByEntity[name] ?? 0 }),
+        };
+        return deleteRepos[name];
+      }),
+    };
+    jest
+      .mocked(dataSource.transaction)
+      .mockImplementation(async (callback: any) => callback(manager));
+
+    const result = await service.permanentlyDelete("doc_root", "user_1");
+
+    expect(docRepo.delete).toHaveBeenCalledWith({ docId: expect.any(Object) });
+    expect(deleteRepos.BlockVersion.delete).toHaveBeenCalledWith({
+      docId: expect.any(Object),
+    });
+    expect(deleteRepos.BlockRenderCache.delete).toHaveBeenCalledWith({
+      docId: expect.any(Object),
+    });
+    expect(activitiesService.record).toHaveBeenCalledWith(
+      "ws_1",
+      "doc.purge",
+      "document",
+      "doc_root",
+      "user_1",
+      expect.objectContaining({
+        affectedCount: 2,
+        deletedDocIds: ["doc_root", "doc_child"],
+      }),
+    );
+    expect(result).toMatchObject({
+      docId: "doc_root",
+      status: "purged",
+      affectedCount: 2,
+      deletedDocIds: ["doc_root", "doc_child"],
+      deletedCounts: expect.objectContaining({
+        documents: 2,
+        blockVersions: 4,
+        renderCaches: 3,
+      }),
+    });
   });
 
   it("公开文档发布成功后调用前端缓存失效接口", async () => {
