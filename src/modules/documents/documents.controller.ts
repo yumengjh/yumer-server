@@ -97,7 +97,11 @@ export class DocumentsController {
     @Body() createDocumentDto: CreateDocumentDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.create(createDocumentDto, user.userId);
+    const document = await this.documentsService.create(
+      createDocumentDto,
+      user.userId,
+    );
+    return this.documentsService.presentDocumentDetail(document);
   }
 
   @Get()
@@ -111,7 +115,11 @@ export class DocumentsController {
     if (isSitePublicAnonymousUserId(user?.userId)) {
       return this.documentsService.findAllSitePublic(queryDto);
     }
-    return this.documentsService.findAll(queryDto, user.userId);
+    const result = await this.documentsService.findAll(queryDto, user.userId);
+    return {
+      ...result,
+      items: this.documentsService.presentDocumentList(result.items),
+    };
   }
 
   @Get("search")
@@ -121,7 +129,14 @@ export class DocumentsController {
     @Query() searchQueryDto: SearchQueryDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.search(searchQueryDto, user.userId);
+    const result = await this.documentsService.search(
+      searchQueryDto,
+      user.userId,
+    );
+    return {
+      ...result,
+      items: this.documentsService.presentDocumentList(result.items),
+    };
   }
 
   @Get(":docId")
@@ -135,7 +150,8 @@ export class DocumentsController {
     if (isSitePublicAnonymousUserId(user?.userId)) {
       return this.documentsService.findOneSitePublic(docId);
     }
-    return this.documentsService.findOne(docId, user.userId);
+    const document = await this.documentsService.findOne(docId, user.userId);
+    return this.documentsService.presentDocumentDetail(document);
   }
 
   @Get(":docId/content")
@@ -299,7 +315,12 @@ export class DocumentsController {
     @Body() updateDocumentDto: UpdateDocumentDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.update(docId, updateDocumentDto, user.userId);
+    const document = await this.documentsService.update(
+      docId,
+      updateDocumentDto,
+      user.userId,
+    );
+    return this.documentsService.presentDocumentDetail(document);
   }
 
   @Patch(":docId/editor-state")
@@ -325,7 +346,11 @@ export class DocumentsController {
   @ApiResponse({ status: 404, description: "Document not found" })
   @ApiResponse({ status: 403, description: "Forbidden" })
   async publish(@Param("docId") docId: string, @CurrentUser() user: any) {
-    return this.documentsService.publish(docId, user.userId);
+    const result = await this.documentsService.publish(docId, user.userId);
+    return {
+      ...result,
+      document: await this.documentsService.presentDocumentDetail(result.document),
+    };
   }
 
   @Post(":docId/publish-version")
@@ -339,11 +364,15 @@ export class DocumentsController {
     @Body() publishVersionDto: PublishVersionDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.publishVersion(
+    const result = await this.documentsService.publishVersion(
       docId,
       publishVersionDto.version,
       user.userId,
     );
+    return {
+      ...result,
+      document: await this.documentsService.presentDocumentDetail(result.document),
+    };
   }
 
   @Post(":docId/unpublish")
@@ -353,7 +382,11 @@ export class DocumentsController {
   @ApiResponse({ status: 404, description: "Document not found" })
   @ApiResponse({ status: 403, description: "Forbidden" })
   async unpublish(@Param("docId") docId: string, @CurrentUser() user: any) {
-    return this.documentsService.unpublish(docId, user.userId);
+    const result = await this.documentsService.unpublish(docId, user.userId);
+    return {
+      ...result,
+      document: await this.documentsService.presentDocumentDetail(result.document),
+    };
   }
 
   @Post(":docId/move")
@@ -368,7 +401,12 @@ export class DocumentsController {
     @Body() moveDocumentDto: MoveDocumentDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.move(docId, moveDocumentDto, user.userId);
+    const document = await this.documentsService.move(
+      docId,
+      moveDocumentDto,
+      user.userId,
+    );
+    return this.documentsService.presentDocumentDetail(document);
   }
 
   @Post(":docId/restore")
@@ -384,7 +422,8 @@ export class DocumentsController {
   @ApiResponse({ status: 404, description: "Document not found in trash" })
   @ApiResponse({ status: 403, description: "Forbidden" })
   async restore(@Param("docId") docId: string, @CurrentUser() user: any) {
-    return this.documentsService.restore(docId, user.userId);
+    const document = await this.documentsService.restore(docId, user.userId);
+    return this.documentsService.presentDocumentDetail(document);
   }
 
   @Delete(":docId/permanent")
@@ -451,7 +490,15 @@ export class DocumentsController {
     @Query() queryDto: QueryRevisionsDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.getRevisions(docId, queryDto, user.userId);
+    const result = await this.documentsService.getRevisions(
+      docId,
+      queryDto,
+      user.userId,
+    );
+    return {
+      ...result,
+      items: await this.documentsService.presentRevisionList(result.items),
+    };
   }
 
   @Get(":docId/diff")

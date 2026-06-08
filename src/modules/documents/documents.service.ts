@@ -82,6 +82,49 @@ type DocumentActorSummary = {
   avatar: string | null;
 };
 
+type PublicDocumentActorSummary = {
+  displayName: string | null;
+  avatar: string | null;
+};
+
+type PresentedDocumentMeta = {
+  docId: string;
+  workspaceId?: string;
+  title: string;
+  icon: string | null;
+  cover: string | null;
+  status: string;
+  visibility: string;
+  parentId: string | null;
+  rootBlockId?: string;
+  sortOrder: number;
+  tags: string[];
+  category: string | null;
+  head?: number;
+  draftRevision?: number;
+  publishedHead: number;
+  viewCount: number;
+  favoriteCount: number;
+  createdAt: Date;
+  updatedAt: Date;
+  trashRetentionDays?: number;
+  trashExpiresAt?: string | null;
+  trashDaysRemaining?: number | null;
+};
+
+type PresentedDocumentDetail = PresentedDocumentMeta & {
+  creator: PublicDocumentActorSummary | null;
+  updater: PublicDocumentActorSummary | null;
+};
+
+type PresentedRevisionItem = {
+  docVer: number;
+  message: string;
+  createdAt: number;
+  branch: string;
+  creator: PublicDocumentActorSummary | null;
+};
+
 type ResolvedDiffRef = {
   kind: DiffRefKind;
   label: string;
@@ -318,6 +361,135 @@ export class DocumentsService {
   ): T & Partial<TrashLifecycleFields> {
     const lifecycle = this.getTrashLifecycleFields(document);
     return lifecycle ? { ...document, ...lifecycle } : document;
+  }
+
+  private toPublicActorSummary(
+    actor: DocumentActorSummary | null,
+  ): PublicDocumentActorSummary | null {
+    if (!actor) {
+      return null;
+    }
+
+    return {
+      displayName: actor.displayName,
+      avatar: actor.avatar,
+    };
+  }
+
+  private toDocumentMeta(
+    document: Document & Partial<TrashLifecycleFields>,
+    options?: {
+      includeWorkspaceId?: boolean;
+      includeHead?: boolean;
+      includeDraftRevision?: boolean;
+    },
+  ): PresentedDocumentMeta {
+    return {
+      docId: document.docId,
+      ...(options?.includeWorkspaceId
+        ? { workspaceId: document.workspaceId }
+        : {}),
+      title: document.title,
+      icon: document.icon ?? null,
+      cover: document.cover ?? null,
+      status: document.status,
+      visibility: document.visibility,
+      parentId: document.parentId ?? null,
+      ...(options?.includeHead ? { rootBlockId: document.rootBlockId } : {}),
+      sortOrder: document.sortOrder ?? 0,
+      tags: Array.isArray(document.tags) ? document.tags : [],
+      category: document.category ?? null,
+      ...(options?.includeHead ? { head: document.head } : {}),
+      ...(options?.includeDraftRevision
+        ? { draftRevision: document.draftRevision ?? 0 }
+        : {}),
+      publishedHead: document.publishedHead ?? 0,
+      viewCount: document.viewCount ?? 0,
+      favoriteCount: document.favoriteCount ?? 0,
+      createdAt: document.createdAt,
+      updatedAt: document.updatedAt,
+      ...(document.trashRetentionDays !== undefined
+        ? {
+            trashRetentionDays: document.trashRetentionDays,
+            trashExpiresAt: document.trashExpiresAt ?? null,
+            trashDaysRemaining: document.trashDaysRemaining ?? null,
+          }
+        : {}),
+    };
+  }
+
+  async presentDocumentDetail(
+    document: Document & Partial<TrashLifecycleFields>,
+  ): Promise<PresentedDocumentDetail> {
+    const { creator, updater } =
+      await this.resolveDocumentActorProfiles(document);
+
+    return {
+      ...this.toDocumentMeta(document, {
+        includeWorkspaceId: true,
+        includeHead: true,
+        includeDraftRevision: true,
+      }),
+      creator: this.toPublicActorSummary(creator),
+      updater: this.toPublicActorSummary(updater),
+    };
+  }
+
+  async presentPublicDocumentDetail(
+    document: Document & Partial<TrashLifecycleFields>,
+  ): Promise<Omit<PresentedDocumentDetail, "workspaceId">> {
+    const detail = await this.presentDocumentDetail(document);
+    const { workspaceId, ...publicDetail } = detail;
+    return publicDetail;
+  }
+
+  presentDocumentList(
+    items: Array<Document & Partial<TrashLifecycleFields>>,
+  ): PresentedDocumentMeta[] {
+    return items.map((item) =>
+      this.toDocumentMeta(item, {
+        includeWorkspaceId: true,
+      }),
+    );
+  }
+
+  presentPublicDocumentList(items: Document[]): PresentedDocumentMeta[] {
+    return items.map((item) => this.toDocumentMeta(item));
+  }
+
+  async presentRevisionList(
+    items: DocRevision[],
+  ): Promise<PresentedRevisionItem[]> {
+    const actorIds = Array.from(
+      new Set(
+        items
+          .map((item) => item.createdBy)
+          .filter((value): value is string => typeof value === "string" && value.length > 0),
+      ),
+    );
+    const userMap = new Map<string, PublicDocumentActorSummary | null>();
+
+    if (actorIds.length > 0) {
+      const users = await this.userRepository.find({
+        where: { userId: In(actorIds) },
+        select: ["userId", "username", "displayName", "avatar"],
+      });
+
+      for (const user of users) {
+        userMap.set(user.userId, {
+          displayName: user.displayName || user.username || null,
+          avatar: user.avatar || null,
+        });
+      }
+    }
+
+    return items.map((item) => ({
+      docVer: item.docVer,
+      message: item.message,
+      createdAt: item.createdAt,
+      branch: item.branch,
+      creator: userMap.get(item.createdBy) ?? null,
+    }));
   }
 
   private async validateDocumentSyncSession(
@@ -2000,7 +2172,7 @@ export class DocumentsService {
     const [items, total] = await queryBuilder.getManyAndCount();
 
     return {
-      items: items.map((item) => this.toPublicDocumentMeta(item)),
+      items: this.presentPublicDocumentList(items),
       total,
       page,
       pageSize,
@@ -2011,13 +2183,7 @@ export class DocumentsService {
     const document = await this.getPublicDocumentEntity(docId);
     document.viewCount += 1;
     await this.documentRepository.save(document);
-    const { creator, updater } =
-      await this.resolveDocumentActorProfiles(document);
-    return {
-      ...this.toPublicDocumentMeta(document),
-      creator,
-      updater,
-    };
+    return this.presentPublicDocumentDetail(document);
   }
 
   private async getPublicDocumentEntity(docId: string): Promise<Document> {
@@ -2035,26 +2201,6 @@ export class DocumentsService {
     }
 
     return document;
-  }
-
-  private toPublicDocumentMeta(document: Document) {
-    return {
-      docId: document.docId,
-      workspaceId: document.workspaceId,
-      title: document.title,
-      icon: document.icon,
-      cover: document.cover,
-      createdBy: document.createdBy,
-      status: document.status,
-      visibility: document.visibility,
-      tags: document.tags,
-      category: document.category,
-      publishedHead: document.publishedHead,
-      viewCount: document.viewCount,
-      favoriteCount: document.favoriteCount,
-      createdAt: document.createdAt,
-      updatedAt: document.updatedAt,
-    };
   }
 
   private async resolveDocumentActorProfiles(

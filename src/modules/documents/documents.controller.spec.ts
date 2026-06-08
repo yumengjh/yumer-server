@@ -4,6 +4,18 @@ import { SITE_PUBLIC_ANONYMOUS_USER_ID } from "../../common/decorators/public.de
 
 describe("DocumentsController", () => {
   const documentsService = {
+    create: jest.fn(),
+    findAll: jest.fn(),
+    findOne: jest.fn(),
+    search: jest.fn(),
+    update: jest.fn(),
+    move: jest.fn(),
+    restore: jest.fn(),
+    getRevisions: jest.fn(),
+    commitVersion: jest.fn(),
+    presentDocumentDetail: jest.fn(),
+    presentDocumentList: jest.fn(),
+    presentRevisionList: jest.fn(),
     getContent: jest.fn(),
     getContentSitePublic: jest.fn(),
     getEditContent: jest.fn(),
@@ -96,6 +108,85 @@ describe("DocumentsController", () => {
 
     expect(response.setHeader).toHaveBeenCalledWith("X-Yuediter-Render-Mode", "cache");
     expect(response.setHeader).toHaveBeenCalledWith("X-Yuediter-Render-Cache", "hit");
+  });
+
+  it("presents authenticated document detail through the response presenter", async () => {
+    documentsService.findOne.mockResolvedValue({ docId: "doc_1", id: 9 });
+    documentsService.presentDocumentDetail.mockResolvedValue({
+      docId: "doc_1",
+      title: "Doc",
+      creator: null,
+      updater: null,
+    });
+
+    await expect(
+      controller.findOne("doc_1", { userId: "user_1" }),
+    ).resolves.toEqual({
+      docId: "doc_1",
+      title: "Doc",
+      creator: null,
+      updater: null,
+    });
+    expect(documentsService.presentDocumentDetail).toHaveBeenCalledWith({
+      docId: "doc_1",
+      id: 9,
+    });
+  });
+
+  it("presents document list items for authenticated queries", async () => {
+    documentsService.findAll.mockResolvedValue({
+      items: [{ docId: "doc_1", id: 1 }],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+    });
+    documentsService.presentDocumentList.mockReturnValue([
+      { docId: "doc_1", title: "Doc" },
+    ]);
+
+    await expect(
+      controller.findAll({} as any, { userId: "user_1" }),
+    ).resolves.toEqual({
+      items: [{ docId: "doc_1", title: "Doc" }],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+    });
+  });
+
+  it("presents revision items through the response presenter", async () => {
+    documentsService.getRevisions.mockResolvedValue({
+      items: [{ docVer: 3, id: 7, createdBy: "user_1" }],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+    });
+    documentsService.presentRevisionList.mockResolvedValue([
+      {
+        docVer: 3,
+        message: "save",
+        createdAt: 1700000000000,
+        branch: "draft",
+        creator: { displayName: "User", avatar: null },
+      },
+    ]);
+
+    await expect(
+      controller.getRevisions("doc_1", {} as any, { userId: "user_1" }),
+    ).resolves.toEqual({
+      items: [
+        {
+          docVer: 3,
+          message: "save",
+          createdAt: 1700000000000,
+          branch: "draft",
+          creator: { displayName: "User", avatar: null },
+        },
+      ],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+    });
   });
 
   it("returns draft-backed edit content when a draft exists", async () => {

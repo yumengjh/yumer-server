@@ -1128,14 +1128,11 @@ describe("DocumentsService", () => {
 
     expect(result).toMatchObject({
       docId: "doc_public",
-      createdBy: "u_creator",
       creator: {
-        userId: "u_creator",
         displayName: "Alice",
         avatar: "https://cdn.example.com/alice.png",
       },
       updater: {
-        userId: "u_creator",
         displayName: "Alice",
         avatar: "https://cdn.example.com/alice.png",
       },
@@ -1461,6 +1458,118 @@ describe("DocumentsService", () => {
       "doc_1",
       "user_1",
     );
+  });
+
+  it("presents document detail without internal primary keys or raw actor ids", async () => {
+    jest.mocked(userRepository.find).mockResolvedValue([
+      {
+        userId: "user_1",
+        username: "alice",
+        displayName: "Alice",
+        avatar: "https://example.com/a.png",
+      },
+    ] as unknown as User[]);
+
+    const result = await service.presentDocumentDetail({
+      id: 12,
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      title: "Doc",
+      icon: null,
+      cover: null,
+      status: "draft",
+      visibility: "workspace",
+      parentId: null,
+      rootBlockId: "root_1",
+      sortOrder: 1,
+      tags: ["tag_1"],
+      category: null,
+      head: 3,
+      draftRevision: 5,
+      publishedHead: 2,
+      viewCount: 8,
+      favoriteCount: 3,
+      createdAt: new Date("2026-06-08T00:00:00.000Z"),
+      updatedAt: new Date("2026-06-08T01:00:00.000Z"),
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      rootBlockId: "root_1",
+      publishedSnapshotId: "snap_1",
+    } as any);
+
+    expect(result).toEqual({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      title: "Doc",
+      icon: null,
+      cover: null,
+      status: "draft",
+      visibility: "workspace",
+      parentId: null,
+      rootBlockId: "root_1",
+      sortOrder: 1,
+      tags: ["tag_1"],
+      category: null,
+      head: 3,
+      draftRevision: 5,
+      publishedHead: 2,
+      viewCount: 8,
+      favoriteCount: 3,
+      createdAt: new Date("2026-06-08T00:00:00.000Z"),
+      updatedAt: new Date("2026-06-08T01:00:00.000Z"),
+      creator: {
+        displayName: "Alice",
+        avatar: "https://example.com/a.png",
+      },
+      updater: {
+        displayName: "Alice",
+        avatar: "https://example.com/a.png",
+      },
+    });
+    expect(result).not.toHaveProperty("id");
+    expect(result).not.toHaveProperty("createdBy");
+    expect(result).not.toHaveProperty("updatedBy");
+  });
+
+  it("presents revision list without revision internals", async () => {
+    jest.mocked(userRepository.find).mockResolvedValue([
+      {
+        userId: "user_1",
+        username: "alice",
+        displayName: null,
+        avatar: null,
+      },
+    ] as unknown as User[]);
+
+    const result = await service.presentRevisionList([
+      {
+        id: 99,
+        revisionId: "doc_1@3",
+        docId: "doc_1",
+        docVer: 3,
+        createdAt: 1700000000000,
+        createdBy: "user_1",
+        message: "save",
+        branch: "draft",
+        patches: [{ op: "replace" }],
+        rootBlockId: "root_1",
+        source: "api",
+        opSummary: {},
+      } as any,
+    ]);
+
+    expect(result).toEqual([
+      {
+        docVer: 3,
+        message: "save",
+        createdAt: 1700000000000,
+        branch: "draft",
+        creator: {
+          displayName: "alice",
+          avatar: null,
+        },
+      },
+    ]);
   });
 
   afterEach(() => {
