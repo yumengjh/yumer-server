@@ -16,6 +16,7 @@ describe("DocumentsController", () => {
     presentDocumentDetail: jest.fn(),
     presentDocumentList: jest.fn(),
     presentRevisionList: jest.fn(),
+    presentDocumentSnapshot: jest.fn(),
     getContent: jest.fn(),
     getContentSitePublic: jest.fn(),
     getEditContent: jest.fn(),
@@ -64,9 +65,18 @@ describe("DocumentsController", () => {
       response as any,
     );
 
-    expect(response.setHeader).toHaveBeenCalledWith("X-Yuediter-Content-Mode", "all");
-    expect(response.setHeader).toHaveBeenCalledWith("X-Yuediter-Render-Mode", "mixed");
-    expect(response.setHeader).toHaveBeenCalledWith("X-Yuediter-Render-Cache", "mixed");
+    expect(response.setHeader).toHaveBeenCalledWith(
+      "X-Yuediter-Content-Mode",
+      "all",
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      "X-Yuediter-Render-Mode",
+      "mixed",
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      "X-Yuediter-Render-Cache",
+      "mixed",
+    );
     expect(response.setHeader).toHaveBeenCalledWith(
       "X-Yuediter-Render-Blocks",
       "total=3;renderable=2;cached=1;fresh=1;client=1;failed=0",
@@ -106,8 +116,14 @@ describe("DocumentsController", () => {
       response as any,
     );
 
-    expect(response.setHeader).toHaveBeenCalledWith("X-Yuediter-Render-Mode", "cache");
-    expect(response.setHeader).toHaveBeenCalledWith("X-Yuediter-Render-Cache", "hit");
+    expect(response.setHeader).toHaveBeenCalledWith(
+      "X-Yuediter-Render-Mode",
+      "cache",
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      "X-Yuediter-Render-Cache",
+      "hit",
+    );
   });
 
   it("presents authenticated document detail through the response presenter", async () => {
@@ -280,13 +296,9 @@ describe("DocumentsController", () => {
     });
 
     await expect(
-      controller.discardDraft(
-        "doc_1",
-        {} as any,
-        {
-          userId: "user_1",
-        },
-      ),
+      controller.discardDraft("doc_1", {} as any, {
+        userId: "user_1",
+      }),
     ).resolves.toEqual({
       docId: "doc_1",
       discarded: true,
@@ -350,6 +362,94 @@ describe("DocumentsController", () => {
         ackedThroughOpSeq: 42,
       }),
     );
+  });
+
+  it("presents reverted document detail instead of returning the raw entity", async () => {
+    documentsService.revert = jest.fn().mockResolvedValue({
+      docId: "doc_1",
+      id: 99,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      publishedSnapshotId: "snap_1",
+    });
+    documentsService.presentDocumentDetail.mockResolvedValue({
+      docId: "doc_1",
+      rootBlockId: "root_1",
+      head: 4,
+      draftRevision: 0,
+      creator: null,
+      updater: null,
+    });
+
+    await expect(
+      controller.revert(
+        "doc_1",
+        { version: 2, draftStrategy: "discard" } as any,
+        { userId: "user_1" },
+      ),
+    ).resolves.toEqual({
+      docId: "doc_1",
+      rootBlockId: "root_1",
+      head: 4,
+      draftRevision: 0,
+      creator: null,
+      updater: null,
+    });
+    expect(documentsService.presentDocumentDetail).toHaveBeenCalledWith({
+      docId: "doc_1",
+      id: 99,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      publishedSnapshotId: "snap_1",
+    });
+  });
+
+  it("presents created snapshots without internal snapshot storage fields", async () => {
+    documentsService.createSnapshot = jest.fn().mockResolvedValue({
+      id: 123,
+      snapshotId: "doc_1@snap@4",
+      docId: "doc_1",
+      docVer: 4,
+      createdAt: 1700000000000,
+      rootBlockId: "root_1",
+      blockVersionMap: { root_1: 4 },
+      kind: "manual",
+      pinned: true,
+      retainUntil: null,
+      metadata: { source: "manual-api" },
+    });
+    documentsService.presentDocumentSnapshot.mockReturnValue({
+      docId: "doc_1",
+      docVer: 4,
+      createdAt: 1700000000000,
+      kind: "manual",
+      pinned: true,
+      retainUntil: null,
+    });
+
+    await expect(
+      controller.createSnapshot("doc_1", { userId: "user_1" }),
+    ).resolves.toEqual({
+      docId: "doc_1",
+      docVer: 4,
+      createdAt: 1700000000000,
+      kind: "manual",
+      pinned: true,
+      retainUntil: null,
+    });
+    expect(documentsService.presentDocumentSnapshot).toHaveBeenCalledWith({
+      id: 123,
+      snapshotId: "doc_1@snap@4",
+      docId: "doc_1",
+      docVer: 4,
+      createdAt: 1700000000000,
+      rootBlockId: "root_1",
+      blockVersionMap: { root_1: 4 },
+      kind: "manual",
+      pinned: true,
+      retainUntil: null,
+      metadata: { source: "manual-api" },
+    });
   });
 
   it("returns a download response for document export", async () => {

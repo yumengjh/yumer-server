@@ -64,6 +64,14 @@ import type {
   DraftCheckpointDto,
   DraftCheckpointResponseDto,
 } from "./dto/draft-checkpoint.dto";
+import type {
+  DocumentActorSummaryResponse,
+  DocumentDetailResponse,
+  DocumentListItemResponse,
+  DocumentRevisionListItemResponse,
+  DocumentSnapshotResponse,
+  PublicDocumentDetailResponse,
+} from "./dto/document-response.dto";
 import type { DiffRefKind } from "./dto/diff-versions.dto";
 import { DiffVersionsDto } from "./dto/diff-versions.dto";
 import { ActivitiesService } from "../activities/activities.service";
@@ -82,48 +90,10 @@ type DocumentActorSummary = {
   avatar: string | null;
 };
 
-type PublicDocumentActorSummary = {
-  displayName: string | null;
-  avatar: string | null;
-};
-
-type PresentedDocumentMeta = {
-  docId: string;
-  workspaceId?: string;
-  title: string;
-  icon: string | null;
-  cover: string | null;
-  status: string;
-  visibility: string;
-  parentId: string | null;
-  rootBlockId?: string;
-  sortOrder: number;
-  tags: string[];
-  category: string | null;
-  head?: number;
-  draftRevision?: number;
-  publishedHead: number;
-  viewCount: number;
-  favoriteCount: number;
-  createdAt: Date;
-  updatedAt: Date;
-  trashRetentionDays?: number;
-  trashExpiresAt?: string | null;
-  trashDaysRemaining?: number | null;
-};
-
-type PresentedDocumentDetail = PresentedDocumentMeta & {
-  creator: PublicDocumentActorSummary | null;
-  updater: PublicDocumentActorSummary | null;
-};
-
-type PresentedRevisionItem = {
-  docVer: number;
-  message: string;
-  createdAt: number;
-  branch: string;
-  creator: PublicDocumentActorSummary | null;
-};
+type DocumentMetaProjection = DocumentListItemResponse &
+  Partial<
+    Pick<DocumentDetailResponse, "rootBlockId" | "head" | "draftRevision">
+  >;
 
 type ResolvedDiffRef = {
   kind: DiffRefKind;
@@ -173,8 +143,6 @@ type SyncReconcileTombstone = {
 };
 
 type SyncReconcileResponse = {
-  docId: string;
-  checkedAt: number;
   draftRevision: number;
   needsReload: boolean;
   conflicts: Array<Record<string, unknown>>;
@@ -262,6 +230,13 @@ export class DocumentsService {
     return {
       sessionId: session.sessionId,
       sessionEpoch: session.sessionEpoch,
+      leaseExpiresAt: new Date(session.leaseExpiresAt).toISOString(),
+      lastAckedOpSeq: session.lastAckedOpSeq ?? null,
+    };
+  }
+
+  private buildSyncSessionRenewResponse(session: DocumentSyncSession) {
+    return {
       leaseExpiresAt: new Date(session.leaseExpiresAt).toISOString(),
       lastAckedOpSeq: session.lastAckedOpSeq ?? null,
     };
@@ -365,7 +340,7 @@ export class DocumentsService {
 
   private toPublicActorSummary(
     actor: DocumentActorSummary | null,
-  ): PublicDocumentActorSummary | null {
+  ): DocumentActorSummaryResponse | null {
     if (!actor) {
       return null;
     }
@@ -383,7 +358,7 @@ export class DocumentsService {
       includeHead?: boolean;
       includeDraftRevision?: boolean;
     },
-  ): PresentedDocumentMeta {
+  ): DocumentMetaProjection {
     return {
       docId: document.docId,
       ...(options?.includeWorkspaceId
@@ -420,16 +395,21 @@ export class DocumentsService {
 
   async presentDocumentDetail(
     document: Document & Partial<TrashLifecycleFields>,
-  ): Promise<PresentedDocumentDetail> {
+  ): Promise<DocumentDetailResponse> {
     const { creator, updater } =
       await this.resolveDocumentActorProfiles(document);
+    const meta = this.toDocumentMeta(document, {
+      includeWorkspaceId: true,
+      includeHead: true,
+      includeDraftRevision: true,
+    });
 
     return {
-      ...this.toDocumentMeta(document, {
-        includeWorkspaceId: true,
-        includeHead: true,
-        includeDraftRevision: true,
-      }),
+      ...meta,
+      workspaceId: document.workspaceId,
+      rootBlockId: document.rootBlockId,
+      head: document.head,
+      draftRevision: document.draftRevision ?? 0,
       creator: this.toPublicActorSummary(creator),
       updater: this.toPublicActorSummary(updater),
     };
@@ -437,15 +417,20 @@ export class DocumentsService {
 
   async presentPublicDocumentDetail(
     document: Document & Partial<TrashLifecycleFields>,
-  ): Promise<Omit<PresentedDocumentDetail, "workspaceId">> {
-    const detail = await this.presentDocumentDetail(document);
-    const { workspaceId, ...publicDetail } = detail;
-    return publicDetail;
+  ): Promise<PublicDocumentDetailResponse> {
+    const { creator, updater } =
+      await this.resolveDocumentActorProfiles(document);
+
+    return {
+      ...this.toDocumentMeta(document),
+      creator: this.toPublicActorSummary(creator),
+      updater: this.toPublicActorSummary(updater),
+    };
   }
 
   presentDocumentList(
     items: Array<Document & Partial<TrashLifecycleFields>>,
-  ): PresentedDocumentMeta[] {
+  ): DocumentListItemResponse[] {
     return items.map((item) =>
       this.toDocumentMeta(item, {
         includeWorkspaceId: true,
@@ -453,21 +438,24 @@ export class DocumentsService {
     );
   }
 
-  presentPublicDocumentList(items: Document[]): PresentedDocumentMeta[] {
+  presentPublicDocumentList(items: Document[]): DocumentListItemResponse[] {
     return items.map((item) => this.toDocumentMeta(item));
   }
 
   async presentRevisionList(
     items: DocRevision[],
-  ): Promise<PresentedRevisionItem[]> {
+  ): Promise<DocumentRevisionListItemResponse[]> {
     const actorIds = Array.from(
       new Set(
         items
           .map((item) => item.createdBy)
-          .filter((value): value is string => typeof value === "string" && value.length > 0),
+          .filter(
+            (value): value is string =>
+              typeof value === "string" && value.length > 0,
+          ),
       ),
     );
-    const userMap = new Map<string, PublicDocumentActorSummary | null>();
+    const userMap = new Map<string, DocumentActorSummaryResponse | null>();
 
     if (actorIds.length > 0) {
       const users = await this.userRepository.find({
@@ -490,6 +478,17 @@ export class DocumentsService {
       branch: item.branch,
       creator: userMap.get(item.createdBy) ?? null,
     }));
+  }
+
+  presentDocumentSnapshot(snapshot: DocSnapshot): DocumentSnapshotResponse {
+    return {
+      docId: snapshot.docId,
+      docVer: snapshot.docVer,
+      createdAt: snapshot.createdAt,
+      kind: snapshot.kind,
+      pinned: snapshot.pinned,
+      retainUntil: snapshot.retainUntil,
+    };
   }
 
   private async validateDocumentSyncSession(
@@ -578,7 +577,7 @@ export class DocumentsService {
     if (!renewed) {
       throw new BadRequestException("SYNC_SESSION_REQUIRED");
     }
-    return this.buildSyncSessionResponse(renewed);
+    return this.buildSyncSessionRenewResponse(renewed);
   }
 
   async acquireSyncSession(docId: string, userId: string) {
@@ -1774,8 +1773,8 @@ export class DocumentsService {
 
     await this.checkDocumentDeletePermission(document, userId);
 
-    const { documentsToRestore, restoredAt } = await this.dataSource.transaction(
-      async (manager) => {
+    const { documentsToRestore, restoredAt } =
+      await this.dataSource.transaction(async (manager) => {
         const docRepo = manager.getRepository(Document);
         const tagManager = manager as unknown as EntityManager;
         const lockedDocument = await docRepo.findOne({
@@ -1840,9 +1839,11 @@ export class DocumentsService {
           await docRepo.save(item);
         }
 
-        return { documentsToRestore: docsToRestore, restoredAt: restoredAtValue };
-      },
-    );
+        return {
+          documentsToRestore: docsToRestore,
+          restoredAt: restoredAtValue,
+        };
+      });
 
     const restoredRoot = documentsToRestore[0];
 
@@ -3103,7 +3104,7 @@ export class DocumentsService {
             needsReload: existingReceipt.needsReload,
             tombstonedCount: existingReceipt.tombstoned?.length ?? 0,
           });
-          return this.mapSyncReconcileReceiptToResponse(docId, existingReceipt);
+          return this.mapSyncReconcileReceiptToResponse(existingReceipt);
         }
         this.logSyncReconcileEvent("fingerprint-conflict", {
           docId,
@@ -3115,8 +3116,6 @@ export class DocumentsService {
           needsReload: true,
         });
         return this.buildSyncReconcileConflictResponse({
-          docId,
-          checkedAt,
           draftRevision: serverDraftRevision,
           code: "RECONCILE_FINGERPRINT_CONFLICT",
           message: "Reconcile id was reused with different content",
@@ -3125,8 +3124,6 @@ export class DocumentsService {
 
       if (clientDraftRevision !== serverDraftRevision) {
         const response = {
-          docId,
-          checkedAt,
           draftRevision: serverDraftRevision,
           needsReload: true,
           conflicts: [
@@ -3145,6 +3142,7 @@ export class DocumentsService {
           userId,
           clientBatchId,
           fingerprint,
+          checkedAt,
           response,
         });
         this.logSyncReconcileEvent("draft-revision-mismatch", {
@@ -3164,8 +3162,6 @@ export class DocumentsService {
         .findOne({ where: { docId } });
       if (!draft) {
         const response = {
-          docId,
-          checkedAt,
           draftRevision: serverDraftRevision,
           needsReload: false,
           conflicts: [],
@@ -3177,6 +3173,7 @@ export class DocumentsService {
           userId,
           clientBatchId,
           fingerprint,
+          checkedAt,
           response,
         });
         this.logSyncReconcileEvent("no-draft", {
@@ -3212,8 +3209,6 @@ export class DocumentsService {
       }
 
       const response = {
-        docId,
-        checkedAt,
         draftRevision: nextDraftRevision,
         needsReload: false,
         conflicts: [],
@@ -3225,6 +3220,7 @@ export class DocumentsService {
         userId,
         clientBatchId,
         fingerprint,
+        checkedAt,
         response,
       });
       this.logSyncReconcileEvent("applied", {
@@ -3290,13 +3286,8 @@ export class DocumentsService {
     });
   }
 
-  private mapSyncReconcileReceiptToResponse(
-    docId: string,
-    receipt: SyncReconcileReceipt,
-  ): SyncReconcileResponse {
+  private mapSyncReconcileReceiptToResponse(receipt: SyncReconcileReceipt): SyncReconcileResponse {
     return {
-      docId,
-      checkedAt: Number(receipt.checkedAt),
       draftRevision: receipt.draftRevision,
       needsReload: receipt.needsReload,
       conflicts: receipt.conflicts,
@@ -3305,15 +3296,11 @@ export class DocumentsService {
   }
 
   private buildSyncReconcileConflictResponse(params: {
-    docId: string;
-    checkedAt: number;
     draftRevision: number;
     code: string;
     message: string;
   }): SyncReconcileResponse {
     return {
-      docId: params.docId,
-      checkedAt: params.checkedAt,
       draftRevision: params.draftRevision,
       needsReload: true,
       conflicts: [{ code: params.code, message: params.message }],
@@ -3327,20 +3314,21 @@ export class DocumentsService {
     userId: string;
     clientBatchId: string;
     fingerprint: string;
+    checkedAt: number;
     response: SyncReconcileResponse;
   }): Promise<void> {
     await params.manager.getRepository(SyncReconcileReceipt).save({
       docId: params.docId,
       clientBatchId: params.clientBatchId,
       requestFingerprint: params.fingerprint,
-      checkedAt: params.response.checkedAt,
+      checkedAt: params.checkedAt,
       draftRevision: params.response.draftRevision,
       needsReload: params.response.needsReload,
       conflicts: params.response.conflicts,
       tombstoned: params.response.tombstoned,
       createdBy: params.userId,
-      createdAt: params.response.checkedAt,
-      updatedAt: params.response.checkedAt,
+      createdAt: params.checkedAt,
+      updatedAt: params.checkedAt,
     });
   }
 

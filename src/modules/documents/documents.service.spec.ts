@@ -13,6 +13,21 @@ import { VersionControlService } from "./services/version-control.service";
 import { WorkspacesService } from "../workspaces/workspaces.service";
 import { ActivitiesService } from "../activities/activities.service";
 import type { DraftCheckpointService } from "./draft-checkpoint.service";
+import {
+  DocumentDetailResponse,
+  DocumentListItemResponse,
+  DocumentRevisionListItemResponse,
+  PublicDocumentDetailResponse,
+} from "./dto/document-response.dto";
+
+describe("document response DTO contracts", () => {
+  it("exports explicit response contract classes for document projections", () => {
+    expect(DocumentListItemResponse).toBeDefined();
+    expect(DocumentDetailResponse).toBeDefined();
+    expect(PublicDocumentDetailResponse).toBeDefined();
+    expect(DocumentRevisionListItemResponse).toBeDefined();
+  });
+});
 
 describe("DocumentsService", () => {
   const originalFetch = global.fetch;
@@ -541,10 +556,11 @@ describe("DocumentsService", () => {
     });
 
     expect(result).toMatchObject({
-      sessionId: "session_renew_ok",
-      sessionEpoch: 3,
       lastAckedOpSeq: 7,
     });
+    expect(result).toHaveProperty("leaseExpiresAt");
+    expect(result).not.toHaveProperty("sessionId");
+    expect(result).not.toHaveProperty("sessionEpoch");
     expect(loggerLog).toHaveBeenCalledWith(
       expect.stringContaining("同步 session renewed:"),
     );
@@ -1531,6 +1547,89 @@ describe("DocumentsService", () => {
     expect(result).not.toHaveProperty("updatedBy");
   });
 
+  it("presents public document detail without editor protocol fields", async () => {
+    jest.mocked(userRepository.find).mockResolvedValue([
+      {
+        userId: "user_1",
+        username: "alice",
+        displayName: "Alice",
+        avatar: null,
+      },
+    ] as unknown as User[]);
+
+    const result = await service.presentPublicDocumentDetail({
+      id: 12,
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      title: "Public Doc",
+      icon: null,
+      cover: null,
+      status: "normal",
+      visibility: "public",
+      parentId: null,
+      rootBlockId: "root_1",
+      sortOrder: 1,
+      tags: ["tag_1"],
+      category: "blog",
+      head: 4,
+      draftRevision: 7,
+      publishedHead: 3,
+      viewCount: 9,
+      favoriteCount: 2,
+      createdAt: new Date("2026-06-08T00:00:00.000Z"),
+      updatedAt: new Date("2026-06-08T01:00:00.000Z"),
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      publishedSnapshotId: "snap_1",
+    } as any);
+
+    expect(result).toMatchObject({
+      docId: "doc_1",
+      title: "Public Doc",
+      visibility: "public",
+      publishedHead: 3,
+      creator: { displayName: "Alice", avatar: null },
+    });
+    expect(result).not.toHaveProperty("id");
+    expect(result).not.toHaveProperty("workspaceId");
+    expect(result).not.toHaveProperty("rootBlockId");
+    expect(result).not.toHaveProperty("head");
+    expect(result).not.toHaveProperty("draftRevision");
+    expect(result).not.toHaveProperty("createdBy");
+    expect(result).not.toHaveProperty("updatedBy");
+    expect(result).not.toHaveProperty("publishedSnapshotId");
+  });
+
+  it("presents created snapshots without storage internals", () => {
+    const result = service.presentDocumentSnapshot({
+      id: 123,
+      snapshotId: "doc_1@snap@4",
+      docId: "doc_1",
+      docVer: 4,
+      createdAt: 1700000000000,
+      rootBlockId: "root_1",
+      blockVersionMap: { root_1: 4 },
+      kind: "manual",
+      pinned: true,
+      retainUntil: null,
+      metadata: { source: "manual-api" },
+    } as any);
+
+    expect(result).toEqual({
+      docId: "doc_1",
+      docVer: 4,
+      createdAt: 1700000000000,
+      kind: "manual",
+      pinned: true,
+      retainUntil: null,
+    });
+    expect(result).not.toHaveProperty("id");
+    expect(result).not.toHaveProperty("snapshotId");
+    expect(result).not.toHaveProperty("rootBlockId");
+    expect(result).not.toHaveProperty("blockVersionMap");
+    expect(result).not.toHaveProperty("metadata");
+  });
+
   it("presents revision list without revision internals", async () => {
     jest.mocked(userRepository.find).mockResolvedValue([
       {
@@ -1586,10 +1685,11 @@ describe("DocumentsService", () => {
       tags: ["tag_1"],
       updatedBy: "old_user",
     } as unknown as Document;
-    jest.mocked(documentRepository.findOne).mockImplementation(
-      async ({ where }: { where?: { docId?: string } }) =>
+    jest
+      .mocked(documentRepository.findOne)
+      .mockImplementation(async ({ where }: { where?: { docId?: string } }) =>
         where?.docId === "doc_36_abcd1234" ? (document as Document) : null,
-    );
+      );
     jest
       .mocked((workspacesService as any).checkAdminPermission)
       .mockResolvedValue(undefined);
@@ -1643,9 +1743,7 @@ describe("DocumentsService", () => {
   });
 
   it("回收站列表会返回自动删除剩余天数", async () => {
-    jest
-      .useFakeTimers()
-      .setSystemTime(new Date("2026-06-08T00:00:00.000Z"));
+    jest.useFakeTimers().setSystemTime(new Date("2026-06-08T00:00:00.000Z"));
     process.env.DOCUMENT_TRASH_RETENTION_DAYS = "14";
 
     const deletedDocument = {
@@ -1709,14 +1807,14 @@ describe("DocumentsService", () => {
       tags: [],
       updatedBy: "old_user",
     } as Document;
-    jest.mocked(documentRepository.findOne).mockImplementation(
-      async ({ where }: { where?: { docId?: string } }) => {
+    jest
+      .mocked(documentRepository.findOne)
+      .mockImplementation(async ({ where }: { where?: { docId?: string } }) => {
         if (where?.docId === "doc_root") return root;
         if (where?.docId === "doc_child") return child;
         if (where?.docId === "doc_grandchild") return grandchild;
         return null;
-      },
-    );
+      });
     jest
       .mocked(documentRepository.find)
       .mockResolvedValueOnce([child])
@@ -1795,8 +1893,9 @@ describe("DocumentsService", () => {
       tags: ["tag_1"],
       updatedBy: "user_old",
     } as Document;
-    jest.mocked(documentRepository.findOne).mockImplementation(
-      async ({ where }: { where?: { docId?: string } }) => {
+    jest
+      .mocked(documentRepository.findOne)
+      .mockImplementation(async ({ where }: { where?: { docId?: string } }) => {
         if (where?.docId === "doc_child") return document;
         if (where?.docId === "doc_parent")
           return {
@@ -1805,8 +1904,7 @@ describe("DocumentsService", () => {
             status: "deleted",
           } as Document;
         return null;
-      },
-    );
+      });
     jest
       .mocked((workspacesService as any).checkAdminPermission)
       .mockResolvedValue(undefined);
@@ -1879,13 +1977,13 @@ describe("DocumentsService", () => {
       tags: ["tag_child"],
       updatedBy: "old_user",
     } as Document;
-    jest.mocked(documentRepository.findOne).mockImplementation(
-      async ({ where }: { where?: { docId?: string } }) => {
+    jest
+      .mocked(documentRepository.findOne)
+      .mockImplementation(async ({ where }: { where?: { docId?: string } }) => {
         if (where?.docId === "doc_root") return root;
         if (where?.docId === "doc_child") return child;
         return null;
-      },
-    );
+      });
     jest
       .mocked(documentRepository.find)
       .mockResolvedValueOnce([child])
@@ -3342,8 +3440,9 @@ describe("DocumentsService", () => {
       manifest: [{ blockId: "block_live", clientId: "client_live" }],
     });
 
+    expect(result).not.toHaveProperty("docId");
+    expect(result).not.toHaveProperty("checkedAt");
     expect(result).toMatchObject({
-      docId: "doc_1",
       draftRevision: 8,
       needsReload: false,
       tombstoned: [
@@ -3452,8 +3551,9 @@ describe("DocumentsService", () => {
       manifest: [],
     });
 
+    expect(result).not.toHaveProperty("docId");
+    expect(result).not.toHaveProperty("checkedAt");
     expect(result).toMatchObject({
-      docId: "doc_1",
       draftRevision: 8,
       needsReload: true,
       conflicts: [{ code: "DRAFT_REVISION_MISMATCH" }],
@@ -3539,9 +3639,9 @@ describe("DocumentsService", () => {
       request,
     );
 
+    expect(result).not.toHaveProperty("docId");
+    expect(result).not.toHaveProperty("checkedAt");
     expect(result).toMatchObject({
-      docId: "doc_1",
-      checkedAt: now,
       draftRevision: 9,
       needsReload: false,
       tombstoned: [{ blockId: "block_old", version: 2 }],

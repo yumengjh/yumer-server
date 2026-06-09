@@ -25,7 +25,11 @@ import {
   BatchOperationType,
   BatchUpdateOperation,
 } from "./dto/batch-block.dto";
-import { SyncBatchResponseDto, SyncOperationResultDto } from "./dto/sync-batch-response.dto";
+import {
+  SyncBatchResponseDto,
+  SyncConflictDto,
+  SyncOperationResultDto,
+} from "./dto/sync-batch-response.dto";
 import { PaginationDto } from "../../common/dto/pagination.dto";
 import { ActivitiesService } from "../activities/activities.service";
 import { BLOCK_ACTIONS } from "../activities/constants/activity-actions";
@@ -64,6 +68,8 @@ type StoredBatchResponse = {
   replayed: boolean;
   createDeleteCompensations: SyncCreateDeleteCompensation[];
 };
+
+type SyncOperationResultWithInternalVersion = SyncOperationResultDto & { version?: number };
 
 @Injectable()
 export class BlocksService {
@@ -415,26 +421,30 @@ export class BlocksService {
   }
 
   private buildBatchResponse(params: {
-    acceptedBatchId: string;
-    appliedAt: number;
     serverHead: number;
     draftRevision: number;
     ackedThroughOpSeq?: number;
     needsReload: boolean;
-    conflicts: SyncBatchResponseDto["conflicts"];
-    results: SyncBatchResponseDto["results"];
+    conflicts: SyncConflictDto[];
+    results: SyncOperationResultWithInternalVersion[];
   }): SyncBatchResponseDto {
+    const results = params.results.map(({ version: _version, ...result }) =>
+      Object.fromEntries(
+        Object.entries(result).filter(
+          ([key, value]) => value !== undefined && !(key === "success" && value === true),
+        ),
+      ) as unknown as SyncOperationResultDto,
+    );
+
     return {
-      acceptedBatchId: params.acceptedBatchId,
-      appliedAt: params.appliedAt,
       serverHead: params.serverHead,
       draftRevision: params.draftRevision,
       ...(typeof params.ackedThroughOpSeq === "number"
         ? { ackedThroughOpSeq: params.ackedThroughOpSeq }
         : {}),
-      needsReload: params.needsReload,
-      conflicts: params.conflicts,
-      results: params.results,
+      ...(params.needsReload ? { needsReload: true } : {}),
+      ...(params.conflicts.length > 0 ? { conflicts: params.conflicts } : {}),
+      ...(results.length > 0 ? { results } : {}),
     };
   }
 
@@ -450,16 +460,14 @@ export class BlocksService {
 
   private mapReceiptToBatchResponse(receipt: SyncBatchReceipt): SyncBatchResponseDto {
     return this.buildBatchResponse({
-      acceptedBatchId: receipt.acceptedBatchId,
-      appliedAt: receipt.appliedAt,
       serverHead: receipt.serverHead,
       draftRevision: receipt.draftRevision,
       ...(typeof receipt.ackedThroughOpSeq === "number"
         ? { ackedThroughOpSeq: receipt.ackedThroughOpSeq }
         : {}),
       needsReload: receipt.needsReload,
-      conflicts: receipt.conflicts as unknown as SyncBatchResponseDto["conflicts"],
-      results: receipt.results as unknown as SyncBatchResponseDto["results"],
+      conflicts: (receipt.conflicts ?? []) as unknown as SyncConflictDto[],
+      results: (receipt.results ?? []) as unknown as SyncOperationResultWithInternalVersion[],
     });
   }
 
@@ -481,14 +489,14 @@ export class BlocksService {
       docId: params.docId,
       clientBatchId: params.clientBatchId,
       requestFingerprint: params.requestFingerprint,
-      acceptedBatchId: params.response.acceptedBatchId,
-      appliedAt: params.response.appliedAt,
+      acceptedBatchId: params.clientBatchId,
+      appliedAt: params.now,
       serverHead: params.response.serverHead,
       draftRevision: params.response.draftRevision,
       ackedThroughOpSeq: params.response.ackedThroughOpSeq ?? null,
-      needsReload: params.response.needsReload,
-      conflicts: params.response.conflicts,
-      results: params.response.results,
+      needsReload: params.response.needsReload ?? false,
+      conflicts: params.response.conflicts ?? [],
+      results: params.response.results ?? [],
       createdBy: existing?.createdBy ?? params.userId,
       createdAt: existing?.createdAt ?? params.now,
       updatedAt: params.now,
@@ -1122,8 +1130,6 @@ export class BlocksService {
         if (!acceptedBatchId) {
           return {
             response: this.buildBatchResponse({
-              acceptedBatchId: "missing-client-batch-id",
-              appliedAt,
               serverHead: docInTx.head,
               draftRevision: serverDraftRevision,
               needsReload: true,
@@ -1150,8 +1156,6 @@ export class BlocksService {
           if (existingReceipt.requestFingerprint !== requestFingerprint) {
             return {
               response: this.buildBatchResponse({
-                acceptedBatchId,
-                appliedAt,
                 serverHead: docInTx.head,
                 draftRevision: serverDraftRevision,
                 needsReload: true,
@@ -1177,8 +1181,6 @@ export class BlocksService {
 
         if (typeof batchBlockDto.baseVersion !== "number") {
           const response = this.buildBatchResponse({
-            acceptedBatchId,
-            appliedAt,
             serverHead: docInTx.head,
             draftRevision: serverDraftRevision,
             needsReload: true,
@@ -1209,8 +1211,6 @@ export class BlocksService {
 
         if (batchBlockDto.baseVersion !== docInTx.head) {
           const response = this.buildBatchResponse({
-            acceptedBatchId,
-            appliedAt,
             serverHead: docInTx.head,
             draftRevision: serverDraftRevision,
             needsReload: true,
@@ -1242,8 +1242,6 @@ export class BlocksService {
 
         if (!shouldCreateVersion && clientDraftRevision !== serverDraftRevision) {
           const response = this.buildBatchResponse({
-            acceptedBatchId,
-            appliedAt,
             serverHead: docInTx.head,
             draftRevision: serverDraftRevision,
             needsReload: true,
@@ -1281,8 +1279,6 @@ export class BlocksService {
         if (currentSyncSession) {
           if (!batchBlockDto.sessionId || typeof batchBlockDto.sessionEpoch !== "number") {
             const response = this.buildBatchResponse({
-              acceptedBatchId,
-              appliedAt,
               serverHead: docInTx.head,
               draftRevision: serverDraftRevision,
               needsReload: true,
@@ -1315,8 +1311,6 @@ export class BlocksService {
             currentSyncSession.sessionEpoch !== batchBlockDto.sessionEpoch
           ) {
             const response = this.buildBatchResponse({
-              acceptedBatchId,
-              appliedAt,
               serverHead: docInTx.head,
               draftRevision: serverDraftRevision,
               needsReload: true,
@@ -1346,8 +1340,6 @@ export class BlocksService {
           }
           if (currentSyncSession.leaseExpiresAt < Date.now()) {
             const response = this.buildBatchResponse({
-              acceptedBatchId,
-              appliedAt,
               serverHead: docInTx.head,
               draftRevision: serverDraftRevision,
               needsReload: true,
@@ -1548,8 +1540,6 @@ export class BlocksService {
         });
 
         const response = this.buildBatchResponse({
-          acceptedBatchId,
-          appliedAt,
           serverHead: docAfterBatch?.head ?? docInTx.head,
           draftRevision,
           ...(!hasFailures && typeof batchBlockDto.ackedThroughOpSeq === "number"

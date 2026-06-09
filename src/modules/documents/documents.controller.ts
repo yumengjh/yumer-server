@@ -45,6 +45,10 @@ import { UpdateEditorStateDto } from "./dto/update-editor-state.dto";
 import { ExportDocumentDto } from "./dto/export-document.dto";
 import { SyncStateResponseDto } from "./dto/sync-state-response.dto";
 import { PublishVersionDto } from "./dto/publish-version.dto";
+import {
+  DocumentDetailResponse,
+  DocumentSnapshotResponse,
+} from "./dto/document-response.dto";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import { AuditLog } from "../../common/decorators/audit-log.decorator";
@@ -90,7 +94,11 @@ export class DocumentsController {
   @HttpCode(HttpStatus.CREATED)
   @AuditLog({ action: "CREATE", resourceType: "document" })
   @ApiOperation({ summary: "Create document" })
-  @ApiResponse({ status: 201, description: "Created" })
+  @ApiResponse({
+    status: 201,
+    description: "Created",
+    type: DocumentDetailResponse,
+  })
   @ApiResponse({ status: 400, description: "Bad request" })
   @ApiResponse({ status: 403, description: "Forbidden" })
   async create(
@@ -143,7 +151,11 @@ export class DocumentsController {
   @SitePublic()
   @ApiOperation({ summary: "Get document details" })
   @ApiParam({ name: "docId", description: "Document ID" })
-  @ApiResponse({ status: 200, description: "Success" })
+  @ApiResponse({
+    status: 200,
+    description: "Success",
+    type: DocumentDetailResponse,
+  })
   @ApiResponse({ status: 404, description: "Document not found" })
   @ApiResponse({ status: 403, description: "Forbidden" })
   async findOne(@Param("docId") docId: string, @CurrentUser() user: any) {
@@ -349,7 +361,9 @@ export class DocumentsController {
     const result = await this.documentsService.publish(docId, user.userId);
     return {
       ...result,
-      document: await this.documentsService.presentDocumentDetail(result.document),
+      document: await this.documentsService.presentDocumentDetail(
+        result.document,
+      ),
     };
   }
 
@@ -371,7 +385,9 @@ export class DocumentsController {
     );
     return {
       ...result,
-      document: await this.documentsService.presentDocumentDetail(result.document),
+      document: await this.documentsService.presentDocumentDetail(
+        result.document,
+      ),
     };
   }
 
@@ -385,7 +401,9 @@ export class DocumentsController {
     const result = await this.documentsService.unpublish(docId, user.userId);
     return {
       ...result,
-      document: await this.documentsService.presentDocumentDetail(result.document),
+      document: await this.documentsService.presentDocumentDetail(
+        result.document,
+      ),
     };
   }
 
@@ -527,26 +545,35 @@ export class DocumentsController {
     @Body() revertDto: RevertVersionDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.revert(
+    const document = await this.documentsService.revert(
       docId,
       revertDto.version,
       user.userId,
       revertDto.draftStrategy,
     );
+    return this.documentsService.presentDocumentDetail(document);
   }
 
   @Post(":docId/snapshots")
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: "Create snapshot" })
   @ApiParam({ name: "docId", description: "Document ID" })
-  @ApiResponse({ status: 201, description: "Created" })
+  @ApiResponse({
+    status: 201,
+    description: "Created",
+    type: DocumentSnapshotResponse,
+  })
   @ApiResponse({ status: 404, description: "Document not found" })
   @ApiResponse({ status: 403, description: "Forbidden" })
   async createSnapshot(
     @Param("docId") docId: string,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.createSnapshot(docId, user.userId);
+    const snapshot = await this.documentsService.createSnapshot(
+      docId,
+      user.userId,
+    );
+    return this.documentsService.presentDocumentSnapshot(snapshot);
   }
 
   @Post(":docId/commit")

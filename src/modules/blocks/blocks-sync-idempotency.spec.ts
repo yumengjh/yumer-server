@@ -348,8 +348,7 @@ describe("BlocksService sync idempotency", () => {
     const first = await service.batch(batch, "user_1");
     const second = await service.batch(batch, "user_1");
 
-    expect(first.needsReload).toBe(false);
-    expect(first.acceptedBatchId).toBe("batch_replay_same_key");
+    expect(first.needsReload ?? false).toBe(false);
     expect(first.serverHead).toBe(2);
     expect(second).toEqual(first);
     expect(blocks.filter((block) => block.type === "paragraph")).toHaveLength(1);
@@ -481,12 +480,11 @@ describe("BlocksService sync idempotency", () => {
       "user_1",
     );
 
-    expect(first.needsReload).toBe(false);
-    expect(second.needsReload).toBe(false);
+    expect(first.needsReload ?? false).toBe(false);
+    expect(second.needsReload ?? false).toBe(false);
     expect(second.results[0]).toEqual(
       expect.objectContaining({
         operation: BatchOperationType.CREATE,
-        success: true,
         clientId: "client_sync_create",
       }),
     );
@@ -547,6 +545,48 @@ describe("BlocksService sync idempotency", () => {
     expect(source).toContain('code: "SYNC_SESSION_REQUIRED"');
     expect(source).toContain("sessionId and sessionEpoch are required for sync batch writes");
     expect(source).toContain('code: "SYNC_SESSION_MISMATCH"');
+  });
+
+  it("omits transport-only timestamps and block version numbers from batch ack responses", async () => {
+    const { service } = createBlocksServiceWithInMemoryRepositories();
+
+    const response = await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        draftRevision: 0,
+        clientBatchId: "batch_trim_ack",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.CREATE,
+            clientId: "client_trim",
+            data: {
+              docId: "doc_1",
+              type: "paragraph",
+              parentId: "root_1",
+              sortKey: "001500",
+              payload: { type: "paragraph" },
+            },
+          } satisfies BatchCreateOperation,
+        ],
+      } as any,
+      "user_1",
+    );
+
+    expect(response).not.toHaveProperty("acceptedBatchId");
+    expect(response).not.toHaveProperty("appliedAt");
+    expect(response).not.toHaveProperty("needsReload");
+    expect(response).not.toHaveProperty("conflicts");
+    expect(response.results[0]).toMatchObject({
+      operation: "create",
+      clientId: "client_trim",
+      blockId: expect.any(String),
+      sortKey: "001500",
+    });
+    expect(response.results[0]).not.toHaveProperty("success");
+    expect(response.results[0]).not.toHaveProperty("version");
   });
 
   it("stores the batch ack high watermark in the active sync session", async () => {
@@ -633,7 +673,7 @@ describe("BlocksService sync idempotency", () => {
 
     expect(response.results).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ operation: BatchOperationType.CREATE, success: true }),
+        expect.objectContaining({ operation: BatchOperationType.CREATE }),
         expect.objectContaining({ operation: BatchOperationType.UPDATE, success: false }),
       ]),
     );
@@ -670,7 +710,7 @@ describe("BlocksService sync idempotency", () => {
     const first = await service.batch(batch, "user_1");
     const second = await service.batch(batch, "user_1");
 
-    expect(first.needsReload).toBe(false);
+    expect(first.needsReload ?? false).toBe(false);
     expect(second).toEqual(first);
     expect(blocks.filter((block) => block.type === "paragraph")).toHaveLength(1);
   });
@@ -734,7 +774,7 @@ describe("BlocksService sync idempotency", () => {
       "user_1",
     );
 
-    expect(first.needsReload).toBe(false);
+    expect(first.needsReload ?? false).toBe(false);
     expect(second.needsReload).toBe(true);
     expect(second.conflicts).toEqual([
       expect.objectContaining({ code: "DRAFT_REVISION_MISMATCH" }),
@@ -1099,9 +1139,7 @@ describe("BlocksService sync idempotency", () => {
 
     expect(deleted.results[0]).toEqual({
       operation: BatchOperationType.DELETE,
-      success: true,
       blockId,
-      version: 2,
       matchBy: "blockId",
     });
     expect(warnSpy).toHaveBeenCalledWith(
@@ -1165,7 +1203,6 @@ describe("BlocksService sync idempotency", () => {
 
     expect(deleted.results[0]).toMatchObject({
       operation: BatchOperationType.DELETE,
-      success: true,
       blockId: created.results[0].blockId,
     });
   });
@@ -1194,7 +1231,6 @@ describe("BlocksService sync idempotency", () => {
 
     expect(deleted.results[0]).toMatchObject({
       operation: BatchOperationType.DELETE,
-      success: true,
       clientId: "client_missing_delete",
       matchBy: "not_found",
       diagnosticCode: "DELETE_TARGET_NOT_FOUND_BY_CLIENT_IDENTITY",
@@ -1263,7 +1299,6 @@ describe("BlocksService sync idempotency", () => {
 
     expect(created.results[0]).toMatchObject({
       operation: BatchOperationType.CREATE,
-      success: true,
       clientId: "client_late_create",
       tombstoned: true,
       diagnosticCode: "CREATE_SUPPRESSED_BY_TOMBSTONE",

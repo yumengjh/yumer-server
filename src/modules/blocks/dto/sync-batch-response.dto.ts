@@ -27,8 +27,11 @@ export class SyncOperationResultDto {
   @ApiProperty({ description: '操作类型', example: 'create' })
   operation: string;
 
-  @ApiProperty({ description: '是否成功', example: true })
-  success: boolean;
+  @ApiPropertyOptional({
+    description: '是否成功；省略时表示 true',
+    example: false,
+  })
+  success?: boolean;
 
   @ApiPropertyOptional({
     description: '客户端传入的 clientId（create/delete ack 回填）',
@@ -47,9 +50,6 @@ export class SyncOperationResultDto {
     example: '001500',
   })
   sortKey?: string;
-
-  @ApiPropertyOptional({ description: '操作后的版本号', example: 2 })
-  version?: number;
 
   @ApiPropertyOptional({ description: '错误信息', example: 'Block not found' })
   error?: string;
@@ -74,18 +74,6 @@ export class SyncOperationResultDto {
 }
 
 export class SyncBatchResponseDto {
-  @ApiProperty({
-    description: '服务端接受的批次ID',
-    example: 'batch_20260519_001',
-  })
-  acceptedBatchId: string;
-
-  @ApiProperty({
-    description: '服务端应用时间戳（ms）',
-    example: 1747632000000,
-  })
-  appliedAt: number;
-
   @ApiProperty({ description: '服务端最新 head', example: 5 })
   serverHead: number;
 
@@ -101,15 +89,18 @@ export class SyncBatchResponseDto {
   })
   ackedThroughOpSeq?: number;
 
-  @ApiProperty({ description: '是否需要客户端 reload', example: false })
-  needsReload: boolean;
-
-  @ApiProperty({ type: () => [SyncConflictDto], description: '冲突列表' })
-  conflicts: SyncConflictDto[];
-
-  @ApiProperty({
-    type: () => [SyncOperationResultDto],
-    description: '逐操作结果与 ack 信息',
+  @ApiPropertyOptional({
+    description: '是否需要客户端 reload；省略时表示 false',
+    example: true,
   })
-  results: SyncOperationResultDto[];
+  needsReload?: boolean;
+
+  @ApiPropertyOptional({ type: () => [SyncConflictDto], description: '冲突列表；空数组时省略' })
+  conflicts?: SyncConflictDto[];
+
+  @ApiPropertyOptional({
+    type: () => [SyncOperationResultDto],
+    description: '逐操作结果与 ack 信息；空数组时省略',
+  })
+  results?: SyncOperationResultDto[];
 }
