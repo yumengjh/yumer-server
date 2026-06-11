@@ -31,7 +31,8 @@
     "openapi:export": "ts-node -r tsconfig-paths/register scripts/export-openapi.ts",
     "batch-insert-blocks": "node scripts/batch-insert-blocks.js",
     "rebuild:sqlite": "cd node_modules/better-sqlite3 && npx node-gyp rebuild",
-    "snapshots:backfill": "ts-node -r tsconfig-paths/register scripts/backfill-doc-snapshots.ts"
+    "snapshots:backfill": "ts-node -r tsconfig-paths/register scripts/backfill-doc-snapshots.ts",
+    "sortkeys:migrate": "ts-node -r tsconfig-paths/register scripts/migrate-sortkeys-to-fractional.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.917.0",

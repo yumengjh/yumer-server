@@ -177,9 +177,9 @@ export class BatchBlockDto {
   operations: BatchOperation[];
 
   @ApiPropertyOptional({
-    description: '是否立即创建文档版本',
-    example: true,
-    default: true,
+    description: '是否立即创建文档版本（同步批次默认草稿语义，省略即 false）',
+    example: false,
+    default: false,
   })
   @IsOptional()
   @IsBoolean()

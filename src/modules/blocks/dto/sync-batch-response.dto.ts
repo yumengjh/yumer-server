@@ -103,4 +103,11 @@ export class SyncBatchResponseDto {
     description: '逐操作结果与 ack 信息；空数组时省略',
   })
   results?: SyncOperationResultDto[];
+
+  @ApiPropertyOptional({
+    description:
+      '顶层清单摘要（根块直属块 blockId 按 sortKey 字节序排序后 sha256）。客户端本地比对一致即可跳过全量 sync-reconcile',
+    example: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+  })
+  manifestDigest?: string;
 }

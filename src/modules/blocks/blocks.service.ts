@@ -13,7 +13,10 @@ import { DocumentsService } from "../documents/documents.service";
 import { DocumentDraftService } from "../documents/services/document-draft.service";
 import { DocumentSnapshotService } from "../documents/services/document-snapshot.service";
 import { generateBlockId, generateVersionId } from "../../common/utils/id-generator.util";
-import { generateSortKey as generateSortKeyUtil } from "../../common/utils/sort-key.util";
+import {
+  generateSortKey as generateSortKeyUtil,
+  compareSortKey as compareSortKeyUtil,
+} from "../../common/utils/sort-key.util";
 import { CreateBlockDto } from "./dto/create-block.dto";
 import { UpdateBlockDto } from "./dto/update-block.dto";
 import { MoveBlockDto } from "./dto/move-block.dto";
@@ -82,6 +85,8 @@ type SyncOperationResultWithInternalVersion = SyncOperationResultDto & { version
 
 @Injectable()
 export class BlocksService {
+  private static readonly BATCH_ACTIVITY_SAMPLE_RATE = 0.1;
+
   private readonly logger = new Logger(BlocksService.name);
   private readonly createDeleteCompensationWindowMs = 60_000;
   private readonly syncSessionLeaseMs = 5 * 60 * 1000;
@@ -320,7 +325,7 @@ export class BlocksService {
           const preservedSortKey =
             latestVersionInfo.sortKey && latestVersionInfo.sortKey.trim() !== ""
               ? latestVersionInfo.sortKey
-              : "500000";
+              : generateSortKeyUtil();
 
           const blockVersion = manager.create(BlockVersion, {
             versionId: generateVersionId(blockId, newVer),
@@ -335,7 +340,7 @@ export class BlocksService {
             collapsed: latestVersionInfo.collapsed,
             payload: updateBlockDto.payload,
             hash,
-            plainText: updateBlockDto.plainText || this.extractPlainText(updateBlockDto.payload),
+            plainText: this.extractPlainText(updateBlockDto.payload),
             refs: [],
           });
 
@@ -420,7 +425,7 @@ export class BlocksService {
   private buildBatchRequestFingerprint(batchBlockDto: BatchBlockDto): string {
     return JSON.stringify({
       docId: batchBlockDto.docId,
-      createVersion: batchBlockDto.createVersion !== false,
+      createVersion: batchBlockDto.createVersion === true,
       baseVersion: batchBlockDto.baseVersion ?? null,
       draftRevision: batchBlockDto.draftRevision ?? null,
       source: batchBlockDto.source ?? null,
@@ -438,6 +443,7 @@ export class BlocksService {
     needsReload: boolean;
     conflicts: SyncConflictDto[];
     results: SyncOperationResultWithInternalVersion[];
+    manifestDigest?: string;
   }): SyncBatchResponseDto {
     const results = params.results.map(({ version: _version, ...result }) =>
       Object.fromEntries(
@@ -456,7 +462,41 @@ export class BlocksService {
       ...(params.needsReload ? { needsReload: true } : {}),
       ...(params.conflicts.length > 0 ? { conflicts: params.conflicts } : {}),
       ...(results.length > 0 ? { results } : {}),
+      ...(params.manifestDigest ? { manifestDigest: params.manifestDigest } : {}),
     };
+  }
+
+  /**
+   * 顶层清单摘要：根块直属、未删除块的 blockId 按 (sortKey, blockId) 字节序
+   * 排序后拼接哈希。客户端用同一算法本地比对，仅 mismatch 才触发全量 sync-reconcile。
+   */
+  private async computeRootManifestDigest(
+    docId: string,
+    rootBlockId: string,
+    manager: EntityManager,
+  ): Promise<string> {
+    const siblings = await manager
+      .getRepository(BlockVersion)
+      .createQueryBuilder("bv")
+      .innerJoin(Block, "b", "bv.blockId = b.blockId AND b.isDeleted = false")
+      .where("bv.docId = :docId", { docId })
+      .andWhere("bv.parentId = :parentId", { parentId: rootBlockId })
+      .andWhere("bv.ver = b.latestVer")
+      .getMany();
+
+    const blockIds = siblings
+      .filter((sibling) => {
+        const attrs = (sibling.payload as { attrs?: Record<string, unknown> } | undefined)?.attrs;
+        return attrs?.deleted !== true;
+      })
+      .sort((a, b) => {
+        const bySortKey = compareSortKeyUtil(a.sortKey ?? "", b.sortKey ?? "");
+        if (bySortKey !== 0) return bySortKey;
+        return a.blockId < b.blockId ? -1 : a.blockId > b.blockId ? 1 : 0;
+      })
+      .map((sibling) => sibling.blockId);
+
+    return createHash("sha256").update(blockIds.join("|")).digest("hex");
   }
 
   private normalizeRemoteSource(source?: BatchSourceType): DocumentRemoteOpsEvent["source"] {
@@ -531,11 +571,20 @@ export class BlocksService {
           blockId,
           payload: this.withCanonicalRemoteAttrs(
             operation.data.payload as Record<string, unknown>,
-            { blockId },
+            { blockId, sortKey: result.sortKey ?? null },
           ),
-          plainText: operation.data.plainText,
           version: result.version,
         });
+        // update 携带 sortKey 时等价于同批 move，补发 move 远端事件以触发重排
+        if (result.sortKey) {
+          remoteOperations.push({
+            type: "move",
+            blockId,
+            parentId: operation.data.parentId || input.rootBlockId,
+            sortKey: result.sortKey,
+            version: result.version,
+          });
+        }
         continue;
       }
 
@@ -761,32 +810,12 @@ export class BlocksService {
     return JSON.stringify(payload);
   }
 
-  private parseSortKey(value: string | null | undefined): number | null {
-    if (!value || value.trim() === "") return null;
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  private formatSortKey(value: number): string {
-    return String(Math.max(0, Math.floor(value))).padStart(6, "0");
-  }
-
   private createSortKeyBetween(previous: string | null, next: string | null): string {
-    const previousValue = this.parseSortKey(previous);
-    const nextValue = this.parseSortKey(next);
-
-    if (previousValue == null && nextValue == null) return "001000";
-    if (previousValue == null && nextValue != null) return this.formatSortKey(nextValue / 2);
-    if (previousValue != null && nextValue == null) return this.formatSortKey(previousValue + 1000);
-
-    const left = previousValue ?? 0;
-    const right = nextValue ?? left + 1000;
-    if (right - left <= 1) return this.formatSortKey(left + 1);
-    return this.formatSortKey((left + right) / 2);
+    return generateSortKeyUtil(previous ?? undefined, next ?? undefined);
   }
 
   private compareSortKeys(left: string, right: string): number {
-    return (this.parseSortKey(left) ?? 0) - (this.parseSortKey(right) ?? 0);
+    return compareSortKeyUtil(left, right);
   }
 
   private mergePayloadPreservingSyncAttrs(
@@ -924,24 +953,17 @@ export class BlocksService {
       return generateSortKeyUtil();
     }
 
-    // 在 JavaScript 中按 sortKey 排序（数字比较）
+    // 在 JavaScript 中按 sortKey 排序（字节序比较）
     siblings.sort((a, b) => {
-      const sortKeyA = a.sortKey && a.sortKey.trim() !== "" ? parseInt(a.sortKey, 10) || 0 : 0;
-      const sortKeyB = b.sortKey && b.sortKey.trim() !== "" ? parseInt(b.sortKey, 10) || 0 : 0;
-      if (sortKeyA !== sortKeyB) {
-        return sortKeyA - sortKeyB;
-      }
+      const bySortKey = compareSortKeyUtil(a.sortKey ?? "", b.sortKey ?? "");
+      if (bySortKey !== 0) return bySortKey;
       // 如果 sortKey 相同，按 blockId 排序
-      return a.blockId.localeCompare(b.blockId);
+      return a.blockId < b.blockId ? -1 : a.blockId > b.blockId ? 1 : 0;
     });
 
-    // 获取最后一个同级块的 sortKey
+    // 获取最后一个同级块的 sortKey，生成比它更大的 sortKey
     const lastSibling = siblings[siblings.length - 1];
-    const lastSortKey =
-      lastSibling.sortKey && lastSibling.sortKey.trim() !== "" ? lastSibling.sortKey : "500000";
-
-    // 生成比最后一个更大的 sortKey
-    return generateSortKeyUtil(lastSortKey);
+    return generateSortKeyUtil(lastSibling.sortKey ?? undefined);
   }
 
   /**
@@ -1291,7 +1313,8 @@ export class BlocksService {
           throw new NotFoundException("Document not found");
         }
 
-        const shouldCreateVersion = batchBlockDto.createVersion !== false;
+        // 同步批次默认走草稿语义；只有显式 createVersion=true 才立即创建文档版本
+        const shouldCreateVersion = batchBlockDto.createVersion === true;
         const serverDraftRevision = docInTx.draftRevision ?? 0;
         const clientDraftRevision = batchBlockDto.draftRevision ?? 0;
         const appliedAt = Date.now();
@@ -1341,8 +1364,29 @@ export class BlocksService {
               createDeleteCompensations: [],
             };
           }
+          const replayedResponse = this.mapReceiptToBatchResponse(existingReceipt);
+          const manifestDigest =
+            !replayedResponse.needsReload
+              ? await this.computeRootManifestDigest(
+                  batchBlockDto.docId,
+                  docInTx.rootBlockId,
+                  manager,
+                )
+              : undefined;
           return {
-            response: this.mapReceiptToBatchResponse(existingReceipt),
+            response: this.buildBatchResponse({
+              serverHead: replayedResponse.serverHead,
+              draftRevision: replayedResponse.draftRevision,
+              ...(typeof replayedResponse.ackedThroughOpSeq === "number"
+                ? { ackedThroughOpSeq: replayedResponse.ackedThroughOpSeq }
+                : {}),
+              needsReload: replayedResponse.needsReload ?? false,
+              conflicts: replayedResponse.conflicts ?? [],
+              results:
+                (replayedResponse.results ??
+                  []) as unknown as SyncOperationResultWithInternalVersion[],
+              manifestDigest,
+            }),
             replayed: true,
             createDeleteCompensations: [],
           };
@@ -1582,6 +1626,7 @@ export class BlocksService {
                 userId,
                 now,
                 manager,
+                reservedSortKeysByParent,
               );
               if (!shouldCreateVersion) {
                 draftMutations.push({
@@ -1708,6 +1753,12 @@ export class BlocksService {
           select: ["head"],
         });
 
+        const manifestDigest = await this.computeRootManifestDigest(
+          batchBlockDto.docId,
+          docInTx.rootBlockId,
+          manager,
+        );
+
         const response = this.buildBatchResponse({
           serverHead: docAfterBatch?.head ?? docInTx.head,
           draftRevision,
@@ -1717,6 +1768,7 @@ export class BlocksService {
           needsReload: false,
           conflicts: [],
           results,
+          manifestDigest,
         });
         const remoteEvent = !hasFailures
           ? this.buildDocumentRemoteOpsEvent({
@@ -1799,21 +1851,33 @@ export class BlocksService {
       );
     }
 
-    const doc = await this.documentRepository.findOne({
-      where: { docId: batchBlockDto.docId },
-      select: ["workspaceId"],
-    });
-    if (doc)
-      await this.activitiesService.record(
-        doc.workspaceId,
-        BLOCK_ACTIONS.BATCH,
-        "block",
-        batchBlockDto.docId,
-        userId,
-        {
-          count: batchBlockDto.operations.length,
-        },
-      );
+    // activity 记录移出响应关键路径：fire-and-forget + 采样，
+    // 高频 autosync 批次不再为审计日志付出额外的响应延迟
+    if (Math.random() < BlocksService.BATCH_ACTIVITY_SAMPLE_RATE) {
+      void this.documentRepository
+        .findOne({
+          where: { docId: batchBlockDto.docId },
+          select: ["workspaceId"],
+        })
+        .then((doc) =>
+          doc
+            ? this.activitiesService.record(
+                doc.workspaceId,
+                BLOCK_ACTIONS.BATCH,
+                "block",
+                batchBlockDto.docId,
+                userId,
+                {
+                  count: batchBlockDto.operations.length,
+                  sampled: true,
+                },
+              )
+            : undefined,
+        )
+        .catch((error: Error) => {
+          this.logger.warn(`batch activity record failed: ${error.message}`);
+        });
+    }
 
     return {
       ...txResult.response,
@@ -2100,7 +2164,8 @@ export class BlocksService {
     userId: string,
     now: number,
     manager: EntityManager,
-  ): Promise<{ blockId: string; version: number }> {
+    reservedSortKeysByParent: Map<string, Set<string>>,
+  ): Promise<{ blockId: string; version: number; sortKey?: string }> {
     const block = await manager.findOne(Block, {
       where: { blockId: operation.blockId, docId, isDeleted: false },
     });
@@ -2118,10 +2183,26 @@ export class BlocksService {
     const latestVersion = await manager.findOne(BlockVersion, {
       where: { docId, blockId: operation.blockId, ver: block.latestVer },
     });
+
+    // update 携带结构字段时在同一个版本写入中完成 move，免去额外的 move 操作
+    const requestedSortKey = operation.data.sortKey?.trim();
+    const hasStructuralChange = Boolean(requestedSortKey);
+    const parentId = operation.data.parentId || latestVersion?.parentId || "";
+    const resolvedSortKey = hasStructuralChange
+      ? await this.reserveUniqueSortKey({
+          docId,
+          parentId,
+          requestedSortKey,
+          manager,
+          reservedByParent: reservedSortKeysByParent,
+          excludeBlockId: operation.blockId,
+        })
+      : latestVersion?.sortKey || generateSortKeyUtil();
+
     const payload = this.mergePayloadPreservingSyncAttrs(
       operation.data.payload as Record<string, unknown>,
       (latestVersion?.payload as Record<string, unknown> | undefined) ?? undefined,
-      latestVersion?.sortKey,
+      resolvedSortKey,
     );
     const hash = this.calculateHash(payload);
 
@@ -2132,13 +2213,13 @@ export class BlocksService {
       ver: newVer,
       createdAt: now,
       createdBy: userId,
-      parentId: latestVersion?.parentId || "",
-      sortKey: latestVersion?.sortKey || "0",
+      parentId,
+      sortKey: resolvedSortKey,
       indent: latestVersion?.indent || 0,
       collapsed: latestVersion?.collapsed || false,
       payload,
       hash,
-      plainText: operation.data.plainText || this.extractPlainText(payload),
+      plainText: this.extractPlainText(payload),
       refs: [],
     });
 
@@ -2149,7 +2230,11 @@ export class BlocksService {
     block.latestBy = userId;
     await manager.save(Block, block);
 
-    return { blockId: operation.blockId, version: newVer };
+    return {
+      blockId: operation.blockId,
+      version: newVer,
+      ...(hasStructuralChange ? { sortKey: resolvedSortKey } : {}),
+    };
   }
 
   private async handleBatchDelete(

@@ -6,10 +6,21 @@ export class UpdateBlockDto {
   @IsObject()
   payload: object;
 
-  @ApiPropertyOptional({ description: '纯文本内容（用于搜索）', example: '更新的块内容' })
+  @ApiPropertyOptional({
+    description: '新排序键（携带时本次 update 同时完成 move，免去单独的 move 操作）',
+    example: 'a1V',
+  })
   @IsOptional()
   @IsString()
-  plainText?: string;
+  sortKey?: string;
+
+  @ApiPropertyOptional({
+    description: '新父块ID（仅与 sortKey 搭配使用）',
+    example: 'b_1234567890_abc123',
+  })
+  @IsOptional()
+  @IsString()
+  parentId?: string;
 
   @ApiPropertyOptional({
     description: '是否立即创建文档版本',

@@ -43,7 +43,10 @@ import {
   generateBlockId,
   generateVersionId,
 } from "../../common/utils/id-generator.util";
-import { compareSortKey } from "../../common/utils/sort-key.util";
+import {
+  compareSortKey,
+  sortKeyOrderByExpression,
+} from "../../common/utils/sort-key.util";
 import { CreateDocumentDto } from "./dto/create-document.dto";
 import { UpdateDocumentDto } from "./dto/update-document.dto";
 import { UpdateEditorStateDto } from "./dto/update-editor-state.dto";
@@ -3977,7 +3980,7 @@ export class DocumentsService {
       .addSelect("MAX(bv.ver)", "maxVer")
       .addSelect("MAX(bv.sortKey)", "sortKey")
       .groupBy("bv.blockId")
-      .orderBy("CAST(MAX(bv.sortKey) AS INTEGER)", "ASC") // 按数字排序
+      .orderBy(sortKeyOrderByExpression("MAX(bv.sortKey)"), "ASC")
       .addOrderBy("bv.blockId", "ASC")
       .getRawMany();
 
@@ -4223,7 +4226,7 @@ export class DocumentsService {
       .addSelect("MAX(bv.ver)", "maxVer")
       .addSelect("MAX(bv.sortKey)", "sortKey")
       .groupBy("bv.blockId")
-      .orderBy("MAX(bv.sortKey)", "ASC")
+      .orderBy(sortKeyOrderByExpression("MAX(bv.sortKey)"), "ASC")
       .addOrderBy("bv.blockId", "ASC")
       .limit(remainingLimit) // 限制查询数量
       .getRawMany();

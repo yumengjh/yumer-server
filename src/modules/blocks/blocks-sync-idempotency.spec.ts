@@ -13,6 +13,14 @@ import { Document } from "../../entities/document.entity";
 import { DocumentSyncSession } from "../../entities/document-sync-session.entity";
 import { SyncBatchReceipt } from "../../entities/sync-batch-receipt.entity";
 import { SyncCreateTombstone } from "../../entities/sync-create-tombstone.entity";
+import {
+  compareSortKeys,
+  integerToSortKey,
+} from "../../common/utils/sort-key.util";
+
+const SK0 = integerToSortKey(1);
+const SK1 = integerToSortKey(2);
+const SK2 = integerToSortKey(3);
 
 type PersistedValue = Partial<Block> & Partial<BlockVersion> & Partial<Document>;
 type BlocksServiceConstructorArgs = ConstructorParameters<typeof BlocksService>;
@@ -797,7 +805,7 @@ describe("BlocksService sync idempotency", () => {
       blockId: "block_b",
       ver: 1,
       parentId: "root_1",
-      sortKey: "002000",
+      sortKey: SK2,
       payload: { type: "paragraph", attrs: { clientId: "client_b" } },
       hash: "b",
       refs: [],
@@ -818,7 +826,7 @@ describe("BlocksService sync idempotency", () => {
             docId: "doc_1",
             type: "paragraph",
             parentId: "root_1",
-            sortKey: "002000",
+            sortKey: SK2,
             payload: {
               type: "paragraph",
               attrs: { clientId: `client_${suffix}` },
@@ -833,7 +841,11 @@ describe("BlocksService sync idempotency", () => {
 
     expect(response.draftRevision).toBe(1);
     expect(new Set(createdSortKeys).size).toBe(2);
-    expect(createdSortKeys.every((sortKey) => sortKey && sortKey < "002000")).toBe(true);
+    expect(
+      createdSortKeys.every(
+        (sortKey) => sortKey && compareSortKeys(sortKey, SK2) < 0,
+      ),
+    ).toBe(true);
   });
 
   it("stores a unique sortKey when non-batch create requests an occupied sortKey", async () => {
@@ -851,7 +863,7 @@ describe("BlocksService sync idempotency", () => {
       blockId: "block_existing",
       ver: 1,
       parentId: "root_1",
-      sortKey: "001000",
+      sortKey: SK0,
       payload: { type: "paragraph" },
       hash: "existing",
       refs: [],
@@ -862,7 +874,7 @@ describe("BlocksService sync idempotency", () => {
         docId: "doc_1",
         type: "paragraph",
         parentId: "root_1",
-        sortKey: "001000",
+        sortKey: SK0,
         payload: {
           type: "paragraph",
           attrs: { clientId: "client_non_batch_create" },
@@ -872,7 +884,7 @@ describe("BlocksService sync idempotency", () => {
       "user_1",
     );
 
-    expect(created.sortKey).not.toBe("001000");
+    expect(created.sortKey).not.toBe(SK0);
     expect(
       new Set(
         versions
@@ -907,7 +919,7 @@ describe("BlocksService sync idempotency", () => {
         blockId: "block_a",
         ver: 1,
         parentId: "root_1",
-        sortKey: "001000",
+        sortKey: SK0,
         payload: { type: "paragraph", attrs: { clientId: "client_a" } },
         hash: "a",
         refs: [],
@@ -918,7 +930,7 @@ describe("BlocksService sync idempotency", () => {
         blockId: "block_b",
         ver: 1,
         parentId: "root_1",
-        sortKey: "002000",
+        sortKey: SK2,
         payload: { type: "paragraph", attrs: { clientId: "client_b" } },
         hash: "b",
         refs: [],
@@ -929,13 +941,13 @@ describe("BlocksService sync idempotency", () => {
       "block_a",
       {
         parentId: "root_1",
-        sortKey: "002000",
+        sortKey: SK2,
         createVersion: false,
       } satisfies MoveBlockDto,
       "user_1",
     );
 
-    expect(moved.sortKey).not.toBe("002000");
+    expect(moved.sortKey).not.toBe(SK2);
     const latestA = versions.find((version) => version.blockId === "block_a" && version.ver === 2);
     expect(latestA?.sortKey).toBe(moved.sortKey);
   });
