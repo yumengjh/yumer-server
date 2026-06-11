@@ -18,6 +18,11 @@ export class TransformInterceptor<T> implements NestInterceptor<
     context: ExecutionContext,
     next: CallHandler,
   ): Observable<SuccessResponse<T> | StreamableFile> {
+    const request = context.switchToHttp().getRequest<{ headers?: Record<string, string> }>();
+    if (request.headers?.accept?.includes('text/event-stream')) {
+      return next.handle() as Observable<SuccessResponse<T> | StreamableFile>;
+    }
+
     return next.handle().pipe(
       map((data) => {
         // 文件流等特殊类型直接返回，避免被包裹成 JSON

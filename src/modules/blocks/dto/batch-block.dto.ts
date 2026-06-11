@@ -243,4 +243,20 @@ export class BatchBlockDto {
   @IsOptional()
   @IsNumber()
   ackedThroughOpSeq?: number;
+
+  @ApiPropertyOptional({
+    description: '客户端实例 ID，用于实时同步事件去重',
+    example: 'client_01HZXY1234',
+  })
+  @IsOptional()
+  @IsString()
+  originClientId?: string;
+
+  @ApiPropertyOptional({
+    description: '标签页实例 ID，用于实时同步事件去重',
+    example: 'tab_01HZXY5678',
+  })
+  @IsOptional()
+  @IsString()
+  originTabId?: string;
 }

@@ -8,12 +8,14 @@ import { Document } from '../../entities/document.entity';
 import { DocRevision } from '../../entities/doc-revision.entity';
 import { DocumentsModule } from '../documents/documents.module';
 import { ActivitiesModule } from '../activities/activities.module';
+import { RealtimeModule } from '../realtime/realtime.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Block, BlockVersion, Document, DocRevision]),
     forwardRef(() => DocumentsModule), // 使用 forwardRef 解决循环依赖
     ActivitiesModule,
+    RealtimeModule,
   ],
   controllers: [BlocksController],
   providers: [BlocksService],

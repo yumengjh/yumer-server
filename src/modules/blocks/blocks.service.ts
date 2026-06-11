@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from "@nestjs/common";
+import { Injectable, NotFoundException, BadRequestException, Logger, Optional } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { InjectDataSource } from "@nestjs/typeorm";
 import { Repository, DataSource, EntityManager } from "typeorm";
@@ -23,6 +23,7 @@ import {
   BatchDeleteOperation,
   BatchMoveOperation,
   BatchOperationType,
+  BatchSourceType,
   BatchUpdateOperation,
 } from "./dto/batch-block.dto";
 import {
@@ -33,7 +34,13 @@ import {
 import { PaginationDto } from "../../common/dto/pagination.dto";
 import { ActivitiesService } from "../activities/activities.service";
 import { BLOCK_ACTIONS } from "../activities/constants/activity-actions";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { DocumentRealtimeService } from "../realtime/document-realtime.service";
+import type {
+  DocumentRemoteOpsEvent,
+  DocumentReloadRequiredEvent,
+  RemoteDocumentOperation,
+} from "../realtime/document-realtime.types";
 
 type SyncCreateDeleteCompensation = {
   blockId: string;
@@ -67,6 +74,8 @@ type StoredBatchResponse = {
   response: SyncBatchResponseDto;
   replayed: boolean;
   createDeleteCompensations: SyncCreateDeleteCompensation[];
+  remoteEvent?: DocumentRemoteOpsEvent | null;
+  reloadEvent?: DocumentReloadRequiredEvent | null;
 };
 
 type SyncOperationResultWithInternalVersion = SyncOperationResultDto & { version?: number };
@@ -91,6 +100,8 @@ export class BlocksService {
     private documentsService: DocumentsService,
     private documentDraftService: DocumentDraftService,
     private activitiesService: ActivitiesService,
+    @Optional()
+    private documentRealtimeService?: DocumentRealtimeService,
   ) {}
 
   /**
@@ -445,6 +456,164 @@ export class BlocksService {
       ...(params.needsReload ? { needsReload: true } : {}),
       ...(params.conflicts.length > 0 ? { conflicts: params.conflicts } : {}),
       ...(results.length > 0 ? { results } : {}),
+    };
+  }
+
+  private normalizeRemoteSource(source?: BatchSourceType): DocumentRemoteOpsEvent["source"] {
+    if (source === BatchSourceType.AUTOSYNC) return "autosync";
+    if (source === BatchSourceType.MANUAL_SAVE) return "manual-save";
+    return "unknown";
+  }
+
+  private withCanonicalRemoteAttrs(
+    payload: Record<string, unknown>,
+    identity: { blockId: string; clientId?: string | null; sortKey?: string | null },
+  ): Record<string, unknown> {
+    const attrs: Record<string, unknown> = {
+      ...((payload.attrs as Record<string, unknown> | undefined) ?? {}),
+      blockId: identity.blockId,
+      "data-block-id": identity.blockId,
+      ...(identity.clientId ? { clientId: identity.clientId, "data-client-id": identity.clientId } : {}),
+      ...(identity.sortKey ? { sortKey: identity.sortKey, "data-sort-key": identity.sortKey } : {}),
+    };
+    delete attrs.clientBatchId;
+    delete attrs.syncCreateId;
+    delete attrs["data-sync-create-id"];
+
+    return {
+      ...payload,
+      attrs,
+    };
+  }
+
+  private buildRemoteOperations(input: {
+    operations: BatchBlockDto["operations"];
+    results: SyncOperationResultWithInternalVersion[];
+    rootBlockId: string;
+  }): RemoteDocumentOperation[] | null {
+    const remoteOperations: RemoteDocumentOperation[] = [];
+
+    for (let index = 0; index < input.results.length; index += 1) {
+      const result = input.results[index];
+      const operation = input.operations[index];
+      if (!operation || result.success === false) return null;
+
+      if (operation.type === BatchOperationType.CREATE) {
+        if (result.tombstoned) continue;
+        if (!result.blockId) return null;
+        const sortKey = result.sortKey ?? operation.data.sortKey;
+        if (!sortKey) return null;
+        remoteOperations.push({
+          type: "create",
+          blockId: result.blockId,
+          clientId: operation.clientId ?? null,
+          parentId: operation.data.parentId || input.rootBlockId,
+          sortKey,
+          blockType: operation.data.type,
+          payload: this.withCanonicalRemoteAttrs(
+            operation.data.payload as Record<string, unknown>,
+            {
+              blockId: result.blockId,
+              clientId: operation.clientId ?? null,
+              sortKey,
+            },
+          ),
+          version: result.version,
+        });
+        continue;
+      }
+
+      if (operation.type === BatchOperationType.UPDATE) {
+        const blockId = result.blockId ?? operation.blockId;
+        if (!blockId) return null;
+        remoteOperations.push({
+          type: "update",
+          blockId,
+          payload: this.withCanonicalRemoteAttrs(
+            operation.data.payload as Record<string, unknown>,
+            { blockId },
+          ),
+          plainText: operation.data.plainText,
+          version: result.version,
+        });
+        continue;
+      }
+
+      if (operation.type === BatchOperationType.DELETE) {
+        if (result.tombstoned && !result.blockId) continue;
+        const blockId = result.blockId ?? operation.blockId;
+        if (!blockId) return null;
+        remoteOperations.push({
+          type: "delete",
+          blockId,
+          version: result.version,
+        });
+        continue;
+      }
+
+      if (operation.type === BatchOperationType.MOVE) {
+        const blockId = result.blockId ?? operation.blockId;
+        const sortKey = result.sortKey ?? operation.sortKey;
+        if (!blockId || !sortKey) return null;
+        remoteOperations.push({
+          type: "move",
+          blockId,
+          parentId: operation.parentId,
+          sortKey,
+          version: result.version,
+        });
+      }
+    }
+
+    return remoteOperations;
+  }
+
+  private buildDocumentRemoteOpsEvent(input: {
+    batchBlockDto: BatchBlockDto;
+    clientBatchId: string;
+    serverHead: number;
+    previousDraftRevision: number;
+    draftRevision: number;
+    rootBlockId: string;
+    results: SyncOperationResultWithInternalVersion[];
+  }): DocumentRemoteOpsEvent | null {
+    const operations = this.buildRemoteOperations({
+      operations: input.batchBlockDto.operations,
+      results: input.results,
+      rootBlockId: input.rootBlockId,
+    });
+    if (!operations || operations.length === 0) return null;
+
+    return {
+      type: "document_remote_ops",
+      eventId: `remote_ops:${input.batchBlockDto.docId}:${randomUUID()}`,
+      docId: input.batchBlockDto.docId,
+      serverHead: input.serverHead,
+      previousDraftRevision: input.previousDraftRevision,
+      draftRevision: input.draftRevision,
+      source: this.normalizeRemoteSource(input.batchBlockDto.source),
+      originClientId: input.batchBlockDto.originClientId ?? null,
+      originTabId: input.batchBlockDto.originTabId ?? null,
+      clientBatchId: input.clientBatchId,
+      operations,
+      occurredAt: new Date().toISOString(),
+    };
+  }
+
+  private buildDocumentReloadRequiredEvent(input: {
+    docId: string;
+    serverHead: number;
+    draftRevision: number;
+    reason: DocumentReloadRequiredEvent["reason"];
+  }): DocumentReloadRequiredEvent {
+    return {
+      type: "document_reload_required",
+      eventId: `reload_required:${input.docId}:${randomUUID()}`,
+      docId: input.docId,
+      serverHead: input.serverHead,
+      draftRevision: input.draftRevision,
+      reason: input.reason,
+      occurredAt: new Date().toISOString(),
     };
   }
 
@@ -1370,7 +1539,7 @@ export class BlocksService {
           await this.refreshDocumentSyncSessionLease(manager, currentSyncSession);
         }
 
-        const results: SyncOperationResultDto[] = [];
+        const results: SyncOperationResultWithInternalVersion[] = [];
         const now = Date.now();
         let draftRevision = serverDraftRevision;
         const reservedSortKeysByParent = new Map<string, Set<string>>();
@@ -1549,6 +1718,33 @@ export class BlocksService {
           conflicts: [],
           results,
         });
+        const remoteEvent = !hasFailures
+          ? this.buildDocumentRemoteOpsEvent({
+              batchBlockDto,
+              clientBatchId: acceptedBatchId,
+              serverHead: response.serverHead,
+              previousDraftRevision: serverDraftRevision,
+              draftRevision,
+              rootBlockId: docInTx.rootBlockId,
+              results,
+            })
+          : null;
+        const reloadEvent =
+          hasFailures && draftRevision !== serverDraftRevision
+            ? this.buildDocumentReloadRequiredEvent({
+                docId: batchBlockDto.docId,
+                serverHead: response.serverHead,
+                draftRevision,
+                reason: "batch_partial_failure",
+              })
+            : !hasFailures && !remoteEvent && draftRevision !== serverDraftRevision
+              ? this.buildDocumentReloadRequiredEvent({
+                  docId: batchBlockDto.docId,
+                  serverHead: response.serverHead,
+                  draftRevision,
+                  reason: "operations_not_replayable",
+                })
+              : null;
         await this.saveBatchReceipt({
           manager,
           docId: batchBlockDto.docId,
@@ -1570,12 +1766,21 @@ export class BlocksService {
           response,
           replayed: false,
           createDeleteCompensations,
+          remoteEvent,
+          reloadEvent,
         };
       },
     );
 
     if (txResult.response.needsReload || txResult.replayed) {
       return txResult.response;
+    }
+
+    if (txResult.remoteEvent) {
+      this.documentRealtimeService?.publishDocumentRemoteOps(txResult.remoteEvent);
+    }
+    if (txResult.reloadEvent) {
+      this.documentRealtimeService?.publishDocumentReloadRequired(txResult.reloadEvent);
     }
 
     this.logger.log(

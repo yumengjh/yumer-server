@@ -26,6 +26,7 @@ import { SettingsModule } from "./modules/settings/settings.module";
 import { RuntimeConfigModule } from "./modules/runtime-config/runtime-config.module";
 import { RuntimeConfigService } from "./modules/runtime-config/runtime-config.service";
 import { GcModule } from "./modules/gc/gc.module";
+import { RealtimeModule } from "./modules/realtime/realtime.module";
 
 // 导入所有实体
 import { User } from "./entities/user.entity";
@@ -146,6 +147,7 @@ export const databaseEntities = [
     // 运行时配置模块（支持热更新，供限流等系统能力使用）
     RuntimeConfigModule,
     GcModule,
+    RealtimeModule,
 
     // 限流（可运行时热更新 enabled/ttl/limit）
     ThrottlerModule.forRootAsync({
