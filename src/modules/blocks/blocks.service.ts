@@ -467,8 +467,8 @@ export class BlocksService {
   }
 
   /**
-   * 顶层清单摘要：根块直属、未删除块的 blockId 按 (sortKey, blockId) 字节序
-   * 排序后拼接哈希。客户端用同一算法本地比对，仅 mismatch 才触发全量 sync-reconcile。
+   * 顶层清单摘要：根块直属、未删除块的 blockId:sortKey 按 (sortKey, blockId)
+   * 字节序排序后拼接哈希。客户端用同一算法本地比对，仅 mismatch 才触发全量 sync-reconcile。
    */
   private async computeRootManifestDigest(
     docId: string,
@@ -484,7 +484,7 @@ export class BlocksService {
       .andWhere("bv.ver = b.latestVer")
       .getMany();
 
-    const blockIds = siblings
+    const payload = siblings
       .filter((sibling) => {
         const attrs = (sibling.payload as { attrs?: Record<string, unknown> } | undefined)?.attrs;
         return attrs?.deleted !== true;
@@ -494,9 +494,10 @@ export class BlocksService {
         if (bySortKey !== 0) return bySortKey;
         return a.blockId < b.blockId ? -1 : a.blockId > b.blockId ? 1 : 0;
       })
-      .map((sibling) => sibling.blockId);
+      .map((sibling) => `${sibling.blockId}:${sibling.sortKey ?? ""}`)
+      .join("|");
 
-    return createHash("sha256").update(blockIds.join("|")).digest("hex");
+    return createHash("sha256").update(payload).digest("hex");
   }
 
   private normalizeRemoteSource(source?: BatchSourceType): DocumentRemoteOpsEvent["source"] {
