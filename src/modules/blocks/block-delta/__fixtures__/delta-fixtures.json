@@ -3,33 +3,73 @@
     "name": "code block single line edit",
     "base": {
       "type": "codeBlock",
-      "attrs": { "language": "javascript", "blockId": "b_test_1", "clientId": "c1" },
-      "content": [{ "type": "text", "text": "console.log('hello');" }]
+      "attrs": {
+        "language": "javascript",
+        "blockId": "b_test_1",
+        "clientId": "c1"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "console.log('hello');"
+        }
+      ]
     },
     "next": {
       "type": "codeBlock",
-      "attrs": { "language": "javascript", "blockId": "b_test_1", "clientId": "c1" },
-      "content": [{ "type": "text", "text": "console.log('hello world');" }]
-    }
+      "attrs": {
+        "language": "javascript",
+        "blockId": "b_test_1",
+        "clientId": "c1"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "console.log('hello world');"
+        }
+      ]
+    },
+    "baseHash": "95a186880384eb9735a85b1bf8e91bd4293ab6392fe7d6ab8772e2c63480fac3",
+    "nextHash": "e4780fd20ec53e444e4d86f6a6f85f4360f7f3ebc6187746df9fa235e1d87173"
   },
   {
     "name": "paragraph with reordered object keys",
     "base": {
       "type": "paragraph",
-      "attrs": { "textAlign": "left", "sortKey": "a0" },
-      "content": [{ "type": "text", "text": "alpha" }]
+      "attrs": {
+        "textAlign": "left",
+        "sortKey": "a0"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "alpha"
+        }
+      ]
     },
     "next": {
       "type": "paragraph",
-      "attrs": { "textAlign": "left", "sortKey": "a0" },
-      "content": [{ "type": "text", "text": "alpha beta" }]
-    }
+      "attrs": {
+        "textAlign": "left",
+        "sortKey": "a0"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "alpha beta"
+        }
+      ]
+    },
+    "baseHash": "559c77eea57738dd32c413c5d9b802392851c84906856263e1b1074d8192a753",
+    "nextHash": "ae4b32c4e4d2280e2b8b694dd082cd30941e97691254240cca2b9b9a06e2753b"
   },
   {
     "name": "large code block append",
     "base": {
       "type": "codeBlock",
-      "attrs": { "language": "typescript" },
+      "attrs": {
+        "language": "typescript"
+      },
       "content": [
         {
           "type": "text",
@@ -39,13 +79,17 @@
     },
     "next": {
       "type": "codeBlock",
-      "attrs": { "language": "typescript" },
+      "attrs": {
+        "language": "typescript"
+      },
       "content": [
         {
           "type": "text",
           "text": "export function buildPayload() {\n  return 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';\n}\n// appended\n"
         }
       ]
-    }
+    },
+    "baseHash": "f4c710a3c37b0166cbc10e3fcf8f1351b38bdda44966852b9dafb2716aa6bea6",
+    "nextHash": "8f62cf12dba3c84b99c24f625a0a2d4e3d69210470f8b338b74683c52512b0ab"
   }
 ]

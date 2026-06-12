@@ -17,6 +17,8 @@ type DeltaFixture = {
   name: string;
   base: Record<string, unknown>;
   next: Record<string, unknown>;
+  baseHash: string;
+  nextHash: string;
 };
 
 const fixturesPath = join(__dirname, "__fixtures__", "delta-fixtures.json");
@@ -64,6 +66,11 @@ describe("block delta", () => {
       expect(delta.baseVer).toBe(3);
       expect(delta.baseHash).toBe(hashPayloadCanonical(fixture.base));
       expect(delta.resultHash).toBe(hashPayloadCanonical(fixture.next));
+    });
+
+    it(`matches golden hashes: ${fixture.name}`, () => {
+      expect(hashPayloadCanonical(fixture.base)).toBe(fixture.baseHash);
+      expect(hashPayloadCanonical(fixture.next)).toBe(fixture.nextHash);
     });
   }
 
@@ -124,6 +131,32 @@ describe("block delta", () => {
       blockType: "codeBlock",
     });
     expect(accepted.ok).toBe(true);
+  });
+
+  it("rejects client delta when the patched result hash does not match", () => {
+    const basePayload = {
+      type: "paragraph",
+      content: [{ type: "text", text: "hello" }],
+    };
+    const nextPayload = {
+      type: "paragraph",
+      content: [{ type: "text", text: "hello world" }],
+    };
+    const delta = buildBlockDelta({
+      basePayload,
+      nextPayload,
+      baseVer: 1,
+    });
+
+    const accepted = shouldAcceptClientDelta({
+      basePayload,
+      delta: {
+        ...delta,
+        resultHash: "0".repeat(64),
+      },
+    });
+
+    expect(accepted).toEqual({ ok: false, reason: "DELTA_RESULT_MISMATCH" });
   });
 
   it("normalizes CRLF in text nodes for stable hashes", () => {

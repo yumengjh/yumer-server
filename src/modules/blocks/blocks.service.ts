@@ -189,7 +189,7 @@ export class BlocksService {
       await manager.save(Block, block);
 
       // 创建初始版本
-      const hash = this.calculateHash(payload);
+      const hash = this.calculateVersionHash(payload);
       const blockVersion = manager.create(BlockVersion, {
         versionId: generateVersionId(blockId, 1),
         docId: createBlockDto.docId,
@@ -343,7 +343,7 @@ export class BlocksService {
             previousPayload,
             latestVersionInfo.sortKey,
           );
-          const hash = this.calculateHash(payload);
+          const hash = this.calculateVersionHash(payload);
 
           // 内容无变化：直接返回当前版本
           if (latestVersionInfo.hash === hash) {
@@ -825,9 +825,13 @@ export class BlocksService {
   }
 
   /**
-   * 计算内容的哈希值
+   * BlockVersion.hash is an idempotency/content-change hash for stored version rows.
+   * It intentionally hashes the raw JSON.stringify payload shape used by the write path.
+   * Do not use it for delta validation: delta baseHash/resultHash must use
+   * hashPayloadCanonical(), which strips sync attrs, sorts keys, normalizes CRLF, and
+   * expands codeBlock attrs before hashing.
    */
-  private calculateHash(content: unknown): string {
+  private calculateVersionHash(content: unknown): string {
     return createHash("sha256").update(JSON.stringify(content)).digest("hex");
   }
 
@@ -2056,7 +2060,7 @@ export class BlocksService {
 
     await manager.save(Block, block);
 
-    const hash = this.calculateHash(payload);
+    const hash = this.calculateVersionHash(payload);
     const blockVersion = manager.create(BlockVersion, {
       versionId: generateVersionId(blockId, 1),
       docId,
@@ -2320,7 +2324,7 @@ export class BlocksService {
       previousPayload,
       resolvedSortKey,
     );
-    const hash = this.calculateHash(payload);
+    const hash = this.calculateVersionHash(payload);
 
     if (latestVersion?.hash === hash) {
       return {
@@ -2525,7 +2529,7 @@ export class BlocksService {
       indent: latestVersion.indent,
       collapsed: latestVersion.collapsed,
       payload: deletedPayload,
-      hash: this.calculateHash(deletedPayload),
+      hash: this.calculateVersionHash(deletedPayload),
       plainText: latestVersion.plainText,
       refs: latestVersion.refs,
     });

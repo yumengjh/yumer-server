@@ -123,4 +123,88 @@ describe("BlockPayloadResolverService", () => {
       parseCanonicalPayload(canonicalStringify(nextPayload)),
     );
   });
+
+  it("reconstructs three-step delta chains from the full base", async () => {
+    const basePayload = {
+      type: "codeBlock",
+      attrs: { language: "typescript" },
+      content: [{ type: "text", text: "a".repeat(9000) }],
+    };
+    const secondPayload = {
+      ...basePayload,
+      content: [{ type: "text", text: `${"a".repeat(9000)}b` }],
+    };
+    const thirdPayload = {
+      ...basePayload,
+      content: [{ type: "text", text: `${"a".repeat(9000)}bc` }],
+    };
+    const fourthPayload = {
+      ...basePayload,
+      content: [{ type: "text", text: `${"a".repeat(9000)}bcd` }],
+    };
+
+    const patch2 = computeDelta(basePayload, secondPayload);
+    const patch3 = computeDelta(secondPayload, thirdPayload);
+    const patch4 = computeDelta(thirdPayload, fourthPayload);
+
+    manager.find.mockResolvedValue([
+      {
+        id: 1,
+        docId: "doc_1",
+        blockId: "b1",
+        ver: 1,
+        payloadKind: "full",
+        baseVer: null,
+        delta: null,
+        payload: basePayload,
+      },
+      {
+        id: 2,
+        docId: "doc_1",
+        blockId: "b1",
+        ver: 2,
+        payloadKind: "delta",
+        baseVer: 1,
+        delta: patch2,
+        payload: null,
+      },
+      {
+        id: 3,
+        docId: "doc_1",
+        blockId: "b1",
+        ver: 3,
+        payloadKind: "delta",
+        baseVer: 1,
+        delta: patch3,
+        payload: null,
+      },
+      {
+        id: 4,
+        docId: "doc_1",
+        blockId: "b1",
+        ver: 4,
+        payloadKind: "delta",
+        baseVer: 1,
+        delta: patch4,
+        payload: null,
+      },
+    ]);
+
+    const resolved = await service.resolveBlockPayloads(manager as never, [
+      {
+        id: 4,
+        docId: "doc_1",
+        blockId: "b1",
+        ver: 4,
+        payloadKind: "delta",
+        baseVer: 1,
+        delta: patch4,
+        payload: null,
+      },
+    ]);
+
+    expect(resolved.get("doc_1:b1:4")).toEqual(
+      parseCanonicalPayload(canonicalStringify(fourthPayload)),
+    );
+  });
 });

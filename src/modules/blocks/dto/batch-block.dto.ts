@@ -191,7 +191,7 @@ export class BatchBlockDto {
   })
   @IsDefined()
   @IsNumber()
-  baseVersion?: number;
+  baseVersion: number;
 
   @ApiPropertyOptional({
     description: '客户端所基于的文档草稿修订号',
@@ -208,7 +208,7 @@ export class BatchBlockDto {
   @IsDefined()
   @IsString()
   @IsNotEmpty()
-  clientBatchId?: string;
+  clientBatchId: string;
 
   @ApiPropertyOptional({
     description: '请求来源',
