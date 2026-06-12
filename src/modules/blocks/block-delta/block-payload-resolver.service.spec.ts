@@ -1,6 +1,6 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { BlockPayloadResolverService } from "./block-payload-resolver.service";
-import { computeDelta } from "./block-delta";
+import { canonicalStringify, computeDelta, parseCanonicalPayload } from "./block-delta";
 
 describe("BlockPayloadResolverService", () => {
   let service: BlockPayloadResolverService;
@@ -42,6 +42,32 @@ describe("BlockPayloadResolverService", () => {
     ]);
 
     expect(resolved.get("doc_1:b1:2")).toEqual(payload);
+    expect(manager.find).not.toHaveBeenCalled();
+  });
+
+  it("normalizes full codeBlock payloads like delta reconstruction", async () => {
+    const payload = {
+      type: "codeBlock",
+      attrs: { language: "ts" },
+      content: [{ type: "text", text: "hello\r\nworld" }],
+    };
+
+    const resolved = await service.resolveBlockPayloads(manager as never, [
+      {
+        id: 1,
+        docId: "doc_1",
+        blockId: "b1",
+        ver: 1,
+        payloadKind: "full",
+        baseVer: null,
+        delta: null,
+        payload,
+      },
+    ]);
+
+    expect(resolved.get("doc_1:b1:1")).toEqual(
+      parseCanonicalPayload(canonicalStringify(payload)),
+    );
     expect(manager.find).not.toHaveBeenCalled();
   });
 
@@ -93,6 +119,8 @@ describe("BlockPayloadResolverService", () => {
       },
     ]);
 
-    expect(resolved.get("doc_1:b1:2")).toEqual(nextPayload);
+    expect(resolved.get("doc_1:b1:2")).toEqual(
+      parseCanonicalPayload(canonicalStringify(nextPayload)),
+    );
   });
 });

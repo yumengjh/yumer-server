@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { EntityManager } from "typeorm";
 import { BlockVersion } from "../../../entities/block-version.entity";
-import { applyDelta, ensurePayloadType, parseCanonicalPayload } from "./block-delta";
+import { applyDelta, canonicalStringify, ensurePayloadType, parseCanonicalPayload } from "./block-delta";
 
 type VersionRef = Pick<
   BlockVersion,
@@ -30,7 +30,7 @@ export class BlockPayloadResolverService {
       }
 
       if (this.isFullVersion(version)) {
-        const payload = version.payload as object;
+        const payload = this.normalizeResolvedPayload(version.payload);
         resolved.set(key, payload);
         this.remember(key, payload);
         continue;
@@ -182,5 +182,13 @@ export class BlockPayloadResolverService {
     }
 
     return currentPayload as object;
+  }
+
+  private normalizeResolvedPayload(payload: unknown): object {
+    const typedPayload = ensurePayloadType(
+      payload,
+      (payload as Record<string, unknown> | undefined)?.type as string | undefined,
+    );
+    return parseCanonicalPayload(canonicalStringify(typedPayload)) as object;
   }
 }
