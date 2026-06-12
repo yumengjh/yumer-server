@@ -301,6 +301,11 @@ function createBlocksServiceWithInMemoryRepositories(config?: { throwOnLatestVer
     countDeltaChainLength: jest.fn(() => 0),
   } as unknown as BlockPayloadResolverService;
 
+  const documentRealtimeService = {
+    publishDocumentRemoteOps: jest.fn(),
+    publishDocumentReloadRequired: jest.fn(),
+  };
+
   const service = new BlocksService(
     blockRepository as unknown as BlocksServiceConstructorArgs[0],
     blockVersionRepository as unknown as BlocksServiceConstructorArgs[1],
@@ -330,9 +335,18 @@ function createBlocksServiceWithInMemoryRepositories(config?: { throwOnLatestVer
       record: jest.fn().mockResolvedValue(undefined),
     } as unknown as BlocksServiceConstructorArgs[7],
     blockPayloadResolverService,
+    documentRealtimeService as unknown as BlocksServiceConstructorArgs[9],
   );
 
-  return { service, blocks, versions, syncSessions, tombstones };
+  return {
+    service,
+    blocks,
+    versions,
+    syncSessions,
+    tombstones,
+    doc,
+    documentRealtimeService,
+  };
 }
 
 describe("BlocksService sync idempotency", () => {
@@ -601,9 +615,9 @@ describe("BlocksService sync idempotency", () => {
       clientId: "client_trim",
       blockId: expect.any(String),
       sortKey: "001500",
+      version: 1,
     });
     expect(response.results[0]).not.toHaveProperty("success");
-    expect(response.results[0]).not.toHaveProperty("version");
   });
 
   it("stores the batch ack high watermark in the active sync session", async () => {
@@ -695,6 +709,55 @@ describe("BlocksService sync idempotency", () => {
       ]),
     );
     expect(response.serverHead).toBe(1);
+  });
+
+  it("does not advance draftRevision or publish reload when a draft batch contains partial failures", async () => {
+    const { service, doc, documentRealtimeService } = createBlocksServiceWithInMemoryRepositories();
+
+    const response = await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        draftRevision: 0,
+        clientBatchId: "batch_draft_partial_failure",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.CREATE,
+            clientId: "client_ok_draft",
+            data: {
+              docId: "doc_1",
+              type: "paragraph",
+              parentId: "root_1",
+              sortKey: "001500",
+              payload: { type: "paragraph" },
+            },
+          } satisfies BatchCreateOperation,
+          {
+            type: BatchOperationType.UPDATE,
+            blockId: "missing_block_draft",
+            data: {
+              payload: {
+                type: "paragraph",
+                content: [{ type: "text", text: "broken" }],
+              },
+            },
+          },
+        ],
+      } as any,
+      "user_1",
+    );
+
+    expect(response.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ operation: BatchOperationType.CREATE }),
+        expect.objectContaining({ operation: BatchOperationType.UPDATE, success: false }),
+      ]),
+    );
+    expect(response.draftRevision).toBe(0);
+    expect(doc.draftRevision).toBe(0);
+    expect(documentRealtimeService.publishDocumentReloadRequired).not.toHaveBeenCalled();
   });
 
   it("replays a same-batch draft write without creating a second block", async () => {
@@ -1162,6 +1225,7 @@ describe("BlocksService sync idempotency", () => {
       operation: BatchOperationType.DELETE,
       blockId,
       matchBy: "blockId",
+      version: 2,
     });
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("sync create-delete compensation: docId=doc_1"),

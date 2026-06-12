@@ -1793,7 +1793,7 @@ export class BlocksService {
         const hasFailures = results.some((item) => !item.success);
         if (shouldCreateVersion && successCount > 0 && !hasFailures) {
           await this.incrementDocumentHead(batchBlockDto.docId, userId, manager);
-        } else if (!shouldCreateVersion && draftMutations.length > 0) {
+        } else if (!shouldCreateVersion && draftMutations.length > 0 && !hasFailures) {
           await this.documentDraftService.ensureDraftForMutation(
             batchBlockDto.docId,
             userId,
