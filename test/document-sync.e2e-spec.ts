@@ -7,6 +7,10 @@ import { AppModule } from "../src/app.module";
 import { HttpExceptionFilter } from "../src/common/filters/http-exception.filter";
 import { TransformInterceptor } from "../src/common/interceptors/transform.interceptor";
 import { DocumentSyncSession } from "../src/entities/document-sync-session.entity";
+import { BlockVersion } from "../src/entities/block-version.entity";
+import {
+  buildBlockDelta,
+} from "../src/modules/blocks/block-delta";
 
 // cspell:ignore autosync
 const PREFIX = "api/v1";
@@ -845,5 +849,250 @@ describe("document sync transport (e2e)", () => {
     expect(conflicting.body.data.conflicts[0].code).toBe(
       "CHECKPOINT_FINGERPRINT_CONFLICT",
     );
+  });
+
+  describe("delta overlay sync", () => {
+    function buildLargeCodePayload(textSuffix = "") {
+      const text = `${"x".repeat(9000)}${textSuffix}`;
+      return {
+        type: "codeBlock",
+        attrs: { language: "javascript" },
+        content: [{ type: "text", text }],
+      };
+    }
+
+    function findBlockInTree(tree: Record<string, unknown> | null, blockId: string): Record<string, unknown> | null {
+      if (!tree) return null;
+      if (tree.blockId === blockId) return tree;
+      for (const child of (tree.children as Record<string, unknown>[] | undefined) ?? []) {
+        const found = findBlockInTree(child, blockId);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    async function createLargeCodeBlock(target: {
+      docId: string;
+      rootBlockId: string;
+      head: number;
+      draftRevision: number;
+      syncSession: { sessionId: string; sessionEpoch: number };
+    }) {
+      const clientId = `cid_${rand()}`;
+      const res = await request(app.getHttpServer())
+        .post(`/${PREFIX}/blocks/batch`)
+        .set("Authorization", `Bearer ${accessToken}`)
+        .send({
+          docId: target.docId,
+          baseVersion: target.head,
+          draftRevision: target.draftRevision,
+          createVersion: false,
+          source: "autosync",
+          clientBatchId: `batch_create_large_${rand()}`,
+          sessionId: target.syncSession.sessionId,
+          sessionEpoch: target.syncSession.sessionEpoch,
+          operations: [
+            {
+              type: "create",
+              clientId,
+              data: {
+                docId: target.docId,
+                type: "codeBlock",
+                payload: buildLargeCodePayload(),
+                parentId: target.rootBlockId,
+                sortKey: "9000",
+              },
+            },
+          ],
+        })
+        .expect(200);
+
+      const blockId = res.body.data.results[0].blockId as string;
+      return {
+        blockId,
+        clientId,
+        draftRevision: res.body.data.draftRevision as number,
+      };
+    }
+
+    it("stores large block updates as delta rows and rebuilds them on read", async () => {
+      const isolated = await createDocumentForTest("Delta Overlay Doc");
+      const syncSession = await acquireSyncSession(isolated.docId);
+      const editContent = await getEditContent(isolated.docId);
+      const { blockId, draftRevision } = await createLargeCodeBlock({
+        ...isolated,
+        draftRevision: editContent.draft.draftRevision,
+        syncSession,
+      });
+
+      const baseVersion = await dataSource.getRepository(BlockVersion).findOne({
+        where: { docId: isolated.docId, blockId, ver: 1 },
+      });
+      expect(baseVersion?.payloadKind ?? "full").toBe("full");
+
+      const nextPayload = buildLargeCodePayload("y");
+      const delta = buildBlockDelta({
+        basePayload: baseVersion!.payload,
+        nextPayload,
+        baseVer: 1,
+      });
+
+      const updateRes = await request(app.getHttpServer())
+        .post(`/${PREFIX}/blocks/batch`)
+        .set("Authorization", `Bearer ${accessToken}`)
+        .send({
+          docId: isolated.docId,
+          baseVersion: isolated.head,
+          draftRevision,
+          createVersion: false,
+          source: "autosync",
+          clientBatchId: `batch_delta_${rand()}`,
+          sessionId: syncSession.sessionId,
+          sessionEpoch: syncSession.sessionEpoch,
+          operations: [
+            {
+              type: "update",
+              blockId,
+              data: { delta },
+            },
+          ],
+        })
+        .expect(200);
+
+      expect(updateRes.body.data.results[0]).toMatchObject({
+        operation: "update",
+        blockId,
+        version: 2,
+      });
+      expect(updateRes.body.data.results[0].success).not.toBe(false);
+
+      const deltaVersion = await dataSource.getRepository(BlockVersion).findOne({
+        where: { docId: isolated.docId, blockId, ver: 2 },
+      });
+      expect(deltaVersion?.payloadKind).toBe("delta");
+      expect(deltaVersion?.baseVer).toBe(1);
+      expect(deltaVersion?.payload).toBeNull();
+      expect(typeof deltaVersion?.delta).toBe("string");
+
+      const afterEdit = await getEditContent(isolated.docId);
+      const node = findBlockInTree(afterEdit.tree, blockId);
+      expect(node?.hash).toBeTruthy();
+      expect(node?.ver).toBe(2);
+      const text = (
+        ((node?.payload as { content?: Array<{ text?: string }> })?.content ?? [])[0]?.text ?? ""
+      );
+      expect(text.endsWith("y")).toBe(true);
+      expect(text.length).toBe(9001);
+    });
+
+    it("returns DELTA_BASE_MISMATCH for a stale delta base without failing the whole batch create path", async () => {
+      const isolated = await createDocumentForTest("Delta Mismatch Doc");
+      const syncSession = await acquireSyncSession(isolated.docId);
+      const editContent = await getEditContent(isolated.docId);
+      const { blockId, draftRevision } = await createLargeCodeBlock({
+        ...isolated,
+        draftRevision: editContent.draft.draftRevision,
+        syncSession,
+      });
+
+      const baseVersion = await dataSource.getRepository(BlockVersion).findOne({
+        where: { docId: isolated.docId, blockId, ver: 1 },
+      });
+      const delta = buildBlockDelta({
+        basePayload: baseVersion!.payload,
+        nextPayload: buildLargeCodePayload("z"),
+        baseVer: 1,
+      });
+      delta.baseHash = "deadbeef";
+
+      const res = await request(app.getHttpServer())
+        .post(`/${PREFIX}/blocks/batch`)
+        .set("Authorization", `Bearer ${accessToken}`)
+        .send({
+          docId: isolated.docId,
+          baseVersion: isolated.head,
+          draftRevision,
+          createVersion: false,
+          source: "autosync",
+          clientBatchId: `batch_delta_mismatch_${rand()}`,
+          sessionId: syncSession.sessionId,
+          sessionEpoch: syncSession.sessionEpoch,
+          operations: [
+            {
+              type: "update",
+              blockId,
+              data: { delta },
+            },
+          ],
+        })
+        .expect(200);
+
+      expect(res.body.data.results[0]).toMatchObject({
+        operation: "update",
+        success: false,
+        blockId,
+        diagnosticCode: "DELTA_BASE_MISMATCH",
+      });
+    });
+
+    it("compacts an long delta chain into a new full snapshot", async () => {
+      const isolated = await createDocumentForTest("Delta Compaction Doc");
+      const syncSession = await acquireSyncSession(isolated.docId);
+      let editContent = await getEditContent(isolated.docId);
+      const created = await createLargeCodeBlock({
+        ...isolated,
+        draftRevision: editContent.draft.draftRevision,
+        syncSession,
+      });
+      const blockId = created.blockId;
+      let draftRevision = created.draftRevision;
+
+      let latestVersion = await dataSource.getRepository(BlockVersion).findOne({
+        where: { docId: isolated.docId, blockId, ver: 1 },
+      });
+
+      for (let index = 0; index < 12; index += 1) {
+        const nextPayload = buildLargeCodePayload(`_${index}`);
+        const res = await request(app.getHttpServer())
+          .post(`/${PREFIX}/blocks/batch`)
+          .set("Authorization", `Bearer ${accessToken}`)
+          .send({
+            docId: isolated.docId,
+            baseVersion: isolated.head,
+            draftRevision,
+            createVersion: false,
+            source: "autosync",
+            clientBatchId: `batch_full_${index}_${rand()}`,
+            sessionId: syncSession.sessionId,
+            sessionEpoch: syncSession.sessionEpoch,
+            operations: [
+              {
+                type: "update",
+                blockId,
+                data: { payload: nextPayload },
+              },
+            ],
+          })
+          .expect(200);
+
+        draftRevision = res.body.data.draftRevision as number;
+        const version = res.body.data.results[0].version as number;
+        latestVersion = await dataSource.getRepository(BlockVersion).findOne({
+          where: { docId: isolated.docId, blockId, ver: version },
+        });
+        editContent = await getEditContent(isolated.docId);
+      }
+
+      expect(latestVersion?.payloadKind).toBe("full");
+      expect(latestVersion?.payload).toBeTruthy();
+      expect(latestVersion?.delta).toBeNull();
+
+      const afterEdit = await getEditContent(isolated.docId);
+      const node = findBlockInTree(afterEdit.tree, blockId);
+      const text = (
+        ((node?.payload as { content?: Array<{ text?: string }> })?.content ?? [])[0]?.text ?? ""
+      );
+      expect(text.endsWith("_11")).toBe(true);
+    });
   });
 });

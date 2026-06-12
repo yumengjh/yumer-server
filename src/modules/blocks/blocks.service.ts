@@ -44,6 +44,14 @@ import type {
   DocumentReloadRequiredEvent,
   RemoteDocumentOperation,
 } from "../realtime/document-realtime.types";
+import { BlockPayloadResolverService } from "./block-delta/block-payload-resolver.service";
+import {
+  computeDelta,
+  parseCanonicalPayload,
+  shouldStoreDelta,
+  shouldAcceptClientDelta,
+} from "./block-delta/block-delta";
+import { BatchOperationError } from "./batch-operation.error";
 
 type SyncCreateDeleteCompensation = {
   blockId: string;
@@ -81,7 +89,10 @@ type StoredBatchResponse = {
   reloadEvent?: DocumentReloadRequiredEvent | null;
 };
 
-type SyncOperationResultWithInternalVersion = SyncOperationResultDto & { version?: number };
+type SyncOperationResultWithInternalVersion = SyncOperationResultDto & {
+  version?: number;
+  resolvedPayload?: Record<string, unknown>;
+};
 
 @Injectable()
 export class BlocksService {
@@ -105,6 +116,7 @@ export class BlocksService {
     private documentsService: DocumentsService,
     private documentDraftService: DocumentDraftService,
     private activitiesService: ActivitiesService,
+    private blockPayloadResolverService: BlockPayloadResolverService,
     @Optional()
     private documentRealtimeService?: DocumentRealtimeService,
   ) {}
@@ -250,6 +262,13 @@ export class BlocksService {
    * 更新块内容
    */
   async updateContent(blockId: string, updateBlockDto: UpdateBlockDto, userId: string) {
+    if (!updateBlockDto.payload && !updateBlockDto.delta) {
+      throw new BadRequestException("update requires payload or delta");
+    }
+    if (updateBlockDto.payload && updateBlockDto.delta) {
+      throw new BadRequestException("update payload and delta are mutually exclusive");
+    }
+
     const block = await this.blockRepository.findOne({
       where: { blockId, isDeleted: false },
     });
@@ -277,7 +296,6 @@ export class BlocksService {
         this.dataSource.transaction(async (manager) => {
           await this.documentDraftService.lockDocumentForDraftMutation(docId, manager);
           const now = Date.now();
-          const hash = this.calculateHash(updateBlockDto.payload);
 
           // 锁定当前 block 行，串行化同一 block 的并发写入
           const lockedBlock = await manager
@@ -307,12 +325,32 @@ export class BlocksService {
             throw new NotFoundException("块的最新版本不存在");
           }
 
+          const incomingPayload = updateBlockDto.payload
+            ? (updateBlockDto.payload as Record<string, unknown>)
+            : await this.resolveUpdatePayloadFromDelta(
+                manager,
+                blockId,
+                docId,
+                updateBlockDto.delta!,
+                lockedBlock.type,
+              );
+          const previousPayload = (await this.blockPayloadResolverService.resolveBlockPayload(
+            manager,
+            latestVersionInfo,
+          )) as Record<string, unknown>;
+          const payload = this.mergePayloadPreservingSyncAttrs(
+            incomingPayload,
+            previousPayload,
+            latestVersionInfo.sortKey,
+          );
+          const hash = this.calculateHash(payload);
+
           // 内容无变化：直接返回当前版本
           if (latestVersionInfo.hash === hash) {
             return {
               blockId,
               version: lockedBlock.latestVer,
-              payload: latestVersionInfo.payload,
+              payload,
             };
           }
 
@@ -338,9 +376,9 @@ export class BlocksService {
             sortKey: preservedSortKey,
             indent: latestVersionInfo.indent,
             collapsed: latestVersionInfo.collapsed,
-            payload: updateBlockDto.payload,
+            payload,
             hash,
-            plainText: this.extractPlainText(updateBlockDto.payload),
+            plainText: this.extractPlainText(payload),
             refs: [],
           });
 
@@ -445,7 +483,7 @@ export class BlocksService {
     results: SyncOperationResultWithInternalVersion[];
     manifestDigest?: string;
   }): SyncBatchResponseDto {
-    const results = params.results.map(({ version: _version, ...result }) =>
+    const results = params.results.map(({ resolvedPayload: _resolvedPayload, ...result }) =>
       Object.fromEntries(
         Object.entries(result).filter(
           ([key, value]) => value !== undefined && !(key === "success" && value === true),
@@ -567,13 +605,17 @@ export class BlocksService {
       if (operation.type === BatchOperationType.UPDATE) {
         const blockId = result.blockId ?? operation.blockId;
         if (!blockId) return null;
+        const sourcePayload =
+          operation.data.payload ??
+          (result as SyncOperationResultWithInternalVersion).resolvedPayload;
+        if (!sourcePayload || typeof sourcePayload !== "object") return null;
         remoteOperations.push({
           type: "update",
           blockId,
-          payload: this.withCanonicalRemoteAttrs(
-            operation.data.payload as Record<string, unknown>,
-            { blockId, sortKey: result.sortKey ?? null },
-          ),
+          payload: this.withCanonicalRemoteAttrs(sourcePayload as Record<string, unknown>, {
+            blockId,
+            sortKey: result.sortKey ?? null,
+          }),
           version: result.version,
         });
         // update 携带 sortKey 时等价于同批 move，补发 move 远端事件以触发重排
@@ -787,6 +829,32 @@ export class BlocksService {
    */
   private calculateHash(content: unknown): string {
     return createHash("sha256").update(JSON.stringify(content)).digest("hex");
+  }
+
+  private async resolveUpdatePayloadFromDelta(
+    manager: EntityManager,
+    blockId: string,
+    docId: string,
+    delta: NonNullable<UpdateBlockDto["delta"]>,
+    blockType: string,
+  ): Promise<Record<string, unknown>> {
+    const baseVersion = await manager.findOne(BlockVersion, {
+      where: { docId, blockId, ver: delta.baseVer },
+    });
+    if (!baseVersion) {
+      throw new BadRequestException(`Base version ${delta.baseVer} not found`);
+    }
+
+    const basePayload = await this.blockPayloadResolverService.resolveBlockPayload(
+      manager,
+      baseVersion,
+    );
+    const accepted = shouldAcceptClientDelta({ basePayload, delta, blockType });
+    if (!accepted.ok) {
+      throw new BadRequestException(accepted.reason);
+    }
+
+    return parseCanonicalPayload(accepted.canonicalText) as Record<string, unknown>;
   }
 
   /**
@@ -1710,6 +1778,9 @@ export class BlocksService {
                   }
                 : {}),
               error: (error as Error).message,
+              ...(error instanceof BatchOperationError && error.diagnosticCode
+                ? { diagnosticCode: error.diagnosticCode }
+                : {}),
             });
           }
         }
@@ -2166,7 +2237,14 @@ export class BlocksService {
     now: number,
     manager: EntityManager,
     reservedSortKeysByParent: Map<string, Set<string>>,
-  ): Promise<{ blockId: string; version: number; sortKey?: string }> {
+  ): Promise<{ blockId: string; version: number; sortKey?: string; resolvedPayload: Record<string, unknown> }> {
+    if (!operation.data.payload && !operation.data.delta) {
+      throw new BadRequestException("update requires payload or delta");
+    }
+    if (operation.data.payload && operation.data.delta) {
+      throw new BadRequestException("update payload and delta are mutually exclusive");
+    }
+
     const block = await manager.findOne(Block, {
       where: { blockId: operation.blockId, docId, isDeleted: false },
     });
@@ -2175,17 +2253,10 @@ export class BlocksService {
       throw new NotFoundException(`Block ${operation.blockId} not found`);
     }
 
-    const newVer = await this.getNextBlockVersionNumber(
-      manager,
-      block.docId,
-      operation.blockId,
-      block.latestVer,
-    );
     const latestVersion = await manager.findOne(BlockVersion, {
       where: { docId, blockId: operation.blockId, ver: block.latestVer },
     });
 
-    // update 携带结构字段时在同一个版本写入中完成 move，免去额外的 move 操作
     const requestedSortKey = operation.data.sortKey?.trim();
     const hasStructuralChange = Boolean(requestedSortKey);
     const parentId = operation.data.parentId || latestVersion?.parentId || "";
@@ -2200,12 +2271,107 @@ export class BlocksService {
         })
       : latestVersion?.sortKey || generateSortKeyUtil();
 
+    let incomingPayload: Record<string, unknown>;
+    if (operation.data.delta) {
+      const baseVersion = await manager.findOne(BlockVersion, {
+        where: {
+          docId,
+          blockId: operation.blockId,
+          ver: operation.data.delta.baseVer,
+        },
+      });
+      if (!baseVersion) {
+        throw new BatchOperationError(
+          `Base version ${operation.data.delta.baseVer} not found`,
+          "DELTA_BASE_MISMATCH",
+        );
+      }
+
+      const basePayload = await this.blockPayloadResolverService.resolveBlockPayload(
+        manager,
+        baseVersion,
+      );
+      const accepted = shouldAcceptClientDelta({
+        basePayload,
+        delta: operation.data.delta,
+        blockType: block.type,
+      });
+      if (!accepted.ok) {
+        throw new BatchOperationError(
+          `Delta rejected: ${accepted.reason}`,
+          accepted.reason === "DELTA_BASE_MISMATCH"
+            ? "DELTA_BASE_MISMATCH"
+            : "DELTA_RESULT_MISMATCH",
+        );
+      }
+      incomingPayload = parseCanonicalPayload(accepted.canonicalText) as Record<string, unknown>;
+    } else {
+      incomingPayload = operation.data.payload as Record<string, unknown>;
+    }
+
+    const previousPayload = latestVersion
+      ? ((await this.blockPayloadResolverService.resolveBlockPayload(
+          manager,
+          latestVersion,
+        )) as Record<string, unknown>)
+      : undefined;
     const payload = this.mergePayloadPreservingSyncAttrs(
-      operation.data.payload as Record<string, unknown>,
-      (latestVersion?.payload as Record<string, unknown> | undefined) ?? undefined,
+      incomingPayload,
+      previousPayload,
       resolvedSortKey,
     );
     const hash = this.calculateHash(payload);
+
+    if (latestVersion?.hash === hash) {
+      return {
+        blockId: operation.blockId,
+        version: block.latestVer,
+        resolvedPayload: payload,
+        ...(hasStructuralChange ? { sortKey: resolvedSortKey } : {}),
+      };
+    }
+
+    const newVer = await this.getNextBlockVersionNumber(
+      manager,
+      block.docId,
+      operation.blockId,
+      block.latestVer,
+    );
+
+    let payloadKind: "full" | "delta" = "full";
+    let baseVer: number | null = null;
+    let delta: string | null = null;
+    let storedPayload: Record<string, unknown> | null = payload;
+
+    if (latestVersion) {
+      const resolvedLatestPayload = await this.blockPayloadResolverService.resolveBlockPayload(
+        manager,
+        latestVersion,
+      );
+      const chainBaseVer = this.blockPayloadResolverService.findChainBaseVer(latestVersion);
+      const chainRows = await manager.find(BlockVersion, {
+        where: { docId, blockId: operation.blockId },
+        order: { ver: "ASC" },
+        select: ["ver", "payloadKind", "baseVer", "delta", "payload", "docId", "blockId", "id"],
+      });
+      const chainLength = this.blockPayloadResolverService.countDeltaChainLength(
+        latestVersion,
+        chainRows,
+      );
+
+      if (
+        shouldStoreDelta({
+          fullPayload: payload,
+          basePayload: resolvedLatestPayload,
+          chainLength: chainLength + 1,
+        })
+      ) {
+        payloadKind = "delta";
+        baseVer = chainBaseVer;
+        delta = computeDelta(resolvedLatestPayload, payload);
+        storedPayload = null;
+      }
+    }
 
     const blockVersion = manager.create(BlockVersion, {
       versionId: generateVersionId(operation.blockId, newVer),
@@ -2218,7 +2384,10 @@ export class BlocksService {
       sortKey: resolvedSortKey,
       indent: latestVersion?.indent || 0,
       collapsed: latestVersion?.collapsed || false,
-      payload,
+      payloadKind,
+      baseVer,
+      delta,
+      payload: storedPayload,
       hash,
       plainText: this.extractPlainText(payload),
       refs: [],
@@ -2234,6 +2403,7 @@ export class BlocksService {
     return {
       blockId: operation.blockId,
       version: newVer,
+      resolvedPayload: payload,
       ...(hasStructuralChange ? { sortKey: resolvedSortKey } : {}),
     };
   }

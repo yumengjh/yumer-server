@@ -1,6 +1,7 @@
 // cspell:ignore AUTOSYNC
 
 import { BlocksService } from "./blocks.service";
+import { BlockPayloadResolverService } from "./block-delta/block-payload-resolver.service";
 import { Block } from "../../entities/block.entity";
 import { BlockVersion } from "../../entities/block-version.entity";
 import { DocRevision } from "../../entities/doc-revision.entity";
@@ -281,6 +282,12 @@ function createDraftAwareBlocksService(config?: { throwOnBlockVersionFind?: bool
     { record: jest.fn().mockResolvedValue(undefined) } as unknown as Parameters<
       typeof BlocksService
     >[7],
+    {
+      resolveBlockPayload: jest.fn(async (_manager: unknown, version: BlockVersion) => version.payload ?? {}),
+      resolveBlockPayloads: jest.fn(),
+      findChainBaseVer: jest.fn((version: BlockVersion) => version.ver),
+      countDeltaChainLength: jest.fn(() => 0),
+    } as unknown as BlockPayloadResolverService,
   );
 
   return { service, documentDraftService, versions };

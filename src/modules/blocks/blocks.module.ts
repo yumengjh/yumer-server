@@ -1,5 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { BlockPayloadResolverService } from './block-delta/block-payload-resolver.service';
 import { BlocksController } from './blocks.controller';
 import { BlocksService } from './blocks.service';
 import { Block } from '../../entities/block.entity';
@@ -18,7 +19,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
     RealtimeModule,
   ],
   controllers: [BlocksController],
-  providers: [BlocksService],
-  exports: [BlocksService],
+  providers: [BlocksService, BlockPayloadResolverService],
+  exports: [BlocksService, BlockPayloadResolverService],
 })
 export class BlocksModule {}

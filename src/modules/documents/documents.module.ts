@@ -25,6 +25,7 @@ import { SyncCreateTombstone } from "../../entities/sync-create-tombstone.entity
 import { WorkspacesModule } from "../workspaces/workspaces.module";
 import { ActivitiesModule } from "../activities/activities.module";
 import { GcRenderCacheModule } from "../gc/modules/render-cache/gc-render-cache.module";
+import { BlockPayloadResolverService } from "../blocks/block-delta/block-payload-resolver.service";
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { GcRenderCacheModule } from "../gc/modules/render-cache/gc-render-cache.
     DocumentHtmlRendererService,
     DocumentRenderService,
     DraftCheckpointService,
+    BlockPayloadResolverService,
   ],
   exports: [
     DocumentsService,

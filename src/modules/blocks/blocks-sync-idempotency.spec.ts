@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Logger } from "@nestjs/common";
 import { BlocksService } from "./blocks.service";
+import { BlockPayloadResolverService } from "./block-delta/block-payload-resolver.service";
 import { BatchCreateOperation, BatchOperationType, BatchSourceType } from "./dto/batch-block.dto";
 import { CreateBlockDto } from "./dto/create-block.dto";
 import { MoveBlockDto } from "./dto/move-block.dto";
@@ -293,6 +294,13 @@ function createBlocksServiceWithInMemoryRepositories(config?: { throwOnLatestVer
     return draft;
   };
 
+  const blockPayloadResolverService = {
+    resolveBlockPayload: jest.fn(async (_manager: unknown, version: BlockVersion) => version.payload),
+    resolveBlockPayloads: jest.fn(),
+    findChainBaseVer: jest.fn((version: BlockVersion) => version.ver),
+    countDeltaChainLength: jest.fn(() => 0),
+  } as unknown as BlockPayloadResolverService;
+
   const service = new BlocksService(
     blockRepository as unknown as BlocksServiceConstructorArgs[0],
     blockVersionRepository as unknown as BlocksServiceConstructorArgs[1],
@@ -321,6 +329,7 @@ function createBlocksServiceWithInMemoryRepositories(config?: { throwOnLatestVer
     {
       record: jest.fn().mockResolvedValue(undefined),
     } as unknown as BlocksServiceConstructorArgs[7],
+    blockPayloadResolverService,
   );
 
   return { service, blocks, versions, syncSessions, tombstones };

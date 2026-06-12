@@ -8,6 +8,7 @@ import { DocDraft } from "../../../../entities/doc-draft.entity";
 import { DocSnapshot } from "../../../../entities/doc-snapshot.entity";
 import { Document } from "../../../../entities/document.entity";
 import { blockVersionResourceKey, snapshotMapToResourceKeys } from "./gc-resource-key.util";
+import { expandDeltaChainResourceKeys } from "./gc-delta-chain.util";
 import type {
   BlockVersionGcCandidate,
   BlockVersionGcCandidateAgeBucket,
@@ -136,6 +137,9 @@ export class BlockVersionGcCollector {
 
     const retention = this.calculatePolicyRetained(blockVersions, blocks, policy);
     const retained = retention.retained;
+    expandDeltaChainResourceKeys(blockVersions, retained);
+    expandDeltaChainResourceKeys(blockVersions, liveRoots);
+    expandDeltaChainResourceKeys(blockVersions, tombstoneRoots);
     const latestVerByBlock = new Map(blocks.map((block) => [block.blockId, block.latestVer]));
     const nowMs = Date.now();
     const candidates: BlockVersionGcCandidate[] = [];

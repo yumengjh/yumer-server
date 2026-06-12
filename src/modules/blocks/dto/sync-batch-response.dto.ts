@@ -61,6 +61,12 @@ export class SyncOperationResultDto {
   diagnosticCode?: string;
 
   @ApiPropertyOptional({
+    description: '块版本号（update/create/delete ack）',
+    example: 4,
+  })
+  version?: number;
+
+  @ApiPropertyOptional({
     description: 'delete 操作目标命中方式',
     example: 'syncCreateId',
   })

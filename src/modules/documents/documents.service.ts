@@ -86,6 +86,7 @@ import {
 } from "./services/document-render.service";
 import { DraftCheckpointService } from "./draft-checkpoint.service";
 import { GcRenderCacheService } from "../gc/modules/render-cache/gc-render-cache.service";
+import { BlockPayloadResolverService } from "../blocks/block-delta/block-payload-resolver.service";
 
 type DocumentActorSummary = {
   userId: string;
@@ -220,6 +221,7 @@ export class DocumentsService {
     private workspacesService: WorkspacesService,
     private activitiesService: ActivitiesService,
     private draftCheckpointService: DraftCheckpointService,
+    private blockPayloadResolverService: BlockPayloadResolverService,
     private documentRenderService?: DocumentRenderService,
     @Optional()
     private renderCacheGcService?: GcRenderCacheService,
@@ -2590,8 +2592,8 @@ export class DocumentsService {
       blockVersionId: rootVersion.id,
       docId: rootVersion.docId,
       ver: rootVersion.ver,
-      type: rootVersion.payload["type"] || "root",
-      payload: rootVersion.payload,
+      type: (rootVersion.payload as { type?: string } | null)?.type || "root",
+      payload: rootVersion.payload ?? {},
       children: [], // 实际应该递归加载
     };
   }
@@ -3724,7 +3726,7 @@ export class DocumentsService {
     return {
       ver: bv.ver,
       type: (bv.payload as any)?.type || "paragraph",
-      payload: bv.payload,
+      payload: bv.payload ?? {},
       parentId: bv.parentId,
       sortKey: bv.sortKey,
       indent: bv.indent,
@@ -4435,6 +4437,13 @@ export class DocumentsService {
     const byBlock = new Map<string, (typeof versions)[0]>();
     for (const v of versions) byBlock.set(v.blockId, v);
 
+    const resolvedPayloads = await this.blockPayloadResolverService.resolveBlockPayloads(
+      this.blockVersionRepository.manager,
+      versions,
+    );
+    const getResolvedPayload = (bv: BlockVersion): object =>
+      resolvedPayloads.get(`${docId}:${bv.blockId}:${bv.ver}`) ?? bv.payload ?? {};
+
     const root = byBlock.get(rootBlockId);
     if (!root) {
       return { tree: null, totalBlocks: 0, returnedBlocks: 0, hasMore: false };
@@ -4483,12 +4492,13 @@ export class DocumentsService {
       const bv = byBlock.get(blockId);
       if (!bv) return null;
 
+      const payload = getResolvedPayload(bv);
       const payloadAttrs =
-        bv.payload &&
-        typeof bv.payload === "object" &&
-        "attrs" in bv.payload &&
-        typeof (bv.payload as { attrs?: unknown }).attrs === "object"
-          ? ((bv.payload as { attrs?: Record<string, unknown> }).attrs ?? {})
+        payload &&
+        typeof payload === "object" &&
+        "attrs" in payload &&
+        typeof (payload as { attrs?: unknown }).attrs === "object"
+          ? ((payload as { attrs?: Record<string, unknown> }).attrs ?? {})
           : {};
       if (payloadAttrs.deleted === true) {
         return null;
@@ -4623,8 +4633,9 @@ export class DocumentsService {
         blockVersionId: bv.id,
         docId: bv.docId,
         ver: bv.ver,
-        type: (bv.payload as any)?.type || "paragraph",
-        payload: bv.payload,
+        hash: bv.hash,
+        type: (payload as { type?: string }).type || "paragraph",
+        payload,
         parentId: bv.parentId,
         sortKey: bv.sortKey || "500000",
         indent: bv.indent || 0,

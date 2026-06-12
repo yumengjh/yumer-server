@@ -1,6 +1,8 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Index } from 'typeorm';
 import { isSqlite } from '../common/db-type';
 
+export type BlockVersionPayloadKind = 'full' | 'delta';
+
 @Entity('block_versions')
 @Index(['blockId', 'ver'])
 @Index(['docId'])
@@ -42,8 +44,17 @@ export class BlockVersion {
   @Column({ default: false })
   collapsed: boolean;
 
-  @Column({ type: isSqlite() ? 'simple-json' : 'jsonb' })
-  payload: object;
+  @Column({ type: 'varchar', length: 16, default: 'full' })
+  payloadKind: BlockVersionPayloadKind;
+
+  @Column({ type: 'integer', nullable: true })
+  baseVer: number | null;
+
+  @Column({ type: 'text', nullable: true })
+  delta: string | null;
+
+  @Column({ type: isSqlite() ? 'simple-json' : 'jsonb', nullable: true })
+  payload: object | null;
 
   @Column()
   hash: string;

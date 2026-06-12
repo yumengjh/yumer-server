@@ -289,4 +289,36 @@ describe("BlockVersionGcCollector", () => {
     expect(result.summary.policyRetainedBlockVersions).toBe(0);
     expect(result.summary.candidateBlockVersions).toBe(1);
   });
+
+  it("retains the full delta chain when a draft root points at a delta version", async () => {
+    const old = Date.now() - 60 * 24 * 60 * 60 * 1000;
+    const collector = new BlockVersionGcCollector(
+      repository<Document>({
+        findOne: jest.fn().mockResolvedValue({ docId: "doc_1", workspaceId: "ws_1" }),
+        find: jest.fn().mockResolvedValue([{ docId: "doc_1", workspaceId: "ws_1" }]),
+      }),
+      repository<Block>({
+        find: jest.fn().mockResolvedValue([{ blockId: "b_1", docId: "doc_1", latestVer: 8 }]),
+      }),
+      repository<BlockVersion>({
+        find: jest.fn().mockResolvedValue([
+          { id: 1, docId: "doc_1", blockId: "b_1", ver: 1, createdAt: old, payload: {}, payloadKind: "full" },
+          { id: 5, docId: "doc_1", blockId: "b_1", ver: 5, createdAt: old, payload: {}, payloadKind: "full", baseVer: null },
+          { id: 6, docId: "doc_1", blockId: "b_1", ver: 6, createdAt: old, payload: null, payloadKind: "delta", baseVer: 5, delta: "patch" },
+          { id: 7, docId: "doc_1", blockId: "b_1", ver: 7, createdAt: old, payload: null, payloadKind: "delta", baseVer: 5, delta: "patch" },
+          { id: 8, docId: "doc_1", blockId: "b_1", ver: 8, createdAt: old, payload: null, payloadKind: "delta", baseVer: 5, delta: "patch" },
+        ]),
+      }),
+      repository<DocSnapshot>({ find: jest.fn().mockResolvedValue([]) }),
+      repository<DocDraft>({
+        find: jest.fn().mockResolvedValue([{ draftId: "draft_1", docId: "doc_1", blockVersionMap: { b_1: 8 } }]),
+      }),
+      new GcPolicyService(),
+    );
+
+    const result = await collector.preview({ docId: "doc_1" }, policy);
+
+    expect(result.candidates.map((candidate) => candidate.resourceKey)).toEqual(["b_1@1"]);
+    expect(result.summary.liveRootedBlockVersions).toBe(4);
+  });
 });
