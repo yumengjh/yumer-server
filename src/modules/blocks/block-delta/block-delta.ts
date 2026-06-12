@@ -1,11 +1,19 @@
 import { createHash } from "node:crypto";
 import DiffMatchPatch from "diff-match-patch";
+import {
+  COMPACTION_CHAIN_LIMIT,
+  DELTA_FORMAT,
+  DELTA_MAX_RATIO,
+  DELTA_MIN_FULL_SIZE,
+} from "./delta-policy";
 import { normalizeSyncCodeBlockAttrs } from "./sync-code-block-attrs";
 
-export const DELTA_FORMAT = "dmp-v1" as const;
-export const DELTA_MIN_FULL_SIZE = 8 * 1024;
-export const DELTA_MAX_RATIO = 0.5;
-export const COMPACTION_CHAIN_LIMIT = 12;
+export {
+  COMPACTION_CHAIN_LIMIT,
+  DELTA_FORMAT,
+  DELTA_MAX_RATIO,
+  DELTA_MIN_FULL_SIZE,
+} from "./delta-policy";
 
 export type DeltaFormat = typeof DELTA_FORMAT;
 export type PayloadKind = "full" | "delta";

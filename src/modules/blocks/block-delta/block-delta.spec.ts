@@ -5,13 +5,13 @@ import {
   buildBlockDelta,
   canonicalStringify,
   computeDelta,
-  DELTA_MIN_FULL_SIZE,
   ensurePayloadType,
   hashPayloadCanonical,
   parseCanonicalPayload,
   shouldAcceptClientDelta,
   shouldStoreDelta,
 } from "./block-delta";
+import { DELTA_REFERENCE_LARGE_BLOCK_BYTES } from "./delta-policy";
 
 type DeltaFixture = {
   name: string;
@@ -78,7 +78,7 @@ describe("block delta", () => {
       }),
     ).toBe(false);
 
-    const largeText = "x".repeat(DELTA_MIN_FULL_SIZE);
+    const largeText = "x".repeat(DELTA_REFERENCE_LARGE_BLOCK_BYTES);
     const largeBase = { type: "codeBlock", content: [{ type: "text", text: largeText }] };
     const largeNext = {
       type: "codeBlock",
