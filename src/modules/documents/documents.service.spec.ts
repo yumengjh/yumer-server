@@ -13,6 +13,7 @@ import { VersionControlService } from "./services/version-control.service";
 import { WorkspacesService } from "../workspaces/workspaces.service";
 import { ActivitiesService } from "../activities/activities.service";
 import type { DraftCheckpointService } from "./draft-checkpoint.service";
+import type { BlockPayloadResolverService } from "../blocks/block-delta/block-payload-resolver.service";
 import {
   DocumentDetailResponse,
   DocumentListItemResponse,
@@ -121,6 +122,10 @@ describe("DocumentsService", () => {
   const draftCheckpointService = {
     applyDraftCheckpoint: jest.fn(),
   } as unknown as DraftCheckpointService;
+  const blockPayloadResolverService = {
+    resolveBlockPayloads: jest.fn(),
+    resolveBlockPayload: jest.fn(),
+  } as unknown as jest.Mocked<BlockPayloadResolverService>;
   const documentRenderService = {
     renderTree: jest.fn(),
   };
@@ -160,6 +165,21 @@ describe("DocumentsService", () => {
       undefined,
     );
     renderCacheGcService.clearDocumentRenderCaches.mockResolvedValue(undefined);
+    jest
+      .mocked(blockPayloadResolverService.resolveBlockPayloads)
+      .mockImplementation(async (_manager, versions: BlockVersion[]) => {
+        return new Map(
+          versions.map((version) => [
+            `${version.docId}:${version.blockId}:${version.ver}`,
+            version.payload ?? {},
+          ]),
+        );
+      });
+    jest
+      .mocked(blockPayloadResolverService.resolveBlockPayload)
+      .mockImplementation(async (_manager, version: BlockVersion) => {
+        return (version.payload ?? {}) as Record<string, unknown>;
+      });
     syncSessions.length = 0;
     global.fetch = originalFetch;
     delete process.env.PUBLIC_SITE_REVALIDATE_URL;
@@ -180,6 +200,7 @@ describe("DocumentsService", () => {
       workspacesService,
       activitiesService,
       draftCheckpointService,
+      blockPayloadResolverService,
       documentRenderService,
       renderCacheGcService,
     );
@@ -2911,6 +2932,70 @@ describe("DocumentsService", () => {
     });
   });
 
+  it("resolves delta payloads when paginated content loads children on demand", async () => {
+    const queryBuilder = {
+      innerJoin: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([
+        { blockId: "child_1", maxVer: 3, sortKey: "001000" },
+      ]),
+    };
+    (blockVersionRepository as any).createQueryBuilder = jest
+      .fn()
+      .mockReturnValue(queryBuilder);
+
+    jest.mocked(blockVersionRepository.find).mockResolvedValue([
+      {
+        id: 3,
+        docId: "doc_1",
+        blockId: "child_1",
+        ver: 3,
+        parentId: "root_1",
+        sortKey: "001000",
+        indent: 0,
+        payloadKind: "delta",
+        baseVer: 2,
+        delta: "@@ -1 +1 @@\n-old\n+new\n",
+        payload: null,
+      },
+    ] as BlockVersion[]);
+
+    const resolvedPayload = {
+      type: "paragraph",
+      content: [{ type: "text", text: "new" }],
+    };
+    jest
+      .mocked(blockPayloadResolverService.resolveBlockPayloads)
+      .mockResolvedValue(
+        new Map([["doc_1:child_1:3", resolvedPayload]]),
+      );
+
+    const result = await (service as any).getChildrenBlocks(
+      "doc_1",
+      "root_1",
+      1000,
+      undefined,
+      0,
+      10,
+    );
+
+    expect(blockPayloadResolverService.resolveBlockPayloads).toHaveBeenCalled();
+    expect(result).toEqual([
+      expect.objectContaining({
+        blockId: "child_1",
+        type: "paragraph",
+        payload: resolvedPayload,
+      }),
+    ]);
+  });
+
   it("pending versions endpoint does not increment view count", async () => {
     const document = {
       docId: "doc_1",
@@ -3310,6 +3395,130 @@ describe("DocumentsService", () => {
       expect.objectContaining({
         type: "deleted",
         blockId: "block_a",
+      }),
+    ]);
+  });
+
+  it("resolves delta payloads before returning diff snapshots", async () => {
+    jest.mocked(documentRepository.findOne).mockResolvedValue({
+      docId: "doc_1",
+      workspaceId: "ws_1",
+      rootBlockId: "root_1",
+      head: 5,
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      visibility: "workspace",
+      status: "draft",
+      viewCount: 0,
+    } as Document);
+    jest.mocked(workspacesService.checkAccess).mockResolvedValue(undefined);
+    jest
+      .mocked(workspacesService.checkEditPermission as any)
+      .mockResolvedValue(undefined);
+    jest.mocked(documentRepository.save).mockResolvedValue(undefined as never);
+    jest.mocked(userRepository.find).mockResolvedValue([] as User[]);
+    jest.mocked((documentDraftService as any).findByDocId).mockResolvedValue({
+      draftId: "doc_1@draft",
+      updatedAt: 1700000000000,
+      blockVersionMap: { root_1: 1, block_a: 5 },
+    });
+
+    jest
+      .spyOn(service as any, "getBlockVersionMapForVersion")
+      .mockResolvedValue({
+        map: { root_1: 1, block_a: 2 },
+        createdAt: 1690000000000,
+      });
+    jest
+      .spyOn(service as any, "buildContentTreeFromVersionMap")
+      .mockResolvedValue({
+        tree: { blockId: "root_1" },
+        totalBlocks: 2,
+        returnedBlocks: 2,
+        hasMore: false,
+      });
+    const resolvedDeltaPayload = {
+      type: "paragraph",
+      attrs: {},
+      content: [{ type: "text", text: "new from delta" }],
+    };
+    jest.mocked(blockVersionRepository.find).mockResolvedValue([
+      {
+        docId: "doc_1",
+        blockId: "root_1",
+        ver: 1,
+        parentId: "",
+        sortKey: "0",
+        indent: 0,
+        payloadKind: "full",
+        baseVer: null,
+        delta: null,
+        payload: { type: "root", children: [] },
+        hash: "root",
+      },
+      {
+        docId: "doc_1",
+        blockId: "block_a",
+        ver: 2,
+        parentId: "root_1",
+        sortKey: "001000",
+        indent: 0,
+        payloadKind: "full",
+        baseVer: null,
+        delta: null,
+        payload: {
+          type: "paragraph",
+          attrs: {},
+          content: [{ type: "text", text: "old" }],
+        },
+        hash: "old",
+      },
+      {
+        docId: "doc_1",
+        blockId: "block_a",
+        ver: 5,
+        parentId: "root_1",
+        sortKey: "001000",
+        indent: 0,
+        payloadKind: "delta",
+        baseVer: 2,
+        delta: "@@ -1 +1 @@\n-old\n+new\n",
+        payload: null,
+        hash: "new",
+      },
+    ] as BlockVersion[]);
+    jest
+      .mocked(blockPayloadResolverService.resolveBlockPayloads)
+      .mockResolvedValue(
+        new Map([
+          ["doc_1:root_1:1", { type: "root", children: [] }],
+          [
+            "doc_1:block_a:2",
+            {
+              type: "paragraph",
+              attrs: {},
+              content: [{ type: "text", text: "old" }],
+            },
+          ],
+          ["doc_1:block_a:5", resolvedDeltaPayload],
+        ]),
+      );
+
+    const result = await service.getDiff(
+      "doc_1",
+      { fromKind: "revision", fromVer: 4, toKind: "draft" },
+      "user_1",
+    );
+
+    expect(blockPayloadResolverService.resolveBlockPayloads).toHaveBeenCalled();
+    expect(result.changes).toEqual([
+      expect.objectContaining({
+        type: "modified",
+        blockId: "block_a",
+        to: expect.objectContaining({
+          type: "paragraph",
+          payload: resolvedDeltaPayload,
+        }),
       }),
     ]);
   });

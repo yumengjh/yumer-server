@@ -15,7 +15,10 @@ import type { DataSource } from "typeorm";
 type BlockState = Partial<Block>;
 type BlockVersionState = Partial<BlockVersion>;
 
-function createDraftAwareBlocksService(config?: { throwOnBlockVersionFind?: boolean }) {
+function createDraftAwareBlocksService(config?: {
+  throwOnBlockVersionFind?: boolean;
+  resolvePayload?: (version: BlockVersion) => Record<string, unknown>;
+}) {
   const document = {
     docId: "doc_1",
     rootBlockId: "root_1",
@@ -283,14 +286,18 @@ function createDraftAwareBlocksService(config?: { throwOnBlockVersionFind?: bool
       typeof BlocksService
     >[7],
     {
-      resolveBlockPayload: jest.fn(async (_manager: unknown, version: BlockVersion) => version.payload ?? {}),
+      resolveBlockPayload: jest.fn(async (_manager: unknown, version: BlockVersion) =>
+        config?.resolvePayload
+          ? config.resolvePayload(version)
+          : ((version.payload ?? {}) as Record<string, unknown>),
+      ),
       resolveBlockPayloads: jest.fn(),
       findChainBaseVer: jest.fn((version: BlockVersion) => version.ver),
       countDeltaChainLength: jest.fn(() => 0),
     } as unknown as BlockPayloadResolverService,
   );
 
-  return { service, documentDraftService, versions };
+  return { service, documentDraftService, versions, blocks };
 }
 
 describe("BlocksService draft writes", () => {
@@ -438,6 +445,111 @@ describe("BlocksService draft writes", () => {
       "user_1",
       expect.any(Object),
     );
+  });
+
+  it("uses resolved full payload when moving a block whose latest version is delta", async () => {
+    const resolvedPayload = {
+      type: "paragraph",
+      attrs: { clientId: "client_delta" },
+      content: [{ type: "text", text: "delta latest" }],
+    };
+    const { service, versions, blocks } = createDraftAwareBlocksService({
+      resolvePayload: (version) =>
+        version.blockId === "block_1" && version.ver === 2
+          ? resolvedPayload
+          : ((version.payload ?? {}) as Record<string, unknown>),
+    });
+    const block = blocks.find((item) => item.blockId === "block_1")!;
+    block.latestVer = 2;
+    versions.push({
+      versionId: "block_1_v2",
+      docId: "doc_1",
+      blockId: "block_1",
+      ver: 2,
+      payloadKind: "delta",
+      baseVer: 1,
+      delta: "@@ -1 +1 @@\n-placeholder\n+placeholder\n",
+      parentId: "root_1",
+      sortKey: "001000",
+      indent: 0,
+      collapsed: false,
+      payload: null,
+      hash: "delta-latest",
+      plainText: "delta latest",
+      refs: [],
+    });
+
+    await service.move(
+      "block_1",
+      {
+        parentId: "root_1",
+        sortKey: "003000",
+        createVersion: false,
+      },
+      "user_1",
+    );
+
+    const movedVersion = versions.find((item) => item.blockId === "block_1" && item.ver === 3);
+    expect(movedVersion?.payload).toEqual(resolvedPayload);
+  });
+
+  it("uses resolved full payload when deleting a block whose latest version is delta", async () => {
+    const resolvedPayload = {
+      type: "paragraph",
+      attrs: { clientId: "client_delta" },
+      content: [{ type: "text", text: "delta latest" }],
+    };
+    const { service, versions, blocks } = createDraftAwareBlocksService({
+      resolvePayload: (version) =>
+        version.blockId === "block_1" && version.ver === 2
+          ? resolvedPayload
+          : ((version.payload ?? {}) as Record<string, unknown>),
+    });
+    const block = blocks.find((item) => item.blockId === "block_1")!;
+    block.latestVer = 2;
+    versions.push({
+      versionId: "block_1_v2",
+      docId: "doc_1",
+      blockId: "block_1",
+      ver: 2,
+      payloadKind: "delta",
+      baseVer: 1,
+      delta: "@@ -1 +1 @@\n-placeholder\n+placeholder\n",
+      parentId: "root_1",
+      sortKey: "001000",
+      indent: 0,
+      collapsed: false,
+      payload: null,
+      hash: "delta-latest",
+      plainText: "delta latest",
+      refs: [],
+    });
+
+    await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        clientBatchId: "batch_delete_delta_latest",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.DELETE,
+            blockId: "block_1",
+          },
+        ],
+      },
+      "user_1",
+    );
+
+    const deletedVersion = versions.find((item) => item.blockId === "block_1" && item.ver === 3);
+    expect(deletedVersion?.payload).toEqual({
+      ...resolvedPayload,
+      attrs: {
+        ...resolvedPayload.attrs,
+        deleted: true,
+      },
+    });
   });
 
   it("records batch delete as a deleted-state draft version when createVersion=false", async () => {

@@ -3562,15 +3562,26 @@ export class DocumentsService {
     const versions = await this.blockVersionRepository.find({
       where: conditions.map((c) => ({ docId, blockId: c.blockId, ver: c.ver })),
       select: [
+        "id",
+        "docId",
         "blockId",
         "ver",
         "parentId",
         "sortKey",
         "indent",
+        "payloadKind",
+        "baseVer",
+        "delta",
         "payload",
         "hash",
       ],
     });
+    const resolvedPayloads = await this.blockPayloadResolverService.resolveBlockPayloads(
+      this.blockVersionRepository.manager,
+      versions,
+    );
+    const getResolvedPayload = (bv: BlockVersion): object =>
+      resolvedPayloads.get(`${docId}:${bv.blockId}:${bv.ver}`) ?? bv.payload ?? {};
 
     // 按 blockId:ver 建索引
     const bvIndex = new Map<string, (typeof versions)[0]>();
@@ -3604,8 +3615,11 @@ export class DocumentsService {
       const toBv =
         toVer === undefined ? undefined : bvIndex.get(`${blockId}:${toVer}`);
       const fromVisible =
-        Boolean(fromBv) && !this.isDeletedSnapshotVersion(fromBv!);
-      const toVisible = Boolean(toBv) && !this.isDeletedSnapshotVersion(toBv!);
+        Boolean(fromBv) &&
+        !this.isDeletedSnapshotVersion(fromBv!, getResolvedPayload(fromBv!));
+      const toVisible =
+        Boolean(toBv) &&
+        !this.isDeletedSnapshotVersion(toBv!, getResolvedPayload(toBv!));
 
       if (!fromVisible && !toVisible) {
         continue;
@@ -3617,7 +3631,7 @@ export class DocumentsService {
         changes.push({
           type: "added",
           blockId,
-          to: this.extractSnapshot(toBv!),
+          to: this.extractSnapshot(toBv!, getResolvedPayload(toBv!)),
         });
       } else if (fromVisible && !toVisible) {
         // 删除块
@@ -3625,7 +3639,7 @@ export class DocumentsService {
         changes.push({
           type: "deleted",
           blockId,
-          from: this.extractSnapshot(fromBv!),
+          from: this.extractSnapshot(fromBv!, getResolvedPayload(fromBv!)),
         });
       } else {
         // 两边都存在，比较差异
@@ -3665,8 +3679,8 @@ export class DocumentsService {
         changes.push({
           type: changeType,
           blockId,
-          from: this.extractSnapshot(fromBv),
-          to: this.extractSnapshot(toBv),
+          from: this.extractSnapshot(fromBv, getResolvedPayload(fromBv)),
+          to: this.extractSnapshot(toBv, getResolvedPayload(toBv)),
         });
       }
     }
@@ -3674,8 +3688,11 @@ export class DocumentsService {
     return { changes, summary };
   }
 
-  private isDeletedSnapshotVersion(bv: Pick<BlockVersion, "payload">): boolean {
-    const payload = bv.payload;
+  private isDeletedSnapshotVersion(
+    bv: Pick<BlockVersion, "payload">,
+    resolvedPayload: unknown = bv.payload,
+  ): boolean {
+    const payload = resolvedPayload;
     if (!payload || typeof payload !== "object" || !("attrs" in payload)) {
       return false;
     }
@@ -3722,11 +3739,11 @@ export class DocumentsService {
     return maxHistoricalVer + 1;
   }
 
-  private extractSnapshot(bv: BlockVersion): BlockSnapshot {
+  private extractSnapshot(bv: BlockVersion, resolvedPayload: unknown = bv.payload): BlockSnapshot {
     return {
       ver: bv.ver,
-      type: (bv.payload as any)?.type || "paragraph",
-      payload: bv.payload ?? {},
+      type: (resolvedPayload as any)?.type || "paragraph",
+      payload: (resolvedPayload as Record<string, unknown>) ?? {},
       parentId: bv.parentId,
       sortKey: bv.sortKey,
       indent: bv.indent,
@@ -3929,6 +3946,11 @@ export class DocumentsService {
           hasMore: false,
         };
       }
+      const rootPayload =
+        await this.blockPayloadResolverService.resolveBlockPayload(
+          this.blockVersionRepository.manager,
+          rootVersion,
+        );
 
       const children = await this.getChildrenBlocks(
         docId,
@@ -3945,8 +3967,8 @@ export class DocumentsService {
           blockVersionId: rootVersion.id,
           docId: rootVersion.docId,
           ver: rootVersion.ver,
-          type: (rootVersion.payload as any)?.type || "root",
-          payload: rootVersion.payload,
+          type: (rootPayload as any)?.type || "root",
+          payload: rootPayload,
           parentId: rootVersion.parentId,
           sortKey: rootVersion.sortKey || "0",
           indent: rootVersion.indent || 0,
@@ -4039,6 +4061,15 @@ export class DocumentsService {
 
     const byBlock = new Map<string, (typeof versions)[0]>();
     for (const v of versions) byBlock.set(v.blockId, v);
+    const resolvedPayloads =
+      await this.blockPayloadResolverService.resolveBlockPayloads(
+        this.blockVersionRepository.manager,
+        versions,
+      );
+    const getResolvedPayload = (bv: BlockVersion): object =>
+      resolvedPayloads.get(`${docId}:${bv.blockId}:${bv.ver}`) ??
+      bv.payload ??
+      {};
 
     // 构建树结构
     let returnedBlocks = 0;
@@ -4063,6 +4094,7 @@ export class DocumentsService {
 
       const bv = byBlock.get(blockId);
       if (!bv) return null;
+      const payload = getResolvedPayload(bv);
 
       returnedBlocks++;
 
@@ -4081,8 +4113,8 @@ export class DocumentsService {
         blockVersionId: bv.id,
         docId: bv.docId,
         ver: bv.ver,
-        type: (bv.payload as any)?.type || "paragraph",
-        payload: bv.payload,
+        type: (payload as any)?.type || "paragraph",
+        payload,
         parentId: bv.parentId,
         sortKey: bv.sortKey || "500000",
         indent: bv.indent || 0,
@@ -4112,6 +4144,11 @@ export class DocumentsService {
           hasMore: false,
         };
       }
+      const rootPayload =
+        await this.blockPayloadResolverService.resolveBlockPayload(
+          this.blockVersionRepository.manager,
+          rootVersion,
+        );
 
       return {
         tree: {
@@ -4119,8 +4156,8 @@ export class DocumentsService {
           blockVersionId: rootVersion.id,
           docId: rootVersion.docId,
           ver: rootVersion.ver,
-          type: (rootVersion.payload as any)?.type || "root",
-          payload: rootVersion.payload,
+          type: (rootPayload as any)?.type || "root",
+          payload: rootPayload,
           parentId: rootVersion.parentId,
           sortKey: rootVersion.sortKey || "0",
           indent: rootVersion.indent || 0,
@@ -4143,14 +4180,20 @@ export class DocumentsService {
         throw new NotFoundException(`父块 ${startBlockParentId} 不存在`);
       }
 
+      const parentPayload =
+        await this.blockPayloadResolverService.resolveBlockPayload(
+          this.blockVersionRepository.manager,
+          parentVersion,
+        );
+
       return {
         tree: {
           blockId: parentVersion.blockId,
           blockVersionId: parentVersion.id,
           docId: parentVersion.docId,
           ver: parentVersion.ver,
-          type: (parentVersion.payload as any)?.type || "paragraph",
-          payload: parentVersion.payload,
+          type: (parentPayload as any)?.type || "paragraph",
+          payload: parentPayload,
           parentId: parentVersion.parentId,
           sortKey: parentVersion.sortKey || "500000",
           indent: parentVersion.indent || 0,
@@ -4248,6 +4291,15 @@ export class DocumentsService {
             : row.maxVer,
       })),
     });
+    const resolvedPayloads =
+      await this.blockPayloadResolverService.resolveBlockPayloads(
+        this.blockVersionRepository.manager,
+        childVersions,
+      );
+    const getResolvedPayload = (bv: BlockVersion): object =>
+      resolvedPayloads.get(`${docId}:${bv.blockId}:${bv.ver}`) ??
+      bv.payload ??
+      {};
 
     const children: any[] = [];
     let usedLimit = 0;
@@ -4268,14 +4320,15 @@ export class DocumentsService {
         currentDepth + 1,
         remainingLimit - usedLimit,
       );
+      const payload = getResolvedPayload(childVersion);
 
       children.push({
         blockId: childVersion.blockId,
         blockVersionId: childVersion.id,
         docId: childVersion.docId,
         ver: childVersion.ver,
-        type: (childVersion.payload as any)?.type || "paragraph",
-        payload: childVersion.payload,
+        type: (payload as any)?.type || "paragraph",
+        payload,
         parentId: childVersion.parentId,
         sortKey: childVersion.sortKey || "500000",
         indent: childVersion.indent || 0,

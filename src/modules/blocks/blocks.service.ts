@@ -1121,6 +1121,10 @@ export class BlocksService {
         throw new NotFoundException("块版本不存在");
       }
 
+      const latestPayload = (await this.blockPayloadResolverService.resolveBlockPayload(
+        manager,
+        latestVersion,
+      )) as Record<string, unknown>;
       const resolvedParentId = moveBlockDto.parentId || latestVersion.parentId || "";
       const resolvedSortKey = await this.reserveUniqueSortKey({
         docId: block.docId,
@@ -1149,7 +1153,7 @@ export class BlocksService {
         sortKey: resolvedSortKey,
         indent: moveBlockDto.indent || 0,
         collapsed: latestVersion.collapsed,
-        payload: latestVersion.payload,
+        payload: latestPayload,
         hash: latestVersion.hash,
         plainText: latestVersion.plainText,
         refs: latestVersion.refs,
@@ -2474,9 +2478,14 @@ export class BlocksService {
       if (!latestVersion) {
         throw new NotFoundException("Block version not found");
       }
+      const latestPayload = (await this.blockPayloadResolverService.resolveBlockPayload(
+        manager,
+        latestVersion,
+      )) as Record<string, unknown>;
       const createDeleteCompensation = this.buildCreateDeleteCompensation(
         block,
         latestVersion,
+        latestPayload,
         clientBatchId,
         now,
       );
@@ -2494,9 +2503,14 @@ export class BlocksService {
     if (!latestVersion) {
       throw new NotFoundException("Block version not found");
     }
+    const latestPayload = (await this.blockPayloadResolverService.resolveBlockPayload(
+      manager,
+      latestVersion,
+    )) as Record<string, unknown>;
     const createDeleteCompensation = this.buildCreateDeleteCompensation(
       block,
       latestVersion,
+      latestPayload,
       clientBatchId,
       now,
     );
@@ -2508,11 +2522,9 @@ export class BlocksService {
       block.latestVer,
     );
     const deletedPayload = {
-      ...(latestVersion.payload as Record<string, unknown>),
+      ...latestPayload,
       attrs: {
-        ...(((latestVersion.payload as Record<string, unknown>).attrs as
-          | Record<string, unknown>
-          | undefined) ?? {}),
+        ...((latestPayload.attrs as Record<string, unknown> | undefined) ?? {}),
         deleted: true,
       },
     };
@@ -2572,6 +2584,7 @@ export class BlocksService {
   private buildCreateDeleteCompensation(
     block: Block,
     latestVersion: BlockVersion,
+    latestPayload: Record<string, unknown>,
     deleteClientBatchId: string,
     deletedAt: number,
   ): SyncCreateDeleteCompensation | undefined {
@@ -2581,7 +2594,7 @@ export class BlocksService {
     const ageMs = deletedAt - createdAt;
     if (ageMs < 0 || ageMs > this.createDeleteCompensationWindowMs) return undefined;
 
-    const attrs = (latestVersion.payload as { attrs?: Record<string, unknown> } | undefined)?.attrs;
+    const attrs = latestPayload.attrs as Record<string, unknown> | undefined;
     if (!attrs?.clientBatchId && !attrs?.clientId && !attrs?.syncCreateId) return undefined;
 
     return {
@@ -2640,6 +2653,10 @@ export class BlocksService {
     if (!latestVersion) {
       throw new NotFoundException("Block version not found");
     }
+    const latestPayload = (await this.blockPayloadResolverService.resolveBlockPayload(
+      manager,
+      latestVersion,
+    )) as Record<string, unknown>;
 
     const resolvedSortKey = await this.reserveUniqueSortKey({
       docId,
@@ -2667,7 +2684,7 @@ export class BlocksService {
       sortKey: resolvedSortKey,
       indent: operation.indent || 0,
       collapsed: latestVersion.collapsed,
-      payload: latestVersion.payload,
+      payload: latestPayload,
       hash: latestVersion.hash,
       plainText: latestVersion.plainText,
       refs: latestVersion.refs,
