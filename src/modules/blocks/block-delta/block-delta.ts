@@ -170,6 +170,7 @@ export function shouldStoreDelta(input: {
   if (input.chainLength >= chainLimit) return false;
 
   const patch = computeDelta(input.basePayload, input.fullPayload);
+  if (patch.length === 0) return false;
   const patchSize = Buffer.byteLength(patch, "utf8");
   return patchSize <= fullSize * maxRatio;
 }

@@ -107,6 +107,28 @@ describe("block delta", () => {
     ).toBe(false);
   });
 
+  it("does not store delta when canonical payload is unchanged", () => {
+    const largeText = "x".repeat(DELTA_REFERENCE_LARGE_BLOCK_BYTES);
+    const basePayload = {
+      type: "codeBlock",
+      attrs: { sortKey: "001000" },
+      content: [{ type: "text", text: largeText }],
+    };
+    const nextPayload = {
+      type: "codeBlock",
+      attrs: { sortKey: "002000" },
+      content: [{ type: "text", text: largeText }],
+    };
+
+    expect(
+      shouldStoreDelta({
+        fullPayload: nextPayload,
+        basePayload,
+        chainLength: 0,
+      }),
+    ).toBe(false);
+  });
+
   it("accepts client delta when DB payload lacks top-level type", () => {
     const baseWithoutType = {
       attrs: { language: "javascript" },

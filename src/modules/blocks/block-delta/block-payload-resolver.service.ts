@@ -170,7 +170,7 @@ export class BlockPayloadResolverService {
     let currentPayload: unknown = basePayload;
     const deltaRows = chainRows.filter((row) => row.ver > baseVer && row.ver <= version.ver);
     for (const row of deltaRows) {
-      if (!row.delta) {
+      if (row.delta == null) {
         throw new Error(`Missing delta patch at ${row.blockId}@${row.ver}`);
       }
       const canonicalText = applyDelta(

@@ -124,6 +124,54 @@ describe("BlockPayloadResolverService", () => {
     );
   });
 
+  it("accepts an empty delta patch as a valid no-op patch", async () => {
+    const basePayload = {
+      type: "paragraph",
+      attrs: { sortKey: "001000" },
+      content: [{ type: "text", text: "hello" }],
+    };
+
+    manager.find.mockResolvedValue([
+      {
+        id: 1,
+        docId: "doc_1",
+        blockId: "b1",
+        ver: 1,
+        payloadKind: "full",
+        baseVer: null,
+        delta: null,
+        payload: basePayload,
+      },
+      {
+        id: 2,
+        docId: "doc_1",
+        blockId: "b1",
+        ver: 2,
+        payloadKind: "delta",
+        baseVer: 1,
+        delta: "",
+        payload: null,
+      },
+    ]);
+
+    const resolved = await service.resolveBlockPayloads(manager as never, [
+      {
+        id: 2,
+        docId: "doc_1",
+        blockId: "b1",
+        ver: 2,
+        payloadKind: "delta",
+        baseVer: 1,
+        delta: "",
+        payload: null,
+      },
+    ]);
+
+    expect(resolved.get("doc_1:b1:2")).toEqual(
+      parseCanonicalPayload(canonicalStringify(basePayload)),
+    );
+  });
+
   it("reconstructs three-step delta chains from the full base", async () => {
     const basePayload = {
       type: "codeBlock",
