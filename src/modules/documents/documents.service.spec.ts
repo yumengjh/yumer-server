@@ -3704,6 +3704,35 @@ describe("DocumentsService", () => {
     );
   });
 
+  it("chunks sync manifest reconcile version lookups to avoid SQLite expression depth limits", async () => {
+    const blockVersionMap: Record<string, number> = { root_1: 1 };
+    for (let index = 0; index < 1005; index += 1) {
+      blockVersionMap[`block_${index}`] = 1;
+    }
+    const manager = {
+      find: jest.fn().mockResolvedValue([]),
+    };
+
+    const result = await (service as any).tombstoneMissingSyncManifestBlocks({
+      manager,
+      docId: "doc_1",
+      userId: "user_1",
+      draft: {
+        rootBlockId: "root_1",
+        blockVersionMap,
+      },
+      manifest: [],
+      now: Date.now(),
+    });
+
+    expect(result).toEqual([]);
+    expect(manager.find).toHaveBeenCalledTimes(5);
+    for (const call of manager.find.mock.calls) {
+      const options = call[1] as { where: unknown[] };
+      expect(options.where.length).toBeLessThanOrEqual(250);
+    }
+  });
+
   it("does not reconcile an idle manifest built on a stale draft revision", async () => {
     const loggerLog = jest.fn();
     (service as any).logger.log = loggerLog;

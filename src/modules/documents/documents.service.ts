@@ -153,6 +153,7 @@ type SyncReconcileResponse = {
   tombstoned: SyncReconcileTombstone[];
 };
 
+const SYNC_RECONCILE_VERSION_LOOKUP_CHUNK_SIZE = 250;
 const DOCUMENT_STATUS_DELETED = "deleted";
 const DEFAULT_RESTORED_DOCUMENT_STATUS = "normal";
 const DEFAULT_TRASH_RETENTION_DAYS = 30;
@@ -3372,13 +3373,26 @@ export class DocumentsService {
       .map(([blockId, ver]) => ({ blockId, ver }));
     if (candidates.length === 0) return [];
 
-    const versions = await params.manager.find(BlockVersion, {
-      where: candidates.map((candidate) => ({
-        docId: params.docId,
-        blockId: candidate.blockId,
-        ver: candidate.ver,
-      })),
-    });
+    const versions: BlockVersion[] = [];
+    for (
+      let start = 0;
+      start < candidates.length;
+      start += SYNC_RECONCILE_VERSION_LOOKUP_CHUNK_SIZE
+    ) {
+      const chunk = candidates.slice(
+        start,
+        start + SYNC_RECONCILE_VERSION_LOOKUP_CHUNK_SIZE,
+      );
+      versions.push(
+        ...(await params.manager.find(BlockVersion, {
+          where: chunk.map((candidate) => ({
+            docId: params.docId,
+            blockId: candidate.blockId,
+            ver: candidate.ver,
+          })),
+        })),
+      );
+    }
     const byBlock = new Map(
       versions.map((version) => [version.blockId, version]),
     );
