@@ -105,3 +105,24 @@ export function generateLogId(): string {
 export function generateSettingsProfileId(): string {
   return `sp_${Date.now()}_${uuidv4().split("-")[0]}`;
 }
+
+/**
+ * 生成 AI 会话 ID (aic_xxx)
+ */
+export function generateAiConversationId(): string {
+  return `aic_${Date.now()}_${uuidv4().split("-")[0]}`;
+}
+
+/**
+ * 生成 AI 消息 ID (aim_xxx)
+ */
+export function generateAiMessageId(): string {
+  return `aim_${Date.now()}_${uuidv4().split("-")[0]}`;
+}
+
+/**
+ * 生成 AI 上下文快照 ID (aics_xxx)
+ */
+export function generateAiContextSnapshotId(): string {
+  return `aics_${Date.now()}_${uuidv4().split("-")[0]}`;
+}

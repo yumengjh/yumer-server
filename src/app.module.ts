@@ -27,6 +27,7 @@ import { RuntimeConfigModule } from "./modules/runtime-config/runtime-config.mod
 import { RuntimeConfigService } from "./modules/runtime-config/runtime-config.service";
 import { GcModule } from "./modules/gc/gc.module";
 import { RealtimeModule } from "./modules/realtime/realtime.module";
+import { AiModule } from "./modules/ai/ai.module";
 
 // 导入所有实体
 import { User } from "./entities/user.entity";
@@ -63,6 +64,9 @@ import { SyncCheckpointReceipt } from "./entities/sync-checkpoint-receipt.entity
 import { SyncReconcileReceipt } from "./entities/sync-reconcile-receipt.entity";
 import { DocumentSyncSession } from "./entities/document-sync-session.entity";
 import { SyncCreateTombstone } from "./entities/sync-create-tombstone.entity";
+import { AiConversation } from "./entities/ai-conversation.entity";
+import { AiMessage } from "./entities/ai-message.entity";
+import { AiContextSnapshot } from "./entities/ai-context-snapshot.entity";
 
 export const databaseEntities = [
   User,
@@ -99,6 +103,9 @@ export const databaseEntities = [
   SyncReconcileReceipt,
   DocumentSyncSession,
   SyncCreateTombstone,
+  AiConversation,
+  AiMessage,
+  AiContextSnapshot,
 ];
 
 @Module({
@@ -179,6 +186,7 @@ export const databaseEntities = [
     CommentsModule,
     SearchModule,
     ActivitiesModule,
+    AiModule,
     SettingsModule.forRoot(),
   ],
   controllers: [AppController],
