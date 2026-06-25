@@ -42,4 +42,7 @@ export default registerAs("app", () => ({
   maxFileSize: parseInt(process.env.MAX_FILE_SIZE || "10485760", 10), // 默认 10MB
   swaggerEnabled: parseBoolean(process.env.SWAGGER_ENABLED, true),
   swaggerPath: process.env.SWAGGER_PATH || "docs",
+  aiOpenaiBaseUrl: process.env.AI_OPENAI_BASE_URL || "https://api.openai.com/v1",
+  aiOpenaiApiKey: process.env.AI_OPENAI_API_KEY || "",
+  aiOpenaiModel: process.env.AI_OPENAI_MODEL || "gpt-4o-mini",
 }));
