@@ -16,7 +16,7 @@ describe("AiConversationService", () => {
   let messageRepo: FakeRepository<AiMessage>;
   let snapshotRepo: FakeRepository<AiContextSnapshot>;
   let workspacesService: { checkAccess: jest.Mock };
-  let modelService: jest.Mocked<Pick<AiModelService, "generate">>;
+  let modelService: jest.Mocked<Pick<AiModelService, "generate" | "stream">>;
   let service: AiConversationService;
 
   beforeEach(() => {
@@ -29,6 +29,14 @@ describe("AiConversationService", () => {
         content: "生成结果",
         model: "test-model",
         usage: { totalTokens: 12 },
+      }),
+      stream: jest.fn(async function* () {
+        yield { delta: "real", model: "test-model" };
+        yield {
+          delta: " stream",
+          model: "test-model",
+          usage: { totalTokens: 12 },
+        };
       }),
     };
     service = new AiConversationService(
@@ -77,6 +85,36 @@ describe("AiConversationService", () => {
     expect(snapshotRepo.items[0].messages.at(-1)).toEqual({
       role: "user",
       content: "写一段产品介绍",
+    });
+  });
+
+  it("streams model chunks before saving the final assistant message", async () => {
+    const deltas: string[] = [];
+
+    const result = await service.sendMessageStream(
+      { prompt: "stream please", workspaceId: "ws_1" },
+      "user_1",
+      (delta) => {
+        deltas.push(delta);
+        expect(messageRepo.items.map((item) => item.role)).toEqual(["user"]);
+      },
+    );
+
+    expect(modelService.stream).toHaveBeenCalledWith({
+      messages: expect.arrayContaining([{ role: "user", content: "stream please" }]),
+    });
+    expect(deltas).toEqual(["real", " stream"]);
+    expect(result).toMatchObject({
+      conversationId: expect.stringMatching(/^aic_/),
+      userMessageId: expect.stringMatching(/^aim_/),
+      assistantMessageId: expect.stringMatching(/^aim_/),
+      content: "real stream",
+      model: "test-model",
+    });
+    expect(messageRepo.items.map((item) => item.role)).toEqual(["user", "assistant"]);
+    expect(messageRepo.items.at(-1)).toMatchObject({
+      role: "assistant",
+      content: "real stream",
     });
   });
 

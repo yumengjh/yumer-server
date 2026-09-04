@@ -188,6 +188,9 @@ importers:
       multer:
         specifier: ^2.0.2
         version: 2.1.1
+      openai:
+        specifier: ^6.45.0
+        version: 6.45.0(@aws-sdk/credential-provider-node@3.972.44)(@smithy/signature-v4@5.4.4)(zod@4.4.3)
       passport:
         specifier: ^0.7.0
         version: 0.7.0

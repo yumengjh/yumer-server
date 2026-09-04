@@ -114,6 +114,96 @@ export class AiConversationService {
     };
   }
 
+  async sendMessageStream(
+    dto: CreateAiChatDto,
+    userId: string,
+    onDelta: (delta: string) => void | Promise<void>,
+  ) {
+    const prompt = dto.prompt?.trim();
+    if (!prompt) {
+      throw new BadRequestException("提示词不能为空");
+    }
+
+    const conversation = await this.resolveConversation(dto, userId, prompt);
+    const history = await this.loadHistory(conversation.conversationId, userId);
+
+    const userMessage = await this.messageRepository.save(
+      this.messageRepository.create({
+        messageId: generateAiMessageId(),
+        conversationId: conversation.conversationId,
+        userId,
+        role: "user",
+        content: prompt,
+        metadata: {},
+      }),
+    );
+
+    const context = this.aiPromptBuilder.build({ prompt, history });
+    const snapshot = await this.contextSnapshotRepository.save(
+      this.contextSnapshotRepository.create({
+        snapshotId: generateAiContextSnapshotId(),
+        conversationId: conversation.conversationId,
+        requestMessageId: userMessage.messageId,
+        userId,
+        messages: context.messages,
+        model: "unknown",
+        metadata: context.metadata,
+      }),
+    );
+
+    let content = "";
+    let model = "unknown";
+    let usage: Record<string, unknown> | undefined;
+
+    try {
+      for await (const chunk of this.aiModelService.stream({
+        messages: context.messages,
+      })) {
+        model = chunk.model;
+        usage = chunk.usage ?? usage;
+        content += chunk.delta;
+        await onDelta(chunk.delta);
+      }
+    } catch (error) {
+      if (error instanceof ServiceUnavailableException) {
+        throw error;
+      }
+      throw new BadGatewayException("AI 模型调用失败");
+    }
+
+    snapshot.model = model;
+    snapshot.metadata = {
+      ...snapshot.metadata,
+      usage: usage ?? null,
+    };
+    await this.contextSnapshotRepository.save(snapshot);
+
+    const assistantMessage = await this.messageRepository.save(
+      this.messageRepository.create({
+        messageId: generateAiMessageId(),
+        conversationId: conversation.conversationId,
+        userId,
+        role: "assistant",
+        content,
+        metadata: {
+          model,
+          usage: usage ?? null,
+        },
+      }),
+    );
+
+    conversation.updatedAt = new Date();
+    await this.conversationRepository.save(conversation);
+
+    return {
+      conversationId: conversation.conversationId,
+      userMessageId: userMessage.messageId,
+      assistantMessageId: assistantMessage.messageId,
+      content,
+      model,
+    };
+  }
+
   async listConversations(dto: ListAiConversationsDto, userId: string) {
     const page = dto.page ?? 1;
     const pageSize = dto.pageSize ?? 20;
