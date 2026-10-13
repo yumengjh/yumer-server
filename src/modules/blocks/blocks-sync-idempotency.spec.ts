@@ -711,7 +711,7 @@ describe("BlocksService sync idempotency", () => {
     expect(response.serverHead).toBe(1);
   });
 
-  it("does not advance draftRevision or publish reload when a draft batch contains partial failures", async () => {
+  it("persists successful operations of a partially failed draft batch into the draft", async () => {
     const { service, doc, documentRealtimeService } = createBlocksServiceWithInMemoryRepositories();
 
     const response = await service.batch(
@@ -755,9 +755,16 @@ describe("BlocksService sync idempotency", () => {
         expect.objectContaining({ operation: BatchOperationType.UPDATE, success: false }),
       ]),
     );
-    expect(response.draftRevision).toBe(0);
-    expect(doc.draftRevision).toBe(0);
-    expect(documentRealtimeService.publishDocumentReloadRequired).not.toHaveBeenCalled();
+    // 成功的 create 已向客户端确认（success=true），必须写入草稿，否则刷新后丢失
+    expect(response.results[0]).toEqual(
+      expect.objectContaining({ operation: BatchOperationType.CREATE, blockId: expect.any(String) }),
+    );
+    expect(response.results[0]).not.toHaveProperty("success", false);
+    expect(response.draftRevision).toBe(1);
+    expect(doc.draftRevision).toBe(1);
+    expect(documentRealtimeService.publishDocumentReloadRequired).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "batch_partial_failure" }),
+    );
   });
 
   it("replays a same-batch draft write without creating a second block", async () => {

@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsDefined,
   IsNumber,
   IsOptional,
@@ -57,6 +58,14 @@ export class SyncReconcileDto {
   @IsDefined()
   @IsString()
   clientBatchId: string;
+
+  @ApiPropertyOptional({
+    description:
+      "When true, the response includes canonical content digests of the draft's top-level blocks",
+  })
+  @IsOptional()
+  @IsBoolean()
+  verify?: boolean;
 
   @ApiProperty({
     description:

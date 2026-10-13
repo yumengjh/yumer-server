@@ -87,6 +87,7 @@ import {
 import { DraftCheckpointService } from "./draft-checkpoint.service";
 import { GcRenderCacheService } from "../gc/modules/render-cache/gc-render-cache.service";
 import { BlockPayloadResolverService } from "../blocks/block-delta/block-payload-resolver.service";
+import { hashPayloadCanonical } from "../blocks/block-delta/block-delta";
 
 type DocumentActorSummary = {
   userId: string;
@@ -146,11 +147,19 @@ type SyncReconcileTombstone = {
   syncCreateId: string | null;
 };
 
+type SyncReconcileBlockDigest = {
+  blockId: string;
+  sortKey: string;
+  hash: string;
+};
+
 type SyncReconcileResponse = {
   draftRevision: number;
   needsReload: boolean;
   conflicts: Array<Record<string, unknown>>;
   tombstoned: SyncReconcileTombstone[];
+  /** verify=true 时返回：草稿中根块直属、未删除块的 canonical 内容摘要 */
+  blocks?: SyncReconcileBlockDigest[];
 };
 
 const SYNC_RECONCILE_VERSION_LOOKUP_CHUNK_SIZE = 250;
@@ -3110,7 +3119,20 @@ export class DocumentsService {
             needsReload: existingReceipt.needsReload,
             tombstonedCount: existingReceipt.tombstoned?.length ?? 0,
           });
-          return this.mapSyncReconcileReceiptToResponse(existingReceipt);
+          const replayed = this.mapSyncReconcileReceiptToResponse(existingReceipt);
+          if (dto.verify && !replayed.needsReload) {
+            const replayDraft = await manager
+              .getRepository(DocDraft)
+              .findOne({ where: { docId } });
+            if (replayDraft) {
+              replayed.blocks = await this.collectDraftRootBlockDigests(
+                manager,
+                docId,
+                replayDraft,
+              );
+            }
+          }
+          return replayed;
         }
         this.logSyncReconcileEvent("fingerprint-conflict", {
           docId,
@@ -3167,7 +3189,7 @@ export class DocumentsService {
         .getRepository(DocDraft)
         .findOne({ where: { docId } });
       if (!draft) {
-        const response = {
+        const response: SyncReconcileResponse = {
           draftRevision: serverDraftRevision,
           needsReload: false,
           conflicts: [],
@@ -3214,7 +3236,7 @@ export class DocumentsService {
         nextDraftRevision = docInTx.draftRevision;
       }
 
-      const response = {
+      const response: SyncReconcileResponse = {
         draftRevision: nextDraftRevision,
         needsReload: false,
         conflicts: [],
@@ -3239,8 +3261,75 @@ export class DocumentsService {
         needsReload: false,
         tombstonedCount: tombstoned.length,
       });
+      if (dto.verify) {
+        // 内容摘要不写入 receipt（体积大且可随时重算）
+        return {
+          ...response,
+          blocks: await this.collectDraftRootBlockDigests(manager, docId, draft),
+        };
+      }
       return response;
     });
+  }
+
+  /**
+   * 草稿中根块直属、未删除块的 canonical 内容摘要（与前端 hashPayloadCanonical 规则一致），
+   * 供客户端 idle 时校验内容是否 100% 一致并做增量修复。
+   */
+  private async collectDraftRootBlockDigests(
+    manager: EntityManager,
+    docId: string,
+    draft: DocDraft,
+  ): Promise<SyncReconcileBlockDigest[]> {
+    const draftMap = (draft.blockVersionMap ?? {}) as Record<string, number>;
+    const candidates = Object.entries(draftMap)
+      .filter(
+        (entry): entry is [string, number] =>
+          entry[0] !== draft.rootBlockId && typeof entry[1] === "number",
+      )
+      .map(([blockId, ver]) => ({ blockId, ver }));
+    if (candidates.length === 0) return [];
+
+    const versions: BlockVersion[] = [];
+    for (
+      let start = 0;
+      start < candidates.length;
+      start += SYNC_RECONCILE_VERSION_LOOKUP_CHUNK_SIZE
+    ) {
+      const chunk = candidates.slice(
+        start,
+        start + SYNC_RECONCILE_VERSION_LOOKUP_CHUNK_SIZE,
+      );
+      versions.push(
+        ...(await manager.find(BlockVersion, {
+          where: chunk.map((candidate) => ({
+            docId,
+            blockId: candidate.blockId,
+            ver: candidate.ver,
+          })),
+        })),
+      );
+    }
+    const resolvedPayloads =
+      await this.blockPayloadResolverService.resolveBlockPayloads(
+        manager,
+        versions,
+      );
+
+    const digests: SyncReconcileBlockDigest[] = [];
+    for (const version of versions) {
+      if (version.parentId !== draft.rootBlockId) continue;
+      const payload =
+        resolvedPayloads.get(`${docId}:${version.blockId}:${version.ver}`) ??
+        version.payload;
+      if (!payload || this.isDeletedSnapshotVersion(version, payload)) continue;
+      digests.push({
+        blockId: version.blockId,
+        sortKey: version.sortKey,
+        hash: hashPayloadCanonical(payload),
+      });
+    }
+    return digests;
   }
 
   private logSyncReconcileEvent(
@@ -3357,8 +3446,11 @@ export class DocumentsService {
       const clientId = this.cleanSyncIdentity(item.clientId);
       const syncCreateId = this.cleanSyncIdentity(item.syncCreateId);
       if (blockId) liveBlockIds.add(blockId);
-      if (clientId) liveClientIds.add(clientId);
-      if (syncCreateId) liveSyncCreateIds.add(syncCreateId);
+      // 只有「尚未拿到 blockId」的 clientId 才用于保护在途 create；
+      // 已对应到某个 blockId 的 clientId 不能再保护其它同 clientId 的旧块，
+      // 否则 undo/重建产生的重复旧块永远无法被清理。
+      if (clientId && !blockId) liveClientIds.add(clientId);
+      if (syncCreateId && !blockId) liveSyncCreateIds.add(syncCreateId);
     }
 
     const draftMap = (params.draft.blockVersionMap ?? {}) as Record<
@@ -3396,14 +3488,24 @@ export class DocumentsService {
     const byBlock = new Map(
       versions.map((version) => [version.blockId, version]),
     );
+    // delta 存储的版本 payload 为空，必须先解析出完整 payload 再判断身份/删除态
+    const resolvedPayloads =
+      await this.blockPayloadResolverService.resolveBlockPayloads(
+        params.manager,
+        versions,
+      );
     const tombstoned: SyncReconcileTombstone[] = [];
 
     for (const candidate of candidates) {
       const latestVersion = byBlock.get(candidate.blockId);
-      if (!latestVersion || this.isDeletedSnapshotVersion(latestVersion))
-        continue;
+      if (!latestVersion) continue;
+      const latestPayload =
+        resolvedPayloads.get(
+          `${params.docId}:${latestVersion.blockId}:${latestVersion.ver}`,
+        ) ?? latestVersion.payload;
+      if (this.isDeletedSnapshotVersion(latestVersion, latestPayload)) continue;
 
-      const attrs = this.getPayloadAttrs(latestVersion.payload);
+      const attrs = this.getPayloadAttrs(latestPayload);
       const clientId = this.cleanSyncIdentity(attrs.clientId);
       const syncCreateId = this.cleanSyncIdentity(attrs.syncCreateId);
       if (!clientId && !syncCreateId) continue;
@@ -3426,7 +3528,7 @@ export class DocumentsService {
         block.latestVer,
       );
       const deletedPayload = {
-        ...(latestVersion.payload as Record<string, unknown>),
+        ...(latestPayload as Record<string, unknown>),
         attrs: {
           ...attrs,
           deleted: true,

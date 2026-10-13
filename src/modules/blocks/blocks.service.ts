@@ -53,6 +53,16 @@ import {
 } from "./block-delta/block-delta";
 import { BatchOperationError } from "./batch-operation.error";
 
+/** 更新块时需要从旧 payload 继承的同步身份 attrs（客户端 update 会剥离这些字段） */
+const PRESERVED_SYNC_ATTR_KEYS = [
+  "blockId",
+  "clientId",
+  "syncCreateId",
+  "data-block-id",
+  "data-client-id",
+  "data-sync-create-id",
+] as const;
+
 type SyncCreateDeleteCompensation = {
   blockId: string;
   createdAt: number;
@@ -903,8 +913,14 @@ export class BlocksService {
       !incomingAttrs.syncCreateId &&
       typeof previousAttrs.clientBatchId === "string" &&
       incomingAttrs.clientBatchId == null;
+    // 只继承同步身份类 attrs；其余 attrs 以本次 payload 为准，
+    // 否则块类型变化（如标题→段落）后旧 attrs 会残留在存储里，造成内容不一致。
+    const preservedSyncAttrs: Record<string, unknown> = {};
+    for (const key of PRESERVED_SYNC_ATTR_KEYS) {
+      if (previousAttrs[key] !== undefined) preservedSyncAttrs[key] = previousAttrs[key];
+    }
     const attrs: Record<string, unknown> = {
-      ...previousAttrs,
+      ...preservedSyncAttrs,
       ...incomingAttrs,
       ...(previousAttrs.clientId && incomingAttrs.clientId == null
         ? { clientId: previousAttrs.clientId }
@@ -1797,7 +1813,9 @@ export class BlocksService {
         const hasFailures = results.some((item) => !item.success);
         if (shouldCreateVersion && successCount > 0 && !hasFailures) {
           await this.incrementDocumentHead(batchBlockDto.docId, userId, manager);
-        } else if (!shouldCreateVersion && draftMutations.length > 0 && !hasFailures) {
+        } else if (!shouldCreateVersion && draftMutations.length > 0) {
+          // 部分失败时成功的操作同样已向客户端确认（success=true，客户端会出队），
+          // 必须写入草稿映射，否则这些编辑在刷新后会丢失。
           await this.documentDraftService.ensureDraftForMutation(
             batchBlockDto.docId,
             userId,
@@ -1979,10 +1997,12 @@ export class BlocksService {
       );
     }
 
+    // 有 syncCreateId 时只按 syncCreateId 匹配墓碑：同一 clientId 的节点被删除后
+    // 又被 undo 恢复时，客户端会换用新的 syncCreateId 重新创建，不应被旧墓碑吞掉。
     const tombstone = await this.findActiveSyncCreateTombstone(
       manager,
       docId,
-      operation.clientId,
+      operation.syncCreateId ? undefined : operation.clientId,
       operation.syncCreateId,
     );
     if (tombstone) {
@@ -2253,12 +2273,18 @@ export class BlocksService {
       throw new BadRequestException("update payload and delta are mutually exclusive");
     }
 
+    // 客户端编辑器中仍存在该块（如 undo 恢复已删除块）：允许复活已删除的块
     const block = await manager.findOne(Block, {
-      where: { blockId: operation.blockId, docId, isDeleted: false },
+      where: { blockId: operation.blockId, docId },
     });
 
     if (!block) {
       throw new NotFoundException(`Block ${operation.blockId} not found`);
+    }
+    if (block.isDeleted) {
+      block.isDeleted = false;
+      block.deletedAt = null as unknown as number;
+      block.deletedBy = null as unknown as string;
     }
 
     const latestVersion = await manager.findOne(BlockVersion, {
@@ -2667,6 +2693,14 @@ export class BlocksService {
       excludeBlockId: operation.blockId,
     });
 
+    // payload attrs 中的 sortKey 与版本 sortKey 保持一致，避免加载时读到旧 sortKey
+    const movedPayload: Record<string, unknown> = {
+      ...latestPayload,
+      attrs: {
+        ...((latestPayload.attrs as Record<string, unknown> | undefined) ?? {}),
+        sortKey: resolvedSortKey,
+      },
+    };
     const newVer = await this.getNextBlockVersionNumber(
       manager,
       block.docId,
@@ -2684,8 +2718,8 @@ export class BlocksService {
       sortKey: resolvedSortKey,
       indent: operation.indent || 0,
       collapsed: latestVersion.collapsed,
-      payload: latestPayload,
-      hash: latestVersion.hash,
+      payload: movedPayload,
+      hash: this.calculateVersionHash(movedPayload),
       plainText: latestVersion.plainText,
       refs: latestVersion.refs,
     });
