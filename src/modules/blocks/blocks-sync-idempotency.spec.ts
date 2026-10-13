@@ -1398,4 +1398,144 @@ describe("BlocksService sync idempotency", () => {
     expect(created.results[0].blockId).toBeUndefined();
     expect(blocks.filter((block) => block.type === "paragraph")).toHaveLength(0);
   });
+
+  async function createParagraph(
+    service: ReturnType<typeof createBlocksServiceWithInMemoryRepositories>["service"],
+    clientId: string,
+    payload: Record<string, unknown>,
+    draftRevision = 0,
+  ) {
+    const created = await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        draftRevision,
+        clientBatchId: `batch_create_${clientId}`,
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.CREATE,
+            clientId,
+            syncCreateId: `sync-create:${clientId}`,
+            data: { docId: "doc_1", type: String(payload.type), parentId: "root_1", sortKey: "001500", payload },
+          } satisfies BatchCreateOperation,
+        ],
+      },
+      "user_1",
+    );
+    return { blockId: created.results[0].blockId!, draftRevision: created.draftRevision };
+  }
+
+  it("does not carry stale non-sync attrs from the previous payload into an update", async () => {
+    const { service, versions } = createBlocksServiceWithInMemoryRepositories();
+    const { blockId, draftRevision } = await createParagraph(service, "client_attrs", {
+      type: "heading",
+      attrs: { clientId: "client_attrs", level: 2, id: "anchor" },
+      content: [{ type: "text", text: "title" }],
+    });
+
+    await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        draftRevision,
+        clientBatchId: "batch_update_attrs",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.UPDATE,
+            blockId,
+            data: { payload: { type: "paragraph", attrs: { textAlign: null }, content: [{ type: "text", text: "title" }] } },
+          },
+        ],
+      },
+      "user_1",
+    );
+
+    const latest = versions.find((version) => version.blockId === blockId && version.ver === 2);
+    const attrs = (latest?.payload as { attrs?: Record<string, unknown> })?.attrs ?? {};
+    expect(attrs.level).toBeUndefined();
+    expect(attrs.id).toBeUndefined();
+    expect(attrs.clientId).toBe("client_attrs");
+  });
+
+  it("revives a deleted block when the client still has it and sends an update (undo)", async () => {
+    const { service, blocks } = createBlocksServiceWithInMemoryRepositories();
+    const { blockId } = await createParagraph(service, "client_revive", {
+      type: "paragraph",
+      attrs: { clientId: "client_revive" },
+    });
+    const stored = blocks.find((block) => block.blockId === blockId)!;
+    stored.isDeleted = true;
+
+    const response = await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        clientBatchId: "batch_revive",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: true,
+        operations: [
+          {
+            type: BatchOperationType.UPDATE,
+            blockId,
+            data: { payload: { type: "paragraph", content: [{ type: "text", text: "back" }] } },
+          },
+        ],
+      },
+      "user_1",
+    );
+
+    expect(response.results[0]).not.toHaveProperty("success", false);
+    expect(stored.isDeleted).toBe(false);
+  });
+
+  it("does not suppress a create with a new syncCreateId just because the clientId was tombstoned", async () => {
+    const { service, blocks } = createBlocksServiceWithInMemoryRepositories();
+    await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        draftRevision: 0,
+        clientBatchId: "batch_tombstone_client",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          { type: BatchOperationType.DELETE, clientId: "client_regen", syncCreateId: "sync-create:client_regen" },
+        ],
+      },
+      "user_1",
+    );
+
+    const created = await service.batch(
+      {
+        docId: "doc_1",
+        baseVersion: 1,
+        draftRevision: 0,
+        clientBatchId: "batch_regen_create",
+        source: BatchSourceType.AUTOSYNC,
+        createVersion: false,
+        operations: [
+          {
+            type: BatchOperationType.CREATE,
+            clientId: "client_regen",
+            syncCreateId: "sync-create:client_regen#g1",
+            data: {
+              docId: "doc_1",
+              type: "paragraph",
+              parentId: "root_1",
+              sortKey: "001500",
+              payload: { type: "paragraph", attrs: { clientId: "client_regen" } },
+            },
+          } satisfies BatchCreateOperation,
+        ],
+      },
+      "user_1",
+    );
+
+    expect(created.results[0].blockId).toEqual(expect.any(String));
+    expect(blocks.filter((block) => block.type === "paragraph")).toHaveLength(1);
+  });
 });
