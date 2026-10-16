@@ -83,7 +83,12 @@ function normalizePayload(value: unknown): unknown {
 
   const payloadType = typeof out.type === "string" ? out.type : undefined;
   if (payloadType === "codeBlock" && out.attrs && typeof out.attrs === "object" && !Array.isArray(out.attrs)) {
-    out.attrs = normalizeSyncCodeBlockAttrs(out.attrs as Record<string, unknown>);
+    const rawAttrs = out.attrs as Record<string, unknown>;
+    out.attrs = {
+      ...normalizeSyncCodeBlockAttrs(rawAttrs),
+      // 代码块属性是白名单归一化，删除标记（软删墓碑）必须保留，否则已删除的代码块会在加载时复活
+      ...(rawAttrs.deleted === true || rawAttrs.deleted === "true" ? { deleted: true } : {}),
+    };
   }
 
   return out;

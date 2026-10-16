@@ -25,6 +25,16 @@ const fixturesPath = join(__dirname, "__fixtures__", "delta-fixtures.json");
 const fixtures = JSON.parse(readFileSync(fixturesPath, "utf8")) as DeltaFixture[];
 
 describe("block delta", () => {
+  it("codeBlock 属性白名单归一化时保留删除墓碑标记", () => {
+    const canonical = JSON.parse(
+      canonicalStringify({ type: "codeBlock", attrs: { language: "text", deleted: true, unknown: 1 } }),
+    );
+    expect(canonical.attrs.deleted).toBe(true);
+    expect(canonical.attrs.unknown).toBeUndefined();
+    const alive = JSON.parse(canonicalStringify({ type: "codeBlock", attrs: { language: "text" } }));
+    expect(alive.attrs.deleted).toBeUndefined();
+  });
+
   it("canonicalStringify strips sync attrs and sorts keys", () => {
     const canonical = canonicalStringify({
       type: "paragraph",
