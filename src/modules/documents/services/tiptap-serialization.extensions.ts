@@ -1,4 +1,4 @@
-import { Extension, Node, mergeAttributes } from "@tiptap/core";
+import { Extension, Mark, Node, mergeAttributes } from "@tiptap/core";
 import { randomBytes } from "crypto";
 
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -417,6 +417,29 @@ const BlockIdAttribute = Extension.create({
   },
 });
 
+/** 上标 / 下标：与前端 editor-kit/extensions/scriptMarks.ts 的 schema 保持一致 */
+const Superscript = Mark.create({
+  name: "superscript",
+  excludes: "subscript",
+  parseHTML() {
+    return [{ tag: "sup" }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ["sup", mergeAttributes(HTMLAttributes), 0];
+  },
+});
+
+const Subscript = Mark.create({
+  name: "subscript",
+  excludes: "superscript",
+  parseHTML() {
+    return [{ tag: "sub" }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ["sub", mergeAttributes(HTMLAttributes), 0];
+  },
+});
+
 export const tiptapSerializationExtensions = [
   StarterKit.configure({
     codeBlock: false,
@@ -436,6 +459,8 @@ export const tiptapSerializationExtensions = [
   Strike,
   HorizontalRule,
   Underline,
+  Superscript,
+  Subscript,
   TaskList,
   SerializedTaskItem,
   Link.configure({ openOnClick: false }),
